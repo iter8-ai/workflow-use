@@ -378,7 +378,7 @@ export const NodeConfigMenu: React.FC<NodeConfigMenuProps> = ({
         )}
 
         {/* output */}
-        {stepData.output && (
+        {Boolean(stepData.output) && (
           <div className="mt-4">
             <strong>Output:</strong>
             <pre className="mt-1 max-h-[300px] overflow-auto rounded bg-[#333] p-3 text-xs">
