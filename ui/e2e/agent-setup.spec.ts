@@ -42,7 +42,25 @@ test("takes a user through demonstration, review, testing, and result confirmati
   await setup.getByLabel("I checked the result").check();
   await expect(setup.getByRole("button", { name: "Schedule agent" })).toBeDisabled();
   await setup.getByLabel("Schedule daily").check();
+  await setup.getByLabel("Time of day (UTC)").fill("09:30");
   await expect(setup.getByRole("button", { name: "Schedule agent" })).toBeEnabled();
+  await setup.getByRole("button", { name: "Schedule agent" }).click();
+  await expect(setup.getByRole("heading", { name: "Your agent is ready" })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.__savedSchedule)).toEqual("30 9 * * *");
+});
+
+test("starts another demonstration after a stopped recording", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=success`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByLabel("Agent name").fill("Reports");
+  await setup.getByLabel("Website address").fill("https://portal.example.test/reports");
+  await setup.getByLabel("What should the agent do?").fill("Get the report.");
+  await setup.getByRole("button", { name: "Continue to demonstration" }).click();
+  await setup.getByRole("button", { name: "Stop demonstration" }).click();
+  await setup.getByRole("button", { name: "Start over" }).click();
+  await setup.getByRole("button", { name: "Continue to demonstration" }).click();
+  await expect(setup.getByRole("heading", { name: "Demonstrate the task" })).toBeVisible();
+  await expect(setup.getByRole("alert")).toHaveCount(0);
 });
 
 test("keeps scheduling disabled after a failed test", async ({ page }) => {
@@ -162,6 +180,7 @@ function hostPage(url: string): string {
   const scenario = new URLSearchParams(location.search).get("scenario");
   window.__requestIds = [];
   window.__testArguments = [];
+  let recordingActive = false;
   const steps = [
     { id: "open-reports", type: "click", description: "Open the reports section", target: "Reports", expectedOutcome: "The reports list is visible" },
     { id: "choose-month", type: "input", description: "Choose the statement month", target: "Statement month", value: "2026-08-01" },
@@ -176,15 +195,16 @@ function hostPage(url: string): string {
     if (request.method === "ready") {
       if (scenario === "delayed-ready") setTimeout(() => send({ schedule: true }), 300);
       else send({ schedule: true });
-    } else if (request.method === "startRecording") send({ id: "recording-1", status: "recording", liveViewUrl: "https://live.browserbase.com/session", steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null });
+    } else if (request.method === "startRecording") { if (recordingActive) { fail("Finish the current demonstration first."); return; } recordingActive = true; send({ id: "recording-1", status: "recording", liveViewUrl: "https://live.browserbase.com/session", steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
     else if (request.method === "getRecording" || request.method === "stopRecording") send({ id: "recording-1", status: "stopped", liveViewUrl: "https://live.browserbase.com/session", steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null });
-    else if (request.method === "cancelRecording") send(undefined);
+    else if (request.method === "cancelRecording") { recordingActive = false; send(undefined); }
     else if (request.method === "saveAgent") send({ id: "agent-1" });
     else if (request.method === "testAgent") { window.__testArguments.push(request.params.arguments); send({ id: "run-1" }); }
     else if (request.method === "getTestRun") {
       if (scenario === "failed") send({ status: "failed", error: "The website rejected the request." });
       else send({ status: "succeeded", files: [{ name: "statement.pdf", url: "https://files.example.test/statement.pdf" }] });
-    } else if (request.method === "scheduleAgent" || request.method === "close") send(undefined);
+    } else if (request.method === "scheduleAgent") { window.__savedSchedule = request.params.cron; send(undefined); }
+    else if (request.method === "close") send(undefined);
     else fail("Unknown request");
   });
 </script></body></html>`;

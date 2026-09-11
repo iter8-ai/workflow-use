@@ -35,6 +35,7 @@ export default function AgentSetup() {
   const [testRun, setTestRun] = useState<RunState | null>(null);
   const [checkedResult, setCheckedResult] = useState(false);
   const [dailySchedule, setDailySchedule] = useState(false);
+  const [scheduleSaved, setScheduleSaved] = useState(false);
   const [cron, setCron] = useState("0 9 * * *");
   const [scheduleAllowed, setScheduleAllowed] = useState(false);
   const [connecting, setConnecting] = useState(true);
@@ -325,7 +326,8 @@ export default function AgentSetup() {
         arguments: testValues,
         cron: dailySchedule ? cron.trim() : "",
       });
-      setNotice(dailySchedule ? "Daily schedule saved." : "Agent schedule saved.");
+      setScheduleSaved(true);
+      setNotice(null);
     } catch (requestError) {
       setError(errorMessage(requestError));
     } finally {
@@ -333,20 +335,27 @@ export default function AgentSetup() {
     }
   }
 
-  function reset(): void {
-    if (bridge !== undefined && bridge !== null && recording?.status === "recording") {
-      void bridge.request("cancelRecording", { id: recording.id }).catch(() => undefined);
-    }
-    setScreen("describe");
-    setRecording(null);
-    setSteps([]);
-    setInputs([]);
-    setTestValues({});
-    setTestRun(null);
-    setCheckedResult(false);
+  async function reset(): Promise<void> {
+    if (bridge === undefined || bridge === null) return;
+    setBusy(true);
     setError(null);
-    setNotice(null);
-    setRevision((current) => current + 1);
+    try {
+      if (recording !== null) await bridge.request("cancelRecording", { id: recording.id });
+      setScreen("describe");
+      setRecording(null);
+      setSteps([]);
+      setInputs([]);
+      setTestValues({});
+      setTestRun(null);
+      setCheckedResult(false);
+      setScheduleSaved(false);
+      setNotice(null);
+      setRevision((current) => current + 1);
+    } catch (requestError) {
+      setError(errorMessage(requestError));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function close(): Promise<void> {
@@ -386,9 +395,10 @@ export default function AgentSetup() {
           {error !== null && <div className="setup-error" role="alert"><span>{error}</span><button type="button" className="button button-quiet" onClick={() => setError(null)}>Dismiss</button></div>}
           {notice !== null && <p className="setup-notice" role="status">{notice}</p>}
           {screen === "describe" && <Describe name={name} url={url} goal={goal} busy={busy || connecting} onName={(value) => setDraftField(setName, value)} onUrl={(value) => setDraftField(setUrl, value)} onGoal={(value) => setDraftField(setGoal, value)} onContinue={() => void startRecording()} />}
-          {screen === "demonstrate" && <Demonstrate recording={recording} steps={steps} liveViewUrl={liveViewUrl} busy={busy} onStop={() => void stopRecording()} onReview={continueToReview} onReset={reset} />}
+          {screen === "demonstrate" && <Demonstrate recording={recording} steps={steps} liveViewUrl={liveViewUrl} busy={busy} onStop={() => void stopRecording()} onReview={continueToReview} onReset={() => void reset()} />}
           {screen === "review" && <Review steps={steps} inputs={inputs} busy={busy} onUpdateStep={updateStep} onRemoveStep={removeStep} onMakeReusable={makeReusableInput} onUseLiteral={useLiteralValue} onUpdateInput={updateInput} onBack={() => setScreen("demonstrate")} onContinue={continueToTest} />}
-          {screen === "test" && <Test inputs={inputs} values={testValues} run={testRun} checked={checkedResult} canSchedule={canSchedule} scheduleAllowed={scheduleAllowed} dailySchedule={dailySchedule} cron={cron} scheduleValid={hasValidSchedule} busy={busy} onValue={(inputName, value) => { setTestValues((current) => ({ ...current, [inputName]: value })); setTestRun(null); setCheckedResult(false); setNotice("Changes require a new test."); }} onRun={() => void runTest()} onCheck={setCheckedResult} onDaily={setDailySchedule} onCron={setCron} onSchedule={() => void schedule()} onBack={() => setScreen("review")} />}
+          {screen === "test" && !scheduleSaved && <Test inputs={inputs} values={testValues} run={testRun} checked={checkedResult} canSchedule={canSchedule} scheduleAllowed={scheduleAllowed} dailySchedule={dailySchedule} cron={cron} scheduleValid={hasValidSchedule} busy={busy} onValue={(inputName, value) => { setTestValues((current) => ({ ...current, [inputName]: value })); setTestRun(null); setCheckedResult(false); setNotice("Changes require a new test."); }} onRun={() => void runTest()} onCheck={setCheckedResult} onDaily={setDailySchedule} onCron={setCron} onSchedule={() => void schedule()} onBack={() => setScreen("review")} />}
+          {scheduleSaved && <div className="setup-panel"><h2>Your agent is ready</h2><p>The daily schedule is saved. It will use the values you tested.</p><div className="setup-actions"><button className="button button-primary" type="button" onClick={() => void close()} disabled={busy}>Done</button></div></div>}
         </section>
       </div>
       <footer className="setup-footer">Public project: <a href="https://github.com/iter8-ai/workflow-use" target="_blank" rel="noreferrer">Source code</a><span aria-hidden="true">·</span><a href="https://github.com/iter8-ai/workflow-use/blob/main/LICENSE" target="_blank" rel="noreferrer">AGPL-3.0 license</a></footer>
@@ -412,7 +422,17 @@ function Review(props: { steps: SetupStep[]; inputs: SetupInput[]; busy: boolean
 function Test(props: { inputs: SetupInput[]; values: Record<string, string>; run: RunState | null; checked: boolean; canSchedule: boolean; scheduleAllowed: boolean; dailySchedule: boolean; cron: string; scheduleValid: boolean; busy: boolean; onValue(name: string, value: string): void; onRun(): void; onCheck(value: boolean): void; onDaily(value: boolean): void; onCron(value: string): void; onSchedule(): void; onBack(): void }): JSX.Element {
   const testFailed = props.run?.status === "failed";
   const testSucceeded = props.run?.status === "succeeded";
-  return <div className="setup-panel"><div><h2>Test a fresh run</h2><p>Reiterate runs the saved draft in a new browser session. Check the output before scheduling it.</p></div>{props.inputs.map((input) => <label key={input.name}>{input.label}<input aria-label={input.label} type={input.type} value={props.values[input.name] ?? ""} onChange={(event) => props.onValue(input.name, event.target.value)} /></label>)}<div className="test-result" aria-live="polite">{props.run?.status === "running" && <p>Test is running.</p>}{testSucceeded && <><p>Test completed</p>{props.run?.files.map((file) => <a key={file.url} href={file.url} target="_blank" rel="noreferrer">{file.name}</a>)}</>}{testFailed && <p role="alert">{props.run?.error ?? "The test failed."}</p>}{props.run === null && <p>Run a test after each change.</p>}</div>{testSucceeded && <label className="result-check"><input aria-label="I checked the result" type="checkbox" checked={props.checked} onChange={(event) => props.onCheck(event.target.checked)} />I checked the result</label>}{props.scheduleAllowed && <div className="schedule-options"><p>Scheduled runs reuse these fixed test input values.</p><label className="result-check"><input aria-label="Schedule daily" type="checkbox" checked={props.dailySchedule} onChange={(event) => props.onDaily(event.target.checked)} />Schedule daily</label>{props.dailySchedule && <label>UTC cron expression<input aria-label="UTC cron expression" value={props.cron} onChange={(event) => props.onCron(event.target.value)} placeholder="0 9 * * *" />{!props.scheduleValid && <span className="field-hint">Enter a five-part UTC cron expression.</span>}</label>}</div>}<div className="setup-actions"><button className="button button-quiet" type="button" onClick={props.onBack} disabled={props.busy}>Back to review</button><button className="button button-primary" type="button" onClick={props.onRun} disabled={props.busy}>Run test</button>{props.scheduleAllowed && <button className="button button-primary" type="button" onClick={props.onSchedule} disabled={!props.canSchedule}>Schedule agent</button>}</div></div>;
+  const [minute, hour] = props.cron.split(" ");
+  const dailyTime = props.scheduleValid ? `${hour.padStart(2, "0")}:${minute.padStart(2, "0")}` : "";
+  function changeTime(value: string): void {
+    if (!/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(value)) {
+      props.onCron("");
+      return;
+    }
+    const [hours, minutes] = value.split(":");
+    props.onCron(`${Number(minutes)} ${Number(hours)} * * *`);
+  }
+  return <div className="setup-panel"><div><h2>Test a fresh run</h2><p>Reiterate runs the saved draft in a new browser session. Check the output before scheduling it.</p></div>{props.inputs.map((input) => <label key={input.name}>{input.label}<input aria-label={input.label} type={input.type} value={props.values[input.name] ?? ""} onChange={(event) => props.onValue(input.name, event.target.value)} /></label>)}<div className="test-result" aria-live="polite">{props.run?.status === "running" && <p>Test is running.</p>}{testSucceeded && <><p>Test completed</p>{props.run?.files.map((file) => <a key={file.url} href={file.url} target="_blank" rel="noreferrer">{file.name}</a>)}</>}{testFailed && <p role="alert">{props.run?.error ?? "The test failed."}</p>}{props.run === null && <p>Run a test after each change.</p>}</div>{testSucceeded && <label className="result-check"><input aria-label="I checked the result" type="checkbox" checked={props.checked} onChange={(event) => props.onCheck(event.target.checked)} />I checked the result</label>}{props.scheduleAllowed && <div className="schedule-options"><p>Scheduled runs reuse these fixed test input values.</p><label className="result-check"><input aria-label="Schedule daily" type="checkbox" checked={props.dailySchedule} onChange={(event) => props.onDaily(event.target.checked)} />Schedule daily</label>{props.dailySchedule && <label>Time of day (UTC)<input type="time" aria-label="Time of day (UTC)" value={dailyTime} onChange={(event) => changeTime(event.target.value)} />{!props.scheduleValid && <span className="field-hint">Choose a time for the daily run.</span>}</label>}</div>}<div className="setup-actions"><button className="button button-quiet" type="button" onClick={props.onBack} disabled={props.busy}>Back to review</button><button className="button button-primary" type="button" onClick={props.onRun} disabled={props.busy}>Run test</button>{props.scheduleAllowed && <button className="button button-primary" type="button" onClick={props.onSchedule} disabled={!props.canSchedule}>Schedule agent</button>}</div></div>;
 }
 
 function inputLabel(name: string, inputs: SetupInput[]): string {
