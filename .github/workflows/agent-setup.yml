@@ -19,6 +19,9 @@ jobs:
           cache: npm
           cache-dependency-path: ui/package-lock.json
       - run: npm ci
+        env:
+          NOYARNPOSTINSTALL: 1
+      - run: npm run type-gen
       - run: npm test
       - run: npm run build
       - run: npx playwright install --with-deps chromium
