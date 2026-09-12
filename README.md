@@ -26,7 +26,17 @@ The browser tests use a controlled host fixture. They do not prove a live Browse
 
 ## Deployment and current limits
 
-Serve `ui/dist/` over HTTPS and allow embedding only by your intended host using a `Content-Security-Policy: frame-ancestors` response header. Configure the host with that public UI URL. Deploy the recording service separately with its shared service key and Browserbase credentials; never expose those keys to the iframe.
+Build and run the public UI as an unprivileged static service:
+
+```sh
+docker build -f ui/Dockerfile -t workflow-use-ui:local ui
+docker run --rm -p 8080:8080 workflow-use-ui:local
+curl -i http://127.0.0.1:8080/health
+```
+
+The image serves `ui/dist/` on port 8080. Its Content Security Policy permits embedding only from `https://editor.reiterate.com` and `https://editor.usereiterate.com`, and allows the Browserbase live browser frame. It deliberately has no host authentication or credentials. Configure the host with this public UI URL. Deploy the recording service separately with its shared service key and Browserbase credentials; never expose those keys to the iframe.
+
+For an optional deployment smoke check, open `/setup-check.html` and download its synthetic CSV. This page is unlinked and is not part of the customer setup wizard.
 
 Start with a website address without query parameters or fragments; navigate to the required page inside the demonstration browser. Recordings are ephemeral and expire after 15 minutes. Login and credential demonstrations are blocked until secure credential binding is available. Do not type passwords, one-time codes, API keys, or other secrets into the demonstration browser. Heuristics can detect marked credential fields but cannot identify every secret entered into an ordinary text field.
 
