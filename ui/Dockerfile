@@ -6,7 +6,7 @@ COPY package.json package-lock.json ./
 RUN NOYARNPOSTINSTALL=1 npm ci
 
 COPY . ./
-RUN npm run build
+RUN npm run type-gen && npm run build
 
 FROM nginxinc/nginx-unprivileged:1.31-alpine3.24
 
