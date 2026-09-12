@@ -1,0 +1,136 @@
+name: Build production images
+
+"on":
+  push:
+    branches: [main]
+    paths:
+      - "ui/**"
+      - "recording/**"
+      - ".github/workflows/build-production-images.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: workflow-use-production-images-${{ github.sha }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-west-1
+  ECR_REGISTRY: 704882997900.dkr.ecr.eu-west-1.amazonaws.com
+
+jobs:
+  build-and-push:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ui
+            context: ui
+            dockerfile: ui/Dockerfile
+            repository: workflow-use-ui-default
+          - name: recording
+            context: recording
+            dockerfile: recording/Dockerfile
+            repository: workflow-use-recording-default
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve immutable image tag
+        id: image
+        run: |
+          image_tag="$GITHUB_SHA"
+          if ! printf '%s' "$image_tag" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "Expected a full lowercase git SHA for the image tag." >&2
+            exit 1
+          fi
+          echo "tag=$image_tag" >> "$GITHUB_OUTPUT"
+          echo "image=$ECR_REGISTRY/${{ matrix.repository }}:$image_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Check OIDC role configuration
+        env:
+          AWS_PRODUCTION_ECR_PUSH_ROLE_ARN: ${{ vars.AWS_PRODUCTION_ECR_PUSH_ROLE_ARN }}
+        run: |
+          if [ -z "$AWS_PRODUCTION_ECR_PUSH_ROLE_ARN" ]; then
+            echo "Missing repository variable: AWS_PRODUCTION_ECR_PUSH_ROLE_ARN" >&2
+            exit 1
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_PRODUCTION_ECR_PUSH_ROLE_ARN }}
+
+      - name: Verify immutable ECR repository
+        run: |
+          mutability="$(aws ecr describe-repositories \
+            --region "$AWS_REGION" \
+            --repository-names "${{ matrix.repository }}" \
+            --query 'repositories[0].imageTagMutability' \
+            --output text)"
+          if [ "$mutability" != "IMMUTABLE" ]; then
+            echo "ECR repository ${{ matrix.repository }} must use immutable image tags, got: $mutability" >&2
+            exit 1
+          fi
+
+      - name: Skip an existing immutable image tag
+        id: tag
+        env:
+          IMAGE_TAG: ${{ steps.image.outputs.tag }}
+        run: |
+          set +e
+          existing_tag="$(aws ecr describe-images \
+            --region "$AWS_REGION" \
+            --repository-name "${{ matrix.repository }}" \
+            --image-ids imageTag="$IMAGE_TAG" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text 2>&1)"
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Image already exists with immutable tag: $IMAGE_TAG"
+            exit 0
+          fi
+          if ! printf '%s' "$existing_tag" | grep -q 'ImageNotFoundException'; then
+            printf '%s\n' "$existing_tag" >&2
+            exit "$status"
+          fi
+          echo "exists=false" >> "$GITHUB_OUTPUT"
+
+      - name: Login to Amazon ECR
+        if: steps.tag.outputs.exists != 'true'
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push ${{ matrix.name }}
+        if: steps.tag.outputs.exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ steps.image.outputs.image }}
+
+      - name: Verify pushed image
+        if: steps.tag.outputs.exists != 'true'
+        env:
+          IMAGE_TAG: ${{ steps.image.outputs.tag }}
+        run: |
+          digest="$(aws ecr describe-images \
+            --region "$AWS_REGION" \
+            --repository-name "${{ matrix.repository }}" \
+            --image-ids imageTag="$IMAGE_TAG" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text)"
+          if ! printf '%s' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+            echo "Unable to resolve the pushed image digest for ${{ steps.image.outputs.image }}" >&2
+            exit 1
+          fi
+          echo "Pushed immutable image ${{ steps.image.outputs.image }}@$digest"
