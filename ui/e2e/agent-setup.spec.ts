@@ -25,7 +25,7 @@ test("takes a user through demonstration, review, testing, and result confirmati
   await setup.getByRole("button", { name: "Continue to demonstration" }).click();
 
   await expect(setup.getByText("Open the reports section")).toBeVisible();
-  await setup.getByRole("button", { name: "Stop demonstration" }).click();
+  await setup.getByRole("button", { name: "Finish demonstration" }).click();
   await setup.getByRole("button", { name: "Continue to review" }).click();
 
   await setup.getByRole("button", { name: "Choose a value each run" }).click();
@@ -38,15 +38,63 @@ test("takes a user through demonstration, review, testing, and result confirmati
   await expect(setup.getByText("Test completed")).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.__testArguments)).toEqual([{ input_1: "2026-09-01" }]);
   await expect(setup.getByRole("link", { name: "statement.pdf" })).toHaveAttribute("href", "https://files.example.test/statement.pdf");
-  await expect(setup.getByRole("button", { name: "Schedule agent" })).toBeDisabled();
+  await expect(setup.getByRole("button", { name: "Schedule agent" })).toHaveCount(0);
   await setup.getByLabel("I checked the result").check();
-  await expect(setup.getByRole("button", { name: "Schedule agent" })).toBeDisabled();
+  await expect(setup.getByRole("button", { name: "Schedule agent" })).toHaveCount(0);
   await setup.getByLabel("Schedule daily").check();
   await setup.getByLabel("Time of day (UTC)").fill("09:30");
   await expect(setup.getByRole("button", { name: "Schedule agent" })).toBeEnabled();
   await setup.getByRole("button", { name: "Schedule agent" }).click();
   await expect(setup.getByRole("heading", { name: "Your agent is ready" })).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.__savedSchedule)).toEqual("30 9 * * *");
+  await setup.getByRole("button", { name: "Open agent" }).click();
+  await expect.poll(() => page.evaluate(() => window.__closeRequests)).toEqual([{ agentId: "agent-1" }]);
+});
+
+test("finishes a checked manual setup without scheduling", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=success`);
+  const setup = page.frameLocator("iframe");
+
+  await completeToTest(setup);
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await expect(setup.getByText("Test completed")).toBeVisible();
+  await setup.getByLabel("I checked the result").check();
+  await expect(setup.getByRole("button", { name: "Finish setup" })).toBeEnabled();
+  await setup.getByRole("button", { name: "Finish setup" }).click();
+
+  await expect.poll(() => page.evaluate(() => window.__closeRequests)).toEqual([{ agentId: "agent-1" }]);
+});
+
+test("does not let a selected daily schedule leave setup as a manual run", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=success`);
+  const setup = page.frameLocator("iframe");
+
+  await completeToTest(setup);
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await expect(setup.getByText("Test completed")).toBeVisible();
+  await setup.getByLabel("I checked the result").check();
+  await setup.getByLabel("Schedule daily").check();
+  await expect(setup.getByRole("button", { name: "Finish setup" })).toHaveCount(0);
+  await setup.getByRole("button", { name: "Close setup" }).click();
+  await expect(setup.getByRole("heading", { name: "Leave setup?" })).toBeVisible();
+  await setup.getByRole("button", { name: "Keep editing" }).click();
+  await expect(setup.getByLabel("Schedule daily")).toBeChecked();
+});
+
+test("confirms before closing work that has not been saved", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=success`);
+  const setup = page.frameLocator("iframe");
+
+  await setup.getByLabel("Agent name").fill("Draft report agent");
+  await setup.getByRole("button", { name: "Close setup" }).click();
+  await expect(setup.getByRole("heading", { name: "Leave setup?" })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.__closeRequests)).toEqual([]);
+  await setup.getByRole("button", { name: "Keep editing" }).click();
+  await expect(setup.getByLabel("Agent name")).toHaveValue("Draft report agent");
+  await setup.getByRole("button", { name: "Close setup" }).click();
+  await setup.getByRole("dialog").getByRole("button", { name: "Close setup" }).click();
+
+  await expect.poll(() => page.evaluate(() => window.__closeRequests)).toEqual([{}]);
 });
 
 test("starts another demonstration after a stopped recording", async ({ page }) => {
@@ -56,7 +104,7 @@ test("starts another demonstration after a stopped recording", async ({ page }) 
   await setup.getByLabel("Website address").fill("https://portal.example.test/reports");
   await setup.getByLabel("What should the agent do?").fill("Get the report.");
   await setup.getByRole("button", { name: "Continue to demonstration" }).click();
-  await setup.getByRole("button", { name: "Stop demonstration" }).click();
+  await setup.getByRole("button", { name: "Finish demonstration" }).click();
   await setup.getByRole("button", { name: "Start over" }).click();
   await setup.getByRole("button", { name: "Continue to demonstration" }).click();
   await expect(setup.getByRole("heading", { name: "Demonstrate the task" })).toBeVisible();
@@ -71,7 +119,7 @@ test("keeps scheduling disabled after a failed test", async ({ page }) => {
   await setup.getByRole("button", { name: "Run test" }).click();
 
   await expect(setup.getByText("The website rejected the request.")).toBeVisible();
-  await expect(setup.getByRole("button", { name: "Schedule agent" })).toBeDisabled();
+  await expect(setup.getByRole("button", { name: "Schedule agent" })).toHaveCount(0);
 });
 
 test("invalidates a completed test when reviewed instructions change", async ({ page }) => {
@@ -86,7 +134,7 @@ test("invalidates a completed test when reviewed instructions change", async ({ 
   await setup.getByRole("button", { name: "Continue to test" }).click();
 
   await expect(setup.getByText("Changes require a new test.")).toBeVisible();
-  await expect(setup.getByRole("button", { name: "Schedule agent" })).toBeDisabled();
+  await expect(setup.getByRole("button", { name: "Schedule agent" })).toHaveCount(0);
 });
 
 test("ignores a response posted by the setup iframe instead of its host", async ({ page }) => {
@@ -145,7 +193,7 @@ test("captures the controlled setup states for visual review", async ({ page }) 
   await setup.getByLabel("Website address").fill("https://portal.example.test/reports");
   await setup.getByLabel("What should the agent do?").fill("Download the selected monthly statement.");
   await setup.getByRole("button", { name: "Continue to demonstration" }).click();
-  await setup.getByRole("button", { name: "Stop demonstration" }).click();
+  await setup.getByRole("button", { name: "Finish demonstration" }).click();
   await page.screenshot({ path: "e2e-artifacts/demonstrate.png" });
 
   await setup.getByRole("button", { name: "Continue to review" }).click();
@@ -163,7 +211,7 @@ async function completeToTest(setup: FrameLocator): Promise<void> {
   await setup.getByLabel("Website address").fill("https://portal.example.test/reports");
   await setup.getByLabel("What should the agent do?").fill("Download the selected monthly statement.");
   await setup.getByRole("button", { name: "Continue to demonstration" }).click();
-  await setup.getByRole("button", { name: "Stop demonstration" }).click();
+  await setup.getByRole("button", { name: "Finish demonstration" }).click();
   await setup.getByRole("button", { name: "Continue to review" }).click();
   await setup.getByRole("button", { name: "Choose a value each run" }).click();
   await setup.getByLabel("What should we call this value?").fill("Statement month");
@@ -180,6 +228,7 @@ function hostPage(url: string): string {
   const scenario = new URLSearchParams(location.search).get("scenario");
   window.__requestIds = [];
   window.__testArguments = [];
+  window.__closeRequests = [];
   let recordingActive = false;
   const steps = [
     { id: "open-reports", type: "click", description: "Open the reports section", target: "Reports", expectedOutcome: "The reports list is visible" },
@@ -204,7 +253,7 @@ function hostPage(url: string): string {
       if (scenario === "failed") send({ status: "failed", error: "The website rejected the request." });
       else send({ status: "succeeded", files: [{ name: "statement.pdf", url: "https://files.example.test/statement.pdf" }] });
     } else if (request.method === "scheduleAgent") { window.__savedSchedule = request.params.cron; send(undefined); }
-    else if (request.method === "close") send(undefined);
+    else if (request.method === "close") { window.__closeRequests.push(request.params); send(undefined); }
     else fail("Unknown request");
   });
 </script></body></html>`;
