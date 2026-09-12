@@ -10,7 +10,9 @@
     "get-openapi": "curl http://localhost:${BACKEND_PORT:-8000}/openapi.json -o ./src/lib/api/openapi.json",
     "type-gen": "npx openapi-typescript ./src/lib/api/openapi.json -o ./src/lib/api/apigen.d.ts",
     "type-gen-update": "rm -rf ./src/lib/api/apigen.d.ts && npm run get-openapi && npm run type-gen",
-    "postinstall": "test -n \"$NOYARNPOSTINSTALL\" || npm run type-gen"
+    "postinstall": "test -n \"$NOYARNPOSTINSTALL\" || npm run type-gen",
+    "test": "tsx --test src/setup/compiler.test.ts",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@tailwindcss/vite": "4.1.7",
@@ -23,6 +25,7 @@
     "zod": "3.24.4"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@types/node": "22.15.19",
     "@types/react": "18.3.21",
     "@types/react-dom": "18.3.7",
@@ -33,6 +36,7 @@
     "eslint-plugin-react-hooks": "4.6.2",
     "eslint-plugin-react-refresh": "0.4.20",
     "openapi-typescript": "7.8.0",
+    "tsx": "^4.23.13",
     "typescript": "5.8.3",
     "vite": "6.4.3"
   },

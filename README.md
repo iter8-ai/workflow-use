@@ -1,3 +1,45 @@
+# Workflow Use agent setup
+
+This public fork adds a demonstration-based setup flow for computer-use agents. Users describe a task, demonstrate it in a remote browser, edit the captured steps, choose reusable inputs, and test before scheduling.
+
+The default `ui/` app is an embedded authoring interface. Its host handles authentication, agent storage, test execution, and scheduling through an origin-checked message bridge. The separate `recording/` service captures browser actions. It does not run agents. Compiled configurations select the computer-use engine explicitly.
+
+## Run locally
+
+```sh
+cd ui
+npm ci
+npm run dev
+```
+
+Open the app through a host iframe with `?parentOrigin=https://your-host.example`. Opening it by itself shows a connection message. See [the host contract](docs/agent-setup-host.md) and [recording service setup](recording/README.md).
+
+```sh
+cd ui
+npm test
+npm run build
+npx playwright install chromium
+npm run test:e2e
+```
+
+The browser tests use a controlled host fixture. They do not prove a live Browserbase session or an actual computer-use run.
+
+## Deployment and current limits
+
+Serve `ui/dist/` over HTTPS and allow embedding only by your intended host using a `Content-Security-Policy: frame-ancestors` response header. Configure the host with that public UI URL. Deploy the recording service separately with its shared service key and Browserbase credentials; never expose those keys to the iframe.
+
+Start with a website address without query parameters or fragments; navigate to the required page inside the demonstration browser. Recordings are ephemeral and expire after 15 minutes. Login and credential demonstrations are blocked until secure credential binding is available. Do not type passwords, one-time codes, API keys, or other secrets into the demonstration browser. Heuristics can detect marked credential fields but cannot identify every secret entered into an ordinary text field.
+
+Schedules reuse the exact tested input values. Relative dates such as “previous month” are not resolved automatically. A successful test still requires the user to inspect the result before scheduling.
+
+## Source and license
+
+Forked from [browser-use/workflow-use](https://github.com/browser-use/workflow-use) at `5d2d19fe8835cc86f1bf3e04302a5000d590f249`. This fork retains the upstream [AGPL-3.0 license](LICENSE). Its public source is [iter8-ai/workflow-use](https://github.com/iter8-ai/workflow-use). Host integrations are separate codebases; no private host source is included here.
+
+The original workflow editor and runtime remain in the repository for reference. Their instructions follow below and describe the upstream browser-use execution path.
+
+---
+
 <picture>
   <img alt="Workflow Use logo - a product by Browser Use." src="./static/workflow-use.png"  width="full">
 </picture>

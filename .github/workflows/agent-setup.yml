@@ -1,0 +1,40 @@
+name: Agent setup
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  ui:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+  recording:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: recording
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.8.22'
+          python-version: '3.12'
+      - run: uv sync --frozen --group dev
+      - run: uv run playwright install --with-deps chromium
+      - run: uv run ruff check .
+      - run: uv run pytest
