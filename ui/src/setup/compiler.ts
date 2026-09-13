@@ -44,8 +44,9 @@ type CompiledAgent = {
   parameters: Record<string, never>;
 };
 
-const sensitivePattern = /\b(?:password|passcode|secret|token|api[_ -]?key|credential|authorization|auth(?:entication|enticate|enticated)?|cvv|cvc|social security|ssn|credit card|card number|user ?name|one.?time|otp|totp|mfa|log[ -]?in|sign[ -]?in)\b/i;
-const pinIntentPattern = /\b(?:enter|provide|type|use|submit|verify)\s+(?:your\s+)?pin\b|\bpin\s+(?:code|verification)\b/i;
+const sensitivePattern = /\b(?:password|passcode|secret|token|api[_ -]?key|credential|authorization|auth(?:entication|enticate|enticated|orize|orized)?|cvv|cvc|social security|ssn|credit card|card number|user ?name|one.?time|otp|totp|mfa|log(?:[ -]?in(?:to)?|[ -]?on)|sign(?:[ -]?in(?:to)?|[ -]?on))\b/i;
+const pinIntentPattern = /\b(?:enter|provide|type|use|submit|verify)\s+(?:your\s+)?pin\b|\bpin\s+(?:code|verification)\b|\b(?:my\s+)?pin\s*(?:is|:)\s*\d+\b/i;
+const maximumPathDecodes = 4;
 const rawReplayPattern = /\b(?:css|xpath|selector)\b|#[a-z][\w-]*(?:\s*[>+~]|\[)|\[[^\]]+\]|(?:^|\s)(?:x|y)\s*[:=]\s*\d+|^\s*\d+(?:px)?\s*,\s*\d+(?:px)?\s*$/i;
 const maximumNameLength = 150;
 const maximumUrlLength = 2_048;
@@ -212,18 +213,31 @@ function requireMaximumLength(value: string, maximum: number, label: string): vo
 
 function containsSensitiveText(value: string): boolean {
   const normalized = value
-    .normalize("NFKC")
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
     .replace(/[\u2010-\u2015\u2212]/gu, "-")
     .replace(/\s+/gu, " ");
   return sensitivePattern.test(normalized) || pinIntentPattern.test(normalized);
 }
 
 function decodedPathname(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
+  let decoded = value;
+  for (let attempt = 0; attempt < maximumPathDecodes; attempt += 1) {
+    let next: string;
+    try {
+      next = decodeURIComponent(decoded);
+    } catch {
+      throw credentialError();
+    }
+    if (next === decoded) {
+      return next;
+    }
+    decoded = next;
+  }
+  if (/%[0-9a-f]{2}/i.test(decoded)) {
     throw credentialError();
   }
+  return decoded;
 }
 
 function isMaskedValue(value: string): boolean {

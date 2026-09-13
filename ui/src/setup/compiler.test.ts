@@ -236,3 +236,28 @@ test("allows PIN as an ordinary verb but rejects credential PIN phrases", () => 
     assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
   }
 });
+
+test("rejects authorization variants and repeated encoded credential paths", () => {
+  const mutations: Array<(draft: SetupDraft) => void> = [
+    (draft) => { draft.goal = "Authorize access to the report."; },
+    (draft) => { draft.steps[0] = { ...draft.steps[0], expectedOutcome: "Authorized" }; },
+    (draft) => { draft.steps[0] = { ...draft.steps[0], description: "Log into the portal" }; },
+    (draft) => { draft.steps[0] = { ...draft.steps[0], description: "Sign on to continue" }; },
+    (draft) => { draft.url = "https://portal.example.test/%256cogin"; },
+    (draft) => { draft.url = "https://portal.example.test/%25%36%63ogin"; },
+  ];
+
+  for (const mutate of mutations) {
+    const draft = baseDraft();
+    mutate(draft);
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
+  }
+});
+
+test("rejects credential PIN values after compatible normalization", () => {
+  for (const text of ["My PIN is 1234", "PIN: 1234", "Enter PİN"]) {
+    const draft = baseDraft();
+    draft.steps[0] = { ...draft.steps[0], description: text };
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
+  }
+});
