@@ -1,6 +1,6 @@
 # Workflow Use agent setup
 
-This public fork adds a demonstration-based setup flow for computer-use agents. Users describe a task, demonstrate it in a remote browser, edit the captured steps, choose reusable inputs, and test before scheduling.
+This public fork adds a demonstration-based setup flow for computer-use agents. Users describe a task, demonstrate a non-form-entry task in a remote browser, edit the captured steps, and test before scheduling.
 
 The default `ui/` app is an embedded authoring interface. Its host handles authentication, agent storage, test execution, and scheduling through an origin-checked message bridge. The separate `recording/` service captures browser actions. It does not run agents. Compiled configurations select the computer-use engine explicitly.
 
