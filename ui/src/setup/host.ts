@@ -22,9 +22,9 @@ type RequestMap = {
   stopRecording: { params: { id: string }; result: Recording };
   cancelRecording: { params: { id: string }; result: undefined };
   saveAgent: { params: { draft: SetupDraft; config: unknown; agentId?: string }; result: { id: string } };
-  testAgent: { params: { agentId: string; arguments: Record<string, string> }; result: { id: string } };
+  testAgent: { params: { agentId: string; arguments: Record<string, never> }; result: { id: string } };
   getTestRun: { params: { agentId: string; runId: string }; result: TestRun };
-  scheduleAgent: { params: { agentId: string; runId: string; arguments: Record<string, string>; cron: string }; result: undefined };
+  scheduleAgent: { params: { agentId: string; runId: string; arguments: Record<string, never>; cron: string }; result: undefined };
   close: { params: { agentId?: string }; result: undefined };
 };
 
