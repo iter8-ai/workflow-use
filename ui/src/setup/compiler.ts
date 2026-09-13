@@ -76,6 +76,18 @@ export function compileAgent(draft: SetupDraft): CompiledAgent {
   };
 }
 
+export function validateRuntimeInputValues(inputs: SetupInput[], values: Record<string, string>): void {
+  for (const input of inputs) {
+    const value = values[input.name];
+    if (value === undefined || value === "") {
+      continue;
+    }
+    if (isMaskedValue(value) || containsSensitiveText(value)) {
+      throw credentialError();
+    }
+  }
+}
+
 function validateDraft(draft: SetupDraft): void {
   requireText(draft.name, "Agent name");
   requireMaximumLength(draft.name, maximumNameLength, "Agent name");
@@ -168,6 +180,9 @@ function validateStep(step: SetupStep): void {
   if (value !== undefined && isMaskedValue(value)) {
     throw credentialError();
   }
+  if (value !== undefined && containsSensitiveText(value)) {
+    throw credentialError();
+  }
   if (looksLikeRawReplay(target) || looksLikeRawReplay(step.description)) {
     throw new Error(`Step ${step.id} must use a semantic target, not a selector or screen coordinates.`);
   }
@@ -231,6 +246,9 @@ function validateUrl(value: string, label: string): void {
   }
   if (url.search !== "" || url.hash !== "") {
     throw new Error(`${label} must not include query parameters or a fragment.`);
+  }
+  if (containsSensitiveText(value)) {
+    throw credentialError();
   }
 }
 

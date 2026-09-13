@@ -63,6 +63,32 @@ async def test_capture_never_reads_generic_input_values() -> None:
 
 
 @pytest.mark.asyncio
+async def test_capture_never_uses_unlabeled_editable_text_as_a_target() -> None:
+    playwright = pytest.importorskip("playwright.async_api")
+    events: list[dict[str, Any]] = []
+    value = "generic-synthetic-secret"
+
+    async def record(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    async with playwright.async_playwright() as runtime:
+        browser = await runtime.chromium.launch()
+        context = await browser.new_context()
+        await context.expose_binding("workflowUseRecord", lambda _, event: record(event))
+        await context.add_init_script(CAPTURE_SCRIPT)
+        page = await context.new_page()
+        await page.goto("data:text/html," + quote('<div contenteditable></div>'))
+        await page.locator("[contenteditable]").fill(value)
+        await asyncio.sleep(0.05)
+        await browser.close()
+
+    inputs = [event for event in events if event.get("type") == "input"]
+    assert inputs
+    assert all(event["target"] == "div" for event in inputs)
+    assert all(value not in str(event) for event in events)
+
+
+@pytest.mark.asyncio
 async def test_capture_never_sends_secret_values() -> None:
     playwright = pytest.importorskip("playwright.async_api")
     events: list[dict[str, Any]] = []

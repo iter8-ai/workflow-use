@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { compileAgent, type SetupDraft, type SetupInput, type SetupStep } from "./compiler";
+import { compileAgent, type SetupDraft, type SetupInput, type SetupStep, validateRuntimeInputValues } from "./compiler";
 import { browserbaseLiveViewUrl, createHostBridge, type Recording, type TestRun } from "./host";
 import "./setup.css";
 
@@ -338,6 +338,7 @@ export default function AgentSetup() {
     setNotice(null);
     let config: ReturnType<typeof compileAgent>;
     try {
+      validateRuntimeInputValues(inputs, testValues);
       config = compileAgent(draft);
     } catch (compileError) {
       setError(errorMessage(compileError));
@@ -358,11 +359,18 @@ export default function AgentSetup() {
   }
 
   async function schedule(): Promise<void> {
-    if (bridge === undefined || bridge === null || agentId === null || testRun === null || !dailySchedule || !hasValidSchedule || !canSchedule) {
+    if (bridge === undefined || bridge === null) {
       return;
     }
-    setBusy(true);
     setError(null);
+    try {
+      validateRuntimeInputValues(inputs, testValues);
+    } catch (validationError) {
+      setError(errorMessage(validationError));
+      return;
+    }
+    if (agentId === null || testRun === null || !dailySchedule || !hasValidSchedule || !canSchedule) return;
+    setBusy(true);
     try {
       await bridge.request("scheduleAgent", {
         agentId,

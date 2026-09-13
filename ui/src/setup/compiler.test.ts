@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   compileAgent,
   type SetupDraft,
+  validateRuntimeInputValues,
 } from "./compiler";
 
 const baseDraft = (): SetupDraft => ({
@@ -158,7 +159,7 @@ test("requires a reusable value for every demonstrated input or select step", ()
 
 test("rejects demonstrated data-entry values before they can enter a prompt", () => {
   const draft = baseDraft();
-  draft.steps[1] = { ...draft.steps[1], value: "generic-synthetic-secret" };
+  draft.steps[1] = { ...draft.steps[1], value: "April report" };
 
   assert.throws(() => compileAgent(draft), /must not include a demonstrated input value/i);
 });
@@ -210,6 +211,41 @@ test("rejects credential intent in every saved draft field", () => {
     const draft = baseDraft();
     mutate(draft);
     assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
+  }
+});
+
+test("rejects credential intent in prompt-bearing values and URLs", () => {
+  const literalValue = baseDraft();
+  literalValue.steps[0] = { ...literalValue.steps[0], type: "key_press", value: "OTP" };
+
+  const setupUrl = baseDraft();
+  setupUrl.url = "https://portal.example.test/login";
+
+  const stepUrl = baseDraft();
+  stepUrl.steps[0] = { ...stepUrl.steps[0], type: "navigation", url: "https://portal.example.test/login" };
+
+  const fallbackUrl = baseDraft();
+  fallbackUrl.steps[0] = {
+    ...fallbackUrl.steps[0],
+    type: "navigation",
+    target: "https://portal.example.test/login",
+    url: null,
+  };
+
+  for (const draft of [literalValue, setupUrl, stepUrl, fallbackUrl]) {
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
+  }
+});
+
+test("rejects credential-like runtime values", () => {
+  const inputs = baseDraft().inputs;
+
+  assert.doesNotThrow(() => validateRuntimeInputValues(inputs, { statement_month: "2026-09-01" }));
+  for (const value of ["password", "OTP code", "api key", "••••••••"]) {
+    assert.throws(
+      () => validateRuntimeInputValues(inputs, { statement_month: value }),
+      /credentials.*managed by the host/i,
+    );
   }
 });
 

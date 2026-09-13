@@ -27,9 +27,12 @@ CAPTURE_SCRIPT = r"""
   };
   const target = (node) => {
     if (!(node instanceof Element)) return "";
+    const valueBearing = node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement ||
+      node instanceof HTMLSelectElement || (node instanceof HTMLElement && node.isContentEditable);
+    const fallback = valueBearing ? node.tagName.toLowerCase() : node.textContent || node.tagName.toLowerCase();
     return semanticText(
       labelText(node) || node.getAttribute("title") ||
-      node.getAttribute("name") || node.textContent || node.tagName.toLowerCase()
+      node.getAttribute("name") || fallback
     );
   };
   const targetKey = (node) => {

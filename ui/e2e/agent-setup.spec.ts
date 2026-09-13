@@ -165,6 +165,36 @@ test("removes a legacy captured input value before saving the agent", async ({ p
   expect(saved).toContain("{input_1}");
 });
 
+test("does not send credential-like runtime values to the host", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=success`);
+  const setup = page.frameLocator("iframe");
+
+  await completeToTest(setup);
+  await setup.getByLabel("Statement month").fill("OTP code");
+  await setup.getByRole("button", { name: "Run test" }).click();
+
+  await expect(setup.getByRole("alert")).toContainText("Credentials must be managed by the host.");
+  await expect.poll(() => page.evaluate(() => window.__savedAgents)).toEqual([]);
+  await expect.poll(() => page.evaluate(() => window.__testArguments)).toEqual([]);
+});
+
+test("does not schedule a changed credential-like runtime value", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=success`);
+  const setup = page.frameLocator("iframe");
+
+  await completeToTest(setup);
+  await setup.getByLabel("Statement month").fill("2026-09-01");
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await expect(setup.getByText("Test completed")).toBeVisible();
+  await setup.getByLabel("I checked the result").check();
+  await setup.getByLabel("Schedule daily").check();
+  await setup.getByLabel("Time of day (UTC)").fill("09:30");
+  await setup.getByLabel("Statement month").fill("API key");
+
+  await expect(setup.getByRole("button", { name: "Schedule agent" })).toBeDisabled();
+  await expect.poll(() => page.evaluate(() => window.__savedSchedule)).toBeUndefined();
+});
+
 test("ignores a response posted by the setup iframe instead of its host", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=delayed-ready`);
   const setup = page.frameLocator("iframe");
