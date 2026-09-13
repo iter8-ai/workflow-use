@@ -1,24 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  compileAgent,
-  type SetupDraft,
-  validateRuntimeInputValues,
-} from "./compiler";
+import { compileAgent, type SetupDraft } from "./compiler";
 
 const baseDraft = (): SetupDraft => ({
   name: "Download monthly statement",
   url: "https://portal.example.test/reports",
-  goal: "Download the selected month's statement.",
-  inputs: [
-    {
-      name: "statement_month",
-      label: "Statement month",
-      type: "date",
-      example: "2026-08-01",
-    },
-  ],
+  goal: "Download the monthly statement.",
+  inputs: [],
   steps: [
     {
       id: "open-reports",
@@ -26,13 +15,6 @@ const baseDraft = (): SetupDraft => ({
       description: "Open the reports section",
       target: "Reports",
       expectedOutcome: "The reports list is visible",
-    },
-    {
-      id: "choose-month",
-      type: "input",
-      description: "Choose the statement month",
-      target: "Statement month",
-      inputName: "statement_month",
     },
     {
       id: "download-statement",
@@ -44,45 +26,15 @@ const baseDraft = (): SetupDraft => ({
   ],
 });
 
-test("compiles an intent-based computer-use stage with explicit runtime inputs", () => {
+test("compiles an intent-based computer-use stage with download collection", () => {
   const compiled = compileAgent(baseDraft());
 
   assert.deepEqual(compiled.options, { version: 1, engine: "computer" });
-  assert.equal(compiled.url, "https://portal.example.test/reports");
   assert.deepEqual(compiled.parameters, {});
-  assert.equal(compiled.stages.length, 2);
+  assert.deepEqual(compiled.stages.map((stage) => stage.type), ["agent", "download"]);
   assert.equal(compiled.stages[0]?.type, "agent");
-  assert.equal(compiled.stages[1]?.type, "download");
   assert.equal(compiled.stages[0]?.step_limit, 64);
-  assert.match(compiled.prompt, /Download monthly statement/);
-  assert.match(compiled.stages[0]?.prompt ?? "", /\{statement_month\}/);
   assert.match(compiled.stages[0]?.prompt ?? "", /Click Reports to open the reports section\./);
-  assert.match(compiled.stages[0]?.prompt ?? "", /Set Statement month to \{statement_month\} to choose the statement month\./);
-  assert.doesNotMatch(compiled.stages[0]?.prompt ?? "", /Set Statement month to 2026-08-01/);
-  assert.match(
-    compiled.stages[0]?.prompt ?? "",
-    /After this step, check that: The reports list is visible\./,
-  );
-  assert.doesNotMatch(compiled.stages[0]?.prompt ?? "", /verified|completed successfully/i);
-});
-
-test("retains literal key presses and escapes their braces", () => {
-  const draft = baseDraft();
-  draft.inputs = [];
-  draft.steps = [
-    {
-      id: "search",
-      type: "key_press",
-      description: "Press the saved report shortcut",
-      value: "Monthly {draft}",
-    },
-  ];
-
-  const compiled = compileAgent(draft);
-
-  assert.equal(compiled.stages[0]?.type, "agent");
-  assert.match(compiled.stages[0]?.prompt ?? "", /Monthly \{\{draft\}\}/);
-  assert.doesNotMatch(compiled.stages[0]?.prompt ?? "", /Monthly \{draft\}/);
 });
 
 test("compiles recorder steps with serialized null optional fields", () => {
@@ -91,120 +43,53 @@ test("compiles recorder steps with serialized null optional fields", () => {
     url: "https://github.com/example/setup-check",
     goal: "Download the sample CSV.",
     inputs: [],
-    steps: [
-      {
-        id: "navigate-1",
-        type: "navigation",
-        description: "Open the verification page",
-        target: null,
-        value: null,
-        url: "https://github.com/example/setup-check",
-        expectedOutcome: null,
-      },
-      {
-        id: "click-1",
-        type: "click",
-        description: "Download the sample CSV",
-        target: "Download sample CSV",
-        value: null,
-        url: null,
-        expectedOutcome: null,
-      },
-    ],
+    steps: [{
+      id: "navigate-1",
+      type: "navigation",
+      description: "https://github.com/example/setup-check",
+      target: null,
+      value: null,
+      url: "https://github.com/example/setup-check",
+      expectedOutcome: null,
+    }],
   };
 
-  const compiled = compileAgent(draft);
-
-  assert.deepEqual(compiled.stages.map((stage) => stage.type), ["agent", "download"]);
-  assert.equal(compiled.stages[0]?.type, "agent");
-  assert.match(compiled.stages[0]?.prompt ?? "", /Navigate to https:\/\/github\.com\/example\/setup-check/);
-  assert.match(compiled.stages[0]?.prompt ?? "", /Click Download sample CSV to download the sample CSV\./);
+  assert.doesNotThrow(() => compileAgent(draft));
 });
 
-test("requires declared inputs to be assigned by a demonstrated step", () => {
-  const draft = baseDraft();
-  draft.steps = draft.steps.filter((step) => step.inputName === undefined);
+test("rejects every form-entry step and declared input", () => {
+  const inputStep = baseDraft();
+  inputStep.steps.push({ id: "input", type: "input", description: "Enter report month", target: "Month" });
 
-  assert.throws(() => compileAgent(draft), /statement_month.*referenced/i);
-});
+  const selectStep = baseDraft();
+  selectStep.steps.push({ id: "select", type: "select_change", description: "Choose month", target: "Month" });
 
-test("rejects undeclared and unsupported inputs", () => {
-  const undeclared = baseDraft();
-  undeclared.steps[1] = { ...undeclared.steps[1], inputName: "period" };
+  const declaredInput = baseDraft();
+  declaredInput.inputs = [{ name: "month", label: "Month", type: "text", example: "September" }];
 
-  const unsupported = baseDraft();
-  unsupported.inputs[0] = {
-    ...unsupported.inputs[0],
-    type: "password" as "text",
-  };
-
-  assert.throws(() => compileAgent(undeclared), /period.*declared/i);
-  assert.throws(() => compileAgent(unsupported), /unsupported input type/i);
-});
-
-test("rejects reusable values on steps that are not input or select actions", () => {
-  const draft = baseDraft();
-  draft.steps[0] = { ...draft.steps[0], inputName: "statement_month" };
-  draft.steps[1] = { ...draft.steps[1], inputName: undefined };
-
-  assert.throws(() => compileAgent(draft), /only be used on an input or select/i);
-});
-
-test("requires a reusable value for every demonstrated input or select step", () => {
-  const draft = baseDraft();
-  draft.steps[1] = { ...draft.steps[1], inputName: undefined };
-
-  assert.throws(() => compileAgent(draft), /named reusable input/i);
-});
-
-test("rejects demonstrated data-entry values before they can enter a prompt", () => {
-  const draft = baseDraft();
-  draft.steps[1] = { ...draft.steps[1], value: "April report" };
-
-  assert.throws(() => compileAgent(draft), /must not include a demonstrated input value/i);
-});
-
-test("rejects credentials, secret-like targets, and masked password values", () => {
-  const secretInput = baseDraft();
-  secretInput.inputs[0] = {
-    ...secretInput.inputs[0],
-    name: "api_key",
-  };
-  secretInput.steps[1] = { ...secretInput.steps[1], inputName: "api_key" };
-
-  const secretTarget = baseDraft();
-  secretTarget.steps[1] = {
-    ...secretTarget.steps[1],
-    target: "Password",
-  };
-
-  const maskedValue = baseDraft();
-  maskedValue.steps[1] = {
-    ...maskedValue.steps[1],
-    value: "••••••••",
-  };
-
-  const loginTarget = baseDraft();
-  loginTarget.steps[0] = { ...loginTarget.steps[0], target: "Log in" };
-
-  for (const draft of [secretInput, secretTarget, maskedValue, loginTarget]) {
-    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
+  for (const draft of [inputStep, selectStep, declaredInput]) {
+    assert.throws(() => compileAgent(draft), /form-entry tasks are not supported/i);
   }
 });
 
-test("rejects credential intent in every saved draft field", () => {
+test("rejects reusable input references", () => {
+  const draft = baseDraft();
+  draft.steps[0] = { ...draft.steps[0], inputName: "month" };
+
+  assert.throws(() => compileAgent(draft), /reusable inputs are not supported/i);
+});
+
+test("rejects credential intent in saved or prompt-bearing fields", () => {
   const mutations: Array<(draft: SetupDraft) => void> = [
     (draft) => { draft.name = "Login report"; },
     (draft) => { draft.goal = "Enter the one-time code"; },
+    (draft) => { draft.url = "https://portal.example.test/login"; },
     (draft) => { draft.steps[0] = { ...draft.steps[0], description: "Enter password" }; },
     (draft) => { draft.steps[0] = { ...draft.steps[0], expectedOutcome: "OTP accepted" }; },
     (draft) => { draft.steps[0] = { ...draft.steps[0], target: "Log in" }; },
-    (draft) => {
-      draft.inputs[0] = { ...draft.inputs[0], name: "otp_value" };
-      draft.steps[1] = { ...draft.steps[1], inputName: "otp_value" };
-    },
-    (draft) => { draft.inputs[0] = { ...draft.inputs[0], label: "API token" }; },
-    (draft) => { draft.inputs[0] = { ...draft.inputs[0], example: "secret example" }; },
+    (draft) => { draft.steps[0] = { ...draft.steps[0], type: "key_press", value: "API key" }; },
+    (draft) => { draft.steps[0] = { ...draft.steps[0], type: "navigation", url: "https://portal.example.test/login" }; },
+    (draft) => { draft.steps[0] = { ...draft.steps[0], type: "navigation", target: "https://portal.example.test/login", url: null }; },
   ];
 
   for (const mutate of mutations) {
@@ -214,145 +99,72 @@ test("rejects credential intent in every saved draft field", () => {
   }
 });
 
-test("rejects credential intent in prompt-bearing values and URLs", () => {
-  const literalValue = baseDraft();
-  literalValue.steps[0] = { ...literalValue.steps[0], type: "key_press", value: "OTP" };
-
-  const setupUrl = baseDraft();
-  setupUrl.url = "https://portal.example.test/login";
-
-  const stepUrl = baseDraft();
-  stepUrl.steps[0] = { ...stepUrl.steps[0], type: "navigation", url: "https://portal.example.test/login" };
-
-  const fallbackUrl = baseDraft();
-  fallbackUrl.steps[0] = {
-    ...fallbackUrl.steps[0],
-    type: "navigation",
-    target: "https://portal.example.test/login",
-    url: null,
-  };
-
-  for (const draft of [literalValue, setupUrl, stepUrl, fallbackUrl]) {
-    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
+test("rejects every query parameter and fragment", () => {
+  for (const url of [
+    "https://portal.example.test/reports?p=opaque-value",
+    "https://portal.example.test/reports#latest",
+  ]) {
+    const draft = baseDraft();
+    draft.url = url;
+    assert.throws(() => compileAgent(draft), /must not include query parameters or a fragment/i);
   }
 });
 
-test("rejects credential-like runtime values", () => {
-  const inputs = baseDraft().inputs;
+test("escapes braces in non-entry literals", () => {
+  const draft = baseDraft();
+  draft.steps[0] = { ...draft.steps[0], type: "key_press", value: "Report {draft}" };
 
-  assert.doesNotThrow(() => validateRuntimeInputValues(inputs, { statement_month: "2026-09-01" }));
-  for (const value of ["password", "OTP code", "api key", "••••••••"]) {
-    assert.throws(
-      () => validateRuntimeInputValues(inputs, { statement_month: value }),
-      /credentials.*managed by the host/i,
-    );
-  }
+  const compiled = compileAgent(draft);
+  assert.equal(compiled.stages[0]?.type, "agent");
+  assert.match(compiled.stages[0]?.prompt ?? "", /Report \{\{draft\}\}/);
 });
 
-test("rejects unsafe input names, invalid setup URLs, and raw browser replay targets", () => {
-  const unsafeName = baseDraft();
-  unsafeName.inputs[0] = { ...unsafeName.inputs[0], name: "__proto__" };
-  unsafeName.steps[1] = { ...unsafeName.steps[1], inputName: "__proto__" };
-
-  const credentialUrl = baseDraft();
-  credentialUrl.url = "https://person:secret@example.test/reports";
+test("rejects URL credentials, raw replay targets, and host limits", () => {
+  const urlCredentials = baseDraft();
+  urlCredentials.url = "https://person:secret@example.test/reports";
 
   const rawSelector = baseDraft();
   rawSelector.steps[0] = { ...rawSelector.steps[0], target: "#reports > button" };
 
-  assert.throws(() => compileAgent(unsafeName), /safe lowercase/i);
-  assert.throws(() => compileAgent(credentialUrl), /http\(s\).*credentials/i);
+  const tooLongName = baseDraft();
+  tooLongName.name = "a".repeat(151);
+
+  const tooManySteps = baseDraft();
+  tooManySteps.steps = Array.from({ length: 201 }, (_, index) => ({
+    id: `step-${index}`,
+    type: "click" as const,
+    description: "Open reports",
+    target: "Reports",
+  }));
+
+  assert.throws(() => compileAgent(urlCredentials), /http\(s\).*credentials/i);
   assert.throws(() => compileAgent(rawSelector), /semantic target/i);
+  assert.throws(() => compileAgent(tooLongName), /150 characters/i);
+  assert.throws(() => compileAgent(tooManySteps), /200 demonstrated steps/i);
 });
 
-test("rejects every query parameter before compiling a host-save payload", () => {
-  const queryNames = [
-    "access_token",
-    "api-key",
-    "authorization",
-    "client_secret",
-    "code",
-    "credential",
-    "id_token",
-    "jwt",
-    "otp",
-    "password",
-    "refresh_token",
-    "secret",
-    "session",
-    "signature",
-    "sig",
-    "token",
-    "api_version",
-    "client_id",
-    "codebook",
-    "jwt_mode",
-    "p",
-    "session_id",
-    "tokenized",
-  ];
+test("rejects direct and fallback navigation URLs with queries or fragments", () => {
+  const direct = baseDraft();
+  direct.steps[0] = { ...direct.steps[0], type: "navigation", url: "https://portal.example.test/reports?p=opaque-value" };
 
-  for (const name of queryNames) {
-    const setupUrl = baseDraft();
-    setupUrl.url = `https://portal.example.test/reports?${name}=synthetic-value`;
-
-    const stepUrl = baseDraft();
-    stepUrl.steps[0] = {
-      ...stepUrl.steps[0],
-      type: "navigation",
-      url: `https://portal.example.test/reports?${name}=synthetic-value`,
-    };
-
-    assert.throws(() => compileAgent(setupUrl), /must not include query parameters or a fragment/i, name);
-    assert.throws(() => compileAgent(stepUrl), /must not include query parameters or a fragment/i, name);
-  }
-});
-
-test("rejects fragments before compiling a host-save payload", () => {
-  const setupUrl = baseDraft();
-  setupUrl.url = "https://portal.example.test/reports#latest";
-
-  const stepUrl = baseDraft();
-  stepUrl.steps[0] = {
-    ...stepUrl.steps[0],
+  const targetFallback = baseDraft();
+  targetFallback.steps[0] = {
+    ...targetFallback.steps[0],
     type: "navigation",
-    url: "https://portal.example.test/reports#latest",
-  };
-
-  assert.throws(() => compileAgent(setupUrl), /must not include query parameters or a fragment/i);
-  assert.throws(() => compileAgent(stepUrl), /must not include query parameters or a fragment/i);
-});
-
-test("rejects query and fragment URLs in navigation fallbacks before compiling a host-save payload", () => {
-  const targetUrl = baseDraft();
-  targetUrl.steps[0] = {
-    ...targetUrl.steps[0],
-    type: "navigation",
-    target: "https://portal.example.test/reports?p=opaque-value",
+    target: "https://portal.example.test/reports#latest",
     url: null,
   };
 
-  const descriptionUrl = baseDraft();
-  descriptionUrl.steps[0] = {
-    ...descriptionUrl.steps[0],
+  const descriptionFallback = baseDraft();
+  descriptionFallback.steps[0] = {
+    ...descriptionFallback.steps[0],
     type: "navigation",
-    description: "https://portal.example.test/reports#latest",
+    description: "https://portal.example.test/reports?p=opaque-value",
     target: null,
     url: null,
   };
 
-  assert.throws(() => compileAgent(targetUrl), /must not include query parameters or a fragment/i);
-  assert.throws(() => compileAgent(descriptionUrl), /must not include query parameters or a fragment/i);
-});
-
-test("keeps setup payloads within host limits", () => {
-  const tooLongName = baseDraft();
-  tooLongName.name = "a".repeat(151);
-
-  const tooLongInput = baseDraft();
-  tooLongInput.inputs[0] = { ...tooLongInput.inputs[0], name: "a".repeat(65) };
-  tooLongInput.steps[1] = { ...tooLongInput.steps[1], inputName: "a".repeat(65) };
-
-  assert.throws(() => compileAgent(tooLongName), /150 characters/i);
-  assert.throws(() => compileAgent(tooLongInput), /64 characters/i);
+  for (const draft of [direct, targetFallback, descriptionFallback]) {
+    assert.throws(() => compileAgent(draft), /must not include query parameters or a fragment/i);
+  }
 });

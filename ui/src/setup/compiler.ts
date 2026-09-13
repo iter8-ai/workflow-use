@@ -44,14 +44,11 @@ type CompiledAgent = {
   parameters: Record<string, never>;
 };
 
-const inputNamePattern = /^[a-z][a-z0-9_]*$/;
 const sensitivePattern = /password|passcode|secret|token|api[_ -]?key|credential|authorization|auth(?:entication)?|cvv|cvc|social security|ssn|credit card|card number|user ?name|one.?time|otp|totp|log ?in|sign ?in/i;
 const rawReplayPattern = /\b(?:css|xpath|selector)\b|#[a-z][\w-]*(?:\s*[>+~]|\[)|\[[^\]]+\]|(?:^|\s)(?:x|y)\s*[:=]\s*\d+|^\s*\d+(?:px)?\s*,\s*\d+(?:px)?\s*$/i;
-const supportedInputTypes = new Set<SetupInput["type"]>(["text", "date", "number"]);
 const maximumNameLength = 150;
 const maximumUrlLength = 2_048;
 const maximumSteps = 200;
-const maximumInputNameLength = 64;
 
 export function compileAgent(draft: SetupDraft): CompiledAgent {
   validateDraft(draft);
@@ -76,18 +73,6 @@ export function compileAgent(draft: SetupDraft): CompiledAgent {
   };
 }
 
-export function validateRuntimeInputValues(inputs: SetupInput[], values: Record<string, string>): void {
-  for (const input of inputs) {
-    const value = values[input.name];
-    if (value === undefined || value === "") {
-      continue;
-    }
-    if (isMaskedValue(value) || containsSensitiveText(value)) {
-      throw credentialError();
-    }
-  }
-}
-
 function validateDraft(draft: SetupDraft): void {
   requireText(draft.name, "Agent name");
   requireMaximumLength(draft.name, maximumNameLength, "Agent name");
@@ -103,30 +88,11 @@ function validateDraft(draft: SetupDraft): void {
   if (draft.steps.length > maximumSteps) {
     throw new Error(`A setup can contain at most ${maximumSteps} demonstrated steps.`);
   }
-
-  const stepIds = new Set<string>();
-  const inputNames = new Set<string>();
-  for (const input of draft.inputs) {
-    requireText(input.name, "Input name");
-    requireText(input.label, `Input label for ${input.name}`);
-    requireText(input.example, `Input example for ${input.name}`);
-    requireMaximumLength(input.name, maximumInputNameLength, "Input name");
-    if (!supportedInputTypes.has(input.type)) {
-      throw new Error(`Unsupported input type for ${input.name}. Use text, date, or number.`);
-    }
-    if (!inputNamePattern.test(input.name) || input.name.startsWith("__")) {
-      throw new Error(`Input name ${input.name} must use safe lowercase letters, numbers, and underscores.`);
-    }
-    if (inputNames.has(input.name)) {
-      throw new Error(`Input name ${input.name} is duplicated.`);
-    }
-    if (containsSensitiveText(input.name) || containsSensitiveText(input.label) || containsSensitiveText(input.example)) {
-      throw credentialError();
-    }
-    inputNames.add(input.name);
+  if (draft.inputs.length > 0) {
+    throw new Error("Form-entry tasks are not supported in this release. Remove input and select steps.");
   }
 
-  const referencedInputs = new Set<string>();
+  const stepIds = new Set<string>();
   for (const step of draft.steps) {
     requireText(step.id, "Step id");
     requireText(step.description, `Description for step ${step.id}`);
@@ -140,27 +106,10 @@ function validateDraft(draft: SetupDraft): void {
 
     validateStep(step);
     if (step.type === "input" || step.type === "select_change") {
-      if (step.inputName === undefined) {
-        throw new Error(`Step ${step.id} needs a named reusable input before creating the agent.`);
-      }
-      if (optionalStepText(step.value) !== undefined) {
-        throw new Error(`Step ${step.id} must not include a demonstrated input value.`);
-      }
+      throw new Error("Form-entry tasks are not supported in this release. Remove input and select steps.");
     }
     if (step.inputName !== undefined) {
-      if (step.type !== "input" && step.type !== "select_change") {
-        throw new Error(`Reusable input ${step.inputName} can only be used on an input or select step.`);
-      }
-      if (!inputNames.has(step.inputName)) {
-        throw new Error(`Step ${step.id} references ${step.inputName}, which is not a declared input.`);
-      }
-      referencedInputs.add(step.inputName);
-    }
-  }
-
-  for (const inputName of inputNames) {
-    if (!referencedInputs.has(inputName)) {
-      throw new Error(`Declared input ${inputName} must be referenced by a demonstrated step.`);
+      throw new Error("Reusable inputs are not supported in this release.");
     }
   }
 }
@@ -190,14 +139,10 @@ function validateStep(step: SetupStep): void {
 
 function formatStep(step: SetupStep, index: number): string {
   const targetValue = optionalStepText(step.target);
-  const literalValue = step.type === "input" || step.type === "select_change"
-    ? undefined
-    : optionalStepText(step.value);
+  const literalValue = optionalStepText(step.value);
   const expectedOutcome = optionalStepText(step.expectedOutcome);
   const target = targetValue === undefined ? undefined : escapeLiteral(targetValue);
-  const value = step.inputName === undefined
-    ? literalValue === undefined ? undefined : escapeLiteral(literalValue)
-    : `{${step.inputName}}`;
+  const value = literalValue === undefined ? undefined : escapeLiteral(literalValue);
   const description = escapeLiteral(step.description);
 
   const instruction = formatInstruction(step, target, value, description);
@@ -213,7 +158,7 @@ function formatInstruction(
   value: string | undefined,
   description: string,
 ): string {
-  const intent = continuation(step.description, literalValueForContinuation(step));
+  const intent = continuation(step.description, optionalStepText(step.value));
   if (step.type === "navigation") {
     return `Navigate to ${escapeLiteral(step.url ?? step.target ?? step.description)} to ${intent}.`;
   }
@@ -274,10 +219,6 @@ function isMaskedValue(value: string): boolean {
 
 function optionalStepText(value: string | null | undefined): string | undefined {
   return value ?? undefined;
-}
-
-function literalValueForContinuation(step: SetupStep): string | undefined {
-  return step.type === "input" || step.type === "select_change" ? undefined : optionalStepText(step.value);
 }
 
 function looksLikeRawReplay(value: string | null | undefined): boolean {
