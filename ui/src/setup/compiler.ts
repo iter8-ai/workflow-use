@@ -2,10 +2,10 @@ export type SetupStep = {
   id: string;
   type: "navigation" | "click" | "input" | "select_change" | "key_press" | "scroll" | "agent";
   description: string;
-  target?: string;
-  value?: string;
-  url?: string;
-  expectedOutcome?: string;
+  target?: string | null;
+  value?: string | null;
+  url?: string | null;
+  expectedOutcome?: string | null;
   inputName?: string;
 };
 
@@ -134,31 +134,37 @@ function validateDraft(draft: SetupDraft): void {
 }
 
 function validateStep(step: SetupStep): void {
-  if (step.url !== undefined) {
-    validateUrl(step.url, `URL for step ${step.id}`);
+  const url = optionalStepText(step.url);
+  const target = optionalStepText(step.target);
+  const value = optionalStepText(step.value);
+  if (url !== undefined) {
+    validateUrl(url, `URL for step ${step.id}`);
   }
-  if (step.target !== undefined && containsSensitiveText(step.target)) {
+  if (target !== undefined && containsSensitiveText(target)) {
     throw credentialError();
   }
-  if (step.value !== undefined && isMaskedValue(step.value)) {
+  if (value !== undefined && isMaskedValue(value)) {
     throw credentialError();
   }
-  if (looksLikeRawReplay(step.target) || looksLikeRawReplay(step.description)) {
+  if (looksLikeRawReplay(target) || looksLikeRawReplay(step.description)) {
     throw new Error(`Step ${step.id} must use a semantic target, not a selector or screen coordinates.`);
   }
 }
 
 function formatStep(step: SetupStep, index: number): string {
-  const target = step.target === undefined ? undefined : escapeLiteral(step.target);
+  const targetValue = optionalStepText(step.target);
+  const literalValue = optionalStepText(step.value);
+  const expectedOutcome = optionalStepText(step.expectedOutcome);
+  const target = targetValue === undefined ? undefined : escapeLiteral(targetValue);
   const value = step.inputName === undefined
-    ? step.value === undefined ? undefined : escapeLiteral(step.value)
+    ? literalValue === undefined ? undefined : escapeLiteral(literalValue)
     : `{${step.inputName}}`;
   const description = escapeLiteral(step.description);
 
   const instruction = formatInstruction(step, target, value, description);
-  const outcome = step.expectedOutcome === undefined
+  const outcome = expectedOutcome === undefined
     ? ""
-    : ` After this step, check that: ${escapeLiteral(step.expectedOutcome)}.`;
+    : ` After this step, check that: ${escapeLiteral(expectedOutcome)}.`;
   return `${index + 1}. ${instruction}${outcome}`;
 }
 
@@ -168,7 +174,10 @@ function formatInstruction(
   value: string | undefined,
   description: string,
 ): string {
-  const intent = continuation(step.description, step.inputName === undefined ? step.value : undefined);
+  const intent = continuation(
+    step.description,
+    step.inputName === undefined ? optionalStepText(step.value) : undefined,
+  );
   if (step.type === "navigation") {
     return `Navigate to ${escapeLiteral(step.url ?? step.target ?? step.description)} to ${intent}.`;
   }
@@ -224,8 +233,12 @@ function isMaskedValue(value: string): boolean {
   return /^\s*(?:[•●◦*]{3,}|\[?redacted\]?)\s*$/i.test(value);
 }
 
-function looksLikeRawReplay(value: string | undefined): boolean {
-  return value !== undefined && rawReplayPattern.test(value);
+function optionalStepText(value: string | null | undefined): string | undefined {
+  return value ?? undefined;
+}
+
+function looksLikeRawReplay(value: string | null | undefined): boolean {
+  return value !== null && value !== undefined && rawReplayPattern.test(value);
 }
 
 function escapeLiteral(value: string): string {

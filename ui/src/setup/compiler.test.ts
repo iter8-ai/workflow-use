@@ -84,6 +84,40 @@ test("retains literal values and escapes their braces when no input was assigned
   assert.doesNotMatch(compiled.stages[0]?.prompt ?? "", /Monthly \{draft\}/);
 });
 
+test("compiles recorder steps with serialized null optional fields", () => {
+  const draft: SetupDraft = {
+    name: "Download verification CSV",
+    url: "https://github.com/example/setup-check",
+    goal: "Download the sample CSV.",
+    inputs: [],
+    steps: [
+      {
+        id: "navigate-1",
+        type: "navigation",
+        description: "Open the verification page",
+        target: null,
+        value: null,
+        url: "https://github.com/example/setup-check",
+        expectedOutcome: null,
+      },
+      {
+        id: "click-1",
+        type: "click",
+        description: "Download the sample CSV",
+        target: "Download sample CSV",
+        value: null,
+        url: null,
+        expectedOutcome: null,
+      },
+    ],
+  };
+
+  const compiled = compileAgent(draft);
+
+  assert.match(compiled.stages[0]?.prompt ?? "", /Navigate to https:\/\/github\.com\/example\/setup-check/);
+  assert.match(compiled.stages[0]?.prompt ?? "", /Click Download sample CSV to download the sample CSV\./);
+});
+
 test("requires declared inputs to be assigned by a demonstrated step", () => {
   const draft = baseDraft();
   draft.steps = draft.steps.filter((step) => step.inputName === undefined);
