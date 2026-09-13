@@ -312,7 +312,7 @@ test("allows a valid literal percent after path decoding", () => {
 });
 
 test("rejects grammatical authentication and sign-in variants", () => {
-  for (const text of ["Authenticating with the bank", "Logged in to the portal", "Signed in to the portal", "Review previous logins", "Review previous signins"]) {
+  for (const text of ["Authenticating with the bank", "Logged in to the portal", "Signed in to the portal", "Loginto the portal", "Signinto the portal", "Logon to the portal", "Signon to the portal", "Review previous logins", "Review previous signins"]) {
     const draft = baseDraft();
     draft.steps[0] = { ...draft.steps[0], description: text };
     assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, text);
