@@ -121,6 +121,14 @@ function validateDraft(draft: SetupDraft): void {
     stepIds.add(step.id);
 
     validateStep(step);
+    if (step.type === "input" || step.type === "select_change") {
+      if (step.inputName === undefined) {
+        throw new Error(`Step ${step.id} needs a named reusable input before creating the agent.`);
+      }
+      if (optionalStepText(step.value) !== undefined) {
+        throw new Error(`Step ${step.id} must not include a demonstrated input value.`);
+      }
+    }
     if (step.inputName !== undefined) {
       if (step.type !== "input" && step.type !== "select_change") {
         throw new Error(`Reusable input ${step.inputName} can only be used on an input or select step.`);
@@ -143,12 +151,10 @@ function validateStep(step: SetupStep): void {
   const url = optionalStepText(step.url);
   const target = optionalStepText(step.target);
   const value = optionalStepText(step.value);
-  if (url !== undefined) {
-    validateUrl(url, `URL for step ${step.id}`);
-  }
   if (step.type === "navigation") {
-    validateNavigationFallbackUrl(target, `Navigation target for step ${step.id}`);
-    validateNavigationFallbackUrl(step.description, `Navigation description for step ${step.id}`);
+    validateUrl(url ?? target ?? step.description, `URL for step ${step.id}`);
+  } else if (url !== undefined) {
+    validateUrl(url, `URL for step ${step.id}`);
   }
   if (target !== undefined && containsSensitiveText(target)) {
     throw credentialError();
@@ -163,7 +169,9 @@ function validateStep(step: SetupStep): void {
 
 function formatStep(step: SetupStep, index: number): string {
   const targetValue = optionalStepText(step.target);
-  const literalValue = optionalStepText(step.value);
+  const literalValue = step.type === "input" || step.type === "select_change"
+    ? undefined
+    : optionalStepText(step.value);
   const expectedOutcome = optionalStepText(step.expectedOutcome);
   const target = targetValue === undefined ? undefined : escapeLiteral(targetValue);
   const value = step.inputName === undefined
@@ -184,10 +192,7 @@ function formatInstruction(
   value: string | undefined,
   description: string,
 ): string {
-  const intent = continuation(
-    step.description,
-    step.inputName === undefined ? optionalStepText(step.value) : undefined,
-  );
+  const intent = continuation(step.description, literalValueForContinuation(step));
   if (step.type === "navigation") {
     return `Navigate to ${escapeLiteral(step.url ?? step.target ?? step.description)} to ${intent}.`;
   }
@@ -195,9 +200,6 @@ function formatInstruction(
     return target === undefined ? `Complete this action: ${description}.` : `Click ${target} to ${intent}.`;
   }
   if (step.type === "input" || step.type === "select_change") {
-    if (value === undefined) {
-      return target === undefined ? `Complete this action: ${description}.` : `Set ${target} as demonstrated.`;
-    }
     return target === undefined ? `Enter ${value} to ${intent}.` : `Set ${target} to ${value} to ${intent}.`;
   }
   if (step.type === "key_press") {
@@ -226,18 +228,6 @@ function validateUrl(value: string, label: string): void {
   }
 }
 
-function validateNavigationFallbackUrl(value: string | undefined, label: string): void {
-  if (value === undefined) {
-    return;
-  }
-  try {
-    new URL(value);
-  } catch {
-    return;
-  }
-  validateUrl(value, label);
-}
-
 function requireText(value: string, label: string): void {
   if (value.trim() === "") {
     throw new Error(`${label} is required.`);
@@ -260,6 +250,10 @@ function isMaskedValue(value: string): boolean {
 
 function optionalStepText(value: string | null | undefined): string | undefined {
   return value ?? undefined;
+}
+
+function literalValueForContinuation(step: SetupStep): string | undefined {
+  return step.type === "input" || step.type === "select_change" ? undefined : optionalStepText(step.value);
 }
 
 function looksLikeRawReplay(value: string | null | undefined): boolean {

@@ -6,7 +6,6 @@ CAPTURE_SCRIPT = r"""
   window.__workflowUseRecordingInstalled = true;
 
   const semanticText = (value, size = 240) => String(value ?? "").trim().replace(/\s+/g, " ").slice(0, size);
-  const exactText = (value, size = 240) => String(value ?? "").slice(0, size);
   const labelText = (node) => {
     if (!(node instanceof Element)) return "";
     const labelled = (node.getAttribute("aria-labelledby") || "").split(/\s+/)
@@ -62,15 +61,12 @@ CAPTURE_SCRIPT = r"""
       emit({ secret: true });
       return;
     }
-    const value = node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement
-      ? node.value : node.textContent;
-    emit({ type: "input", target: target(node), targetKey: targetKey(node), value: exactText(value, 2000) });
+    emit({ type: "input", target: target(node), targetKey: targetKey(node) });
   }, true);
   document.addEventListener("change", (event) => {
     const node = event.target;
     if (!(node instanceof HTMLSelectElement)) return;
-    const option = node.selectedOptions[0];
-    emit({ type: "select_change", target: target(node), value: semanticText(option?.textContent || "", 1000) });
+    emit({ type: "select_change", target: target(node) });
   }, true);
   document.addEventListener("keydown", (event) => {
     const node = event.target;

@@ -31,7 +31,6 @@ const baseDraft = (): SetupDraft => ({
       type: "input",
       description: "Choose the statement month",
       target: "Statement month",
-      value: "2026-08-01",
       inputName: "statement_month",
     },
     {
@@ -66,15 +65,14 @@ test("compiles an intent-based computer-use stage with explicit runtime inputs",
   assert.doesNotMatch(compiled.stages[0]?.prompt ?? "", /verified|completed successfully/i);
 });
 
-test("retains literal values and escapes their braces when no input was assigned", () => {
+test("retains literal key presses and escapes their braces", () => {
   const draft = baseDraft();
   draft.inputs = [];
   draft.steps = [
     {
       id: "search",
-      type: "input",
-      description: "Search for the saved report",
-      target: "Search",
+      type: "key_press",
+      description: "Press the saved report shortcut",
       value: "Monthly {draft}",
     },
   ];
@@ -143,12 +141,26 @@ test("rejects undeclared and unsupported inputs", () => {
   assert.throws(() => compileAgent(unsupported), /unsupported input type/i);
 });
 
-test("allows reusable values only on demonstrated input or select steps", () => {
+test("rejects reusable values on steps that are not input or select actions", () => {
   const draft = baseDraft();
   draft.steps[0] = { ...draft.steps[0], inputName: "statement_month" };
   draft.steps[1] = { ...draft.steps[1], inputName: undefined };
 
   assert.throws(() => compileAgent(draft), /only be used on an input or select/i);
+});
+
+test("requires a reusable value for every demonstrated input or select step", () => {
+  const draft = baseDraft();
+  draft.steps[1] = { ...draft.steps[1], inputName: undefined };
+
+  assert.throws(() => compileAgent(draft), /named reusable input/i);
+});
+
+test("rejects demonstrated data-entry values before they can enter a prompt", () => {
+  const draft = baseDraft();
+  draft.steps[1] = { ...draft.steps[1], value: "generic-synthetic-secret" };
+
+  assert.throws(() => compileAgent(draft), /must not include a demonstrated input value/i);
 });
 
 test("rejects credentials, secret-like targets, and masked password values", () => {

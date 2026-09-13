@@ -171,8 +171,8 @@ async def test_typing_is_compacted_and_late_events_are_ignored_after_stop() -> N
     with client(provider) as http:
         recording = create_recording(http)
         session = provider.sessions[0]
-        await session.emit({"type": "input", "target": "Invoice number", "value": "4"})
-        await session.emit({"type": "input", "target": "Invoice number", "value": "42"})
+        await session.emit({"type": "input", "target": "Invoice number", "value": "generic-synthetic-secret"})
+        await session.emit({"type": "input", "target": "Invoice number", "value": "generic-synthetic-secret-2"})
         stopped = http.post(f"/recordings/{recording['id']}/stop", headers=headers())
         await session.emit({"type": "click", "target": "Submit"})
         read = http.get(f"/recordings/{recording['id']}", headers=headers())
@@ -181,21 +181,38 @@ async def test_typing_is_compacted_and_late_events_are_ignored_after_stop() -> N
     assert session.closed
     inputs = [step for step in read.json()["steps"] if step["type"] == "input"]
     assert len(inputs) == 1
-    assert inputs[0]["value"] == "42"
+    assert inputs[0].get("value") is None
+    assert "generic-synthetic-secret" not in read.text
     assert all(step.get("target") != "Submit" for step in read.json()["steps"])
 
 
 @pytest.mark.asyncio
-async def test_input_values_preserve_exact_whitespace() -> None:
+async def test_input_values_are_never_persisted() -> None:
     provider = FakeProvider()
-    value = "  Invoice line one\n    Invoice line two  "
+    value = "generic-synthetic-secret"
     with client(provider) as http:
         recording = create_recording(http)
         await provider.sessions[0].emit({"type": "input", "target": "Notes", "value": value})
         response = http.get(f"/recordings/{recording['id']}", headers=headers())
 
     inputs = [step for step in response.json()["steps"] if step["type"] == "input"]
-    assert inputs[0]["value"] == value
+    assert inputs[0].get("value") is None
+    assert value not in response.text
+
+
+@pytest.mark.asyncio
+async def test_selected_option_values_are_never_persisted() -> None:
+    provider = FakeProvider()
+    value = "generic-synthetic-secret"
+    with client(provider) as http:
+        recording = create_recording(http)
+        await provider.sessions[0].emit({"type": "select_change", "target": "Status", "value": value})
+        response = http.get(f"/recordings/{recording['id']}", headers=headers())
+
+    selects = [step for step in response.json()["steps"] if step["type"] == "select_change"]
+    assert selects[0].get("value") is None
+    assert selects[0]["description"] == "Choose option in Status"
+    assert value not in response.text
 
 
 @pytest.mark.asyncio
@@ -345,4 +362,4 @@ async def test_typing_with_same_visible_label_in_distinct_fields_does_not_merge(
         response = http.get(f"/recordings/{recording['id']}", headers=headers())
 
     inputs = [step for step in response.json()["steps"] if step["type"] == "input"]
-    assert [step["value"] for step in inputs] == ["10", "20"]
+    assert [step.get("value") for step in inputs] == [None, None]

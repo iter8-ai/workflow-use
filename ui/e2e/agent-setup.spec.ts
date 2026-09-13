@@ -151,6 +151,20 @@ test("does not start or save an agent when the setup URL has a credential query"
   await expect.poll(() => page.evaluate(() => window.__savedAgents)).toEqual([]);
 });
 
+test("removes a legacy captured input value before saving the agent", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=captured-input-value`);
+  const setup = page.frameLocator("iframe");
+
+  await completeToTest(setup);
+  await setup.getByLabel("Statement month").fill("2026-09-01");
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await expect(setup.getByText("Test completed")).toBeVisible();
+
+  const saved = await page.evaluate(() => JSON.stringify(window.__savedAgents));
+  expect(saved).not.toContain("generic-synthetic-secret");
+  expect(saved).toContain("{input_1}");
+});
+
 test("ignores a response posted by the setup iframe instead of its host", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=delayed-ready`);
   const setup = page.frameLocator("iframe");
@@ -247,7 +261,7 @@ function hostPage(url: string): string {
   let recordingActive = false;
   const steps = [
     { id: "open-reports", type: "click", description: "Open the reports section", target: "Reports", expectedOutcome: "The reports list is visible" },
-    { id: "choose-month", type: "input", description: "Choose the statement month", target: "Statement month", value: "2026-08-01" },
+    { id: "choose-month", type: "input", description: "Choose the statement month", target: "Statement month", ...(scenario === "captured-input-value" ? { value: "generic-synthetic-secret" } : {}) },
     { id: "download", type: "click", description: "Download the statement", target: "Download statement" }
   ];
   addEventListener("message", (event) => {
