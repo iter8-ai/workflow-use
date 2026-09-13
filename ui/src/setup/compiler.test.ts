@@ -255,7 +255,7 @@ test("rejects authorization variants and repeated encoded credential paths", () 
 });
 
 test("rejects credential PIN values after compatible normalization", () => {
-  for (const text of ["My PIN is 1234", "PIN: 1234", "Enter PİN"]) {
+  for (const text of ["My PIN is 1234", "PIN: 1234", "PIN: ABCD", "My PIN is abcd", "Enter PİN"]) {
     const draft = baseDraft();
     draft.steps[0] = { ...draft.steps[0], description: text };
     assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);

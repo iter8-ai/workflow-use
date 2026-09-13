@@ -46,6 +46,7 @@ type CompiledAgent = {
 
 const sensitivePattern = /\b(?:password|passcode|secret|token|api[_ -]?key|credential|authorization|auth(?:entication|enticate|enticated|orize|orized)?|cvv|cvc|social security|ssn|credit card|card number|user ?name|one.?time|otp|totp|mfa|log(?:[ -]?in(?:to)?|[ -]?on)|sign(?:[ -]?in(?:to)?|[ -]?on))\b/i;
 const pinIntentPattern = /\b(?:enter|provide|type|use|submit|verify)\s+(?:your\s+)?pin\b|\bpin\s+(?:code|verification)\b|\b(?:my\s+)?pin\s*(?:is|:)\s*\d+\b/i;
+const uppercasePinPattern = /\bPIN\b/;
 const maximumPathDecodes = 4;
 const rawReplayPattern = /\b(?:css|xpath|selector)\b|#[a-z][\w-]*(?:\s*[>+~]|\[)|\[[^\]]+\]|(?:^|\s)(?:x|y)\s*[:=]\s*\d+|^\s*\d+(?:px)?\s*,\s*\d+(?:px)?\s*$/i;
 const maximumNameLength = 150;
@@ -217,7 +218,7 @@ function containsSensitiveText(value: string): boolean {
     .replace(/\p{M}/gu, "")
     .replace(/[\u2010-\u2015\u2212]/gu, "-")
     .replace(/\s+/gu, " ");
-  return sensitivePattern.test(normalized) || pinIntentPattern.test(normalized);
+  return sensitivePattern.test(normalized) || pinIntentPattern.test(normalized) || uppercasePinPattern.test(normalized);
 }
 
 function decodedPathname(value: string): string {
