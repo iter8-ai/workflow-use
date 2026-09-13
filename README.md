@@ -38,7 +38,7 @@ The image serves `ui/dist/` on port 8080. Its Content Security Policy permits em
 
 For an optional deployment smoke check, open `/setup-check.html` and download its synthetic CSV. This page is unlinked and is not part of the customer setup wizard.
 
-Start with a website address without query parameters or fragments; navigate to the required page inside the demonstration browser. Recordings are ephemeral and expire after 15 minutes. Login and credential demonstrations are blocked until secure credential binding is available. Do not type passwords, one-time codes, API keys, or other secrets into the demonstration browser. Heuristics can detect marked credential fields but cannot identify every secret entered into an ordinary text field.
+Start with a website address without query parameters or fragments; the compiler rejects either so they cannot enter a saved configuration or agent prompt. Navigate to the required page inside the demonstration browser. Recordings are ephemeral and expire after 15 minutes. Login and credential demonstrations are blocked until secure credential binding is available. Do not type passwords, one-time codes, API keys, or other secrets into the demonstration browser. Heuristics can detect marked credential fields but cannot identify every secret entered into an ordinary text field.
 
 Schedules reuse the exact tested input values. Relative dates such as “previous month” are not resolved automatically. A successful test still requires the user to inspect the result before scheduling.
 

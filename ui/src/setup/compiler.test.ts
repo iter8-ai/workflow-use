@@ -195,39 +195,62 @@ test("rejects unsafe input names, invalid setup URLs, and raw browser replay tar
   assert.throws(() => compileAgent(rawSelector), /semantic target/i);
 });
 
-test("rejects credential query parameters before compiling a host-save payload", () => {
-  const credentialSetupUrl = baseDraft();
-  credentialSetupUrl.url = "https://portal.example.test/reports?token=synthetic-token";
+test("rejects every query parameter before compiling a host-save payload", () => {
+  const queryNames = [
+    "access_token",
+    "api-key",
+    "authorization",
+    "client_secret",
+    "code",
+    "credential",
+    "id_token",
+    "jwt",
+    "otp",
+    "password",
+    "refresh_token",
+    "secret",
+    "session",
+    "signature",
+    "sig",
+    "token",
+    "api_version",
+    "client_id",
+    "codebook",
+    "jwt_mode",
+    "p",
+    "session_id",
+    "tokenized",
+  ];
 
-  const credentialStepUrl = baseDraft();
-  credentialStepUrl.steps[0] = {
-    ...credentialStepUrl.steps[0],
-    type: "navigation",
-    url: "https://portal.example.test/reports?access_token=synthetic-token",
-  };
+  for (const name of queryNames) {
+    const setupUrl = baseDraft();
+    setupUrl.url = `https://portal.example.test/reports?${name}=synthetic-value`;
 
-  assert.throws(() => compileAgent(credentialSetupUrl), /credentials.*managed by the host/i);
-  assert.throws(() => compileAgent(credentialStepUrl), /credentials.*managed by the host/i);
+    const stepUrl = baseDraft();
+    stepUrl.steps[0] = {
+      ...stepUrl.steps[0],
+      type: "navigation",
+      url: `https://portal.example.test/reports?${name}=synthetic-value`,
+    };
+
+    assert.throws(() => compileAgent(setupUrl), /must not include query parameters or a fragment/i, name);
+    assert.throws(() => compileAgent(stepUrl), /must not include query parameters or a fragment/i, name);
+  }
 });
 
-test("compiles ordinary query parameters for the host save payload", () => {
-  const draft = baseDraft();
-  draft.url = "https://portal.example.test/reports?month=2026-09&sort=ascending";
-  draft.steps[0] = {
-    ...draft.steps[0],
+test("rejects fragments before compiling a host-save payload", () => {
+  const setupUrl = baseDraft();
+  setupUrl.url = "https://portal.example.test/reports#latest";
+
+  const stepUrl = baseDraft();
+  stepUrl.steps[0] = {
+    ...stepUrl.steps[0],
     type: "navigation",
-    url: "https://portal.example.test/reports?month=2026-09&sort=ascending",
+    url: "https://portal.example.test/reports#latest",
   };
 
-  const compiled = compileAgent(draft);
-  const agentStage = compiled.stages[0];
-
-  assert.equal(compiled.url, draft.url);
-  assert.equal(agentStage?.type, "agent");
-  if (agentStage?.type !== "agent") {
-    throw new Error("Expected a computer-use agent stage.");
-  }
-  assert.match(agentStage.prompt, /month=2026-09&sort=ascending/);
+  assert.throws(() => compileAgent(setupUrl), /must not include query parameters or a fragment/i);
+  assert.throws(() => compileAgent(stepUrl), /must not include query parameters or a fragment/i);
 });
 
 test("keeps setup payloads within host limits", () => {

@@ -48,19 +48,6 @@ const inputNamePattern = /^[a-z][a-z0-9_]*$/;
 const sensitivePattern = /password|passcode|secret|token|api[_ -]?key|credential|authorization|auth(?:entication)?|cvv|cvc|social security|ssn|credit card|card number|user ?name|one.?time|otp|totp|log ?in|sign ?in/i;
 const rawReplayPattern = /\b(?:css|xpath|selector)\b|#[a-z][\w-]*(?:\s*[>+~]|\[)|\[[^\]]+\]|(?:^|\s)(?:x|y)\s*[:=]\s*\d+|^\s*\d+(?:px)?\s*,\s*\d+(?:px)?\s*$/i;
 const supportedInputTypes = new Set<SetupInput["type"]>(["text", "date", "number"]);
-const sensitiveQueryNames = new Set([
-  "accesstoken",
-  "apikey",
-  "authorization",
-  "code",
-  "credential",
-  "idtoken",
-  "otp",
-  "password",
-  "secret",
-  "session",
-  "token",
-]);
 const maximumNameLength = 150;
 const maximumUrlLength = 2_048;
 const maximumSteps = 200;
@@ -230,14 +217,9 @@ function validateUrl(value: string, label: string): void {
   if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username !== "" || url.password !== "") {
     throw new Error(`${label} must be an http(s) URL without credentials.`);
   }
-  if ([...url.searchParams.keys()].some(isSensitiveQueryName)) {
-    throw credentialError();
+  if (url.search !== "" || url.hash !== "") {
+    throw new Error(`${label} must not include query parameters or a fragment.`);
   }
-}
-
-function isSensitiveQueryName(name: string): boolean {
-  const normalized = name.toLowerCase().replace(/[^a-z0-9]/g, "");
-  return sensitiveQueryNames.has(normalized);
 }
 
 function requireText(value: string, label: string): void {

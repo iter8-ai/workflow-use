@@ -8,15 +8,19 @@ from urllib.parse import parse_qsl, urlsplit, urlunsplit
 SENSITIVE_QUERY_NAMES = {
     "accesstoken",
     "apikey",
-    "apikey",
     "authorization",
+    "clientsecret",
     "code",
     "credential",
     "idtoken",
+    "jwt",
     "otp",
     "password",
+    "refreshtoken",
     "secret",
     "session",
+    "signature",
+    "sig",
     "token",
 }
 
