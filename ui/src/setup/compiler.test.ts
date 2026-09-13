@@ -168,3 +168,36 @@ test("rejects direct and fallback navigation URLs with queries or fragments", ()
     assert.throws(() => compileAgent(draft), /must not include query parameters or a fragment/i);
   }
 });
+
+test("allows benign text and paths containing credential-like substrings", () => {
+  const mutations: Array<(draft: SetupDraft) => void> = [
+    (draft) => { draft.goal = "Assign invoices to the project."; },
+    (draft) => { draft.steps[0] = { ...draft.steps[0], description: "Open the product catalog index" }; },
+    (draft) => { draft.steps[0] = { ...draft.steps[0], expectedOutcome: "The design integration page is visible" }; },
+    (draft) => { draft.steps[0] = { ...draft.steps[0], target: "Download authors report" }; },
+    (draft) => { draft.url = "https://portal.example.test/author/reports"; },
+  ];
+
+  for (const mutate of mutations) {
+    const draft = baseDraft();
+    mutate(draft);
+    assert.doesNotThrow(() => compileAgent(draft));
+  }
+});
+
+test("rejects standalone credential and sign-in intent", () => {
+  const mutations: Array<(draft: SetupDraft) => void> = [
+    (draft) => { draft.name = "Credential report"; },
+    (draft) => { draft.goal = "Use the secret to download the report."; },
+    (draft) => { draft.steps[0] = { ...draft.steps[0], description: "Enter password" }; },
+    (draft) => { draft.steps[0] = { ...draft.steps[0], expectedOutcome: "Token accepted" }; },
+    (draft) => { draft.steps[0] = { ...draft.steps[0], target: "Sign in" }; },
+    (draft) => { draft.url = "https://portal.example.test/login"; },
+  ];
+
+  for (const mutate of mutations) {
+    const draft = baseDraft();
+    mutate(draft);
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
+  }
+});
