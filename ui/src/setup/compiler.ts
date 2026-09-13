@@ -44,7 +44,7 @@ type CompiledAgent = {
   parameters: Record<string, never>;
 };
 
-const sensitivePattern = /\b(?:password|passcode|secret|token|api[_ -]?key|credential|authorization|auth(?:entication|enticate|enticated|orize|orized)?|cvv|cvc|social security|ssn|credit card|card number|user ?name|one.?time|otp|totp|mfa|log(?:[ -]?in(?:to)?|[ -]?on)|sign(?:[ -]?in(?:to)?|[ -]?on))\b/i;
+const sensitivePattern = /\b(?:pass[- ]?word|passcode|secret|token|api[_ -]?key|credential|authorization|auth(?:entication|enticate|enticated|orize|orized)?|cvv|cvc|social security|ssn|credit card|card number|user ?name|one.?time|otp|totp|mfa|log(?:[ -]?in(?:to)?|[ -]?on)|sign(?:[ -]?in(?:to)?|[ -]?on))\b/i;
 const pinIntentPattern = /\b(?:enter|provide|type|use|submit|verify)\s+(?:your\s+)?pin\b|\bpin\s+(?:code|verification)\b|\b(?:my\s+)?pin\s*(?:is|:)\s*\d+\b/i;
 const uppercasePinPattern = /\bPIN\b/;
 const maximumPathDecodes = 4;
@@ -215,7 +215,7 @@ function requireMaximumLength(value: string, maximum: number, label: string): vo
 function containsSensitiveText(value: string): boolean {
   const normalized = value
     .normalize("NFKD")
-    .replace(/\p{M}/gu, "")
+    .replace(/\p{M}|\p{Cf}/gu, "")
     .replace(/[\u2010-\u2015\u2212]/gu, "-")
     .replace(/\s+/gu, " ");
   return sensitivePattern.test(normalized) || pinIntentPattern.test(normalized) || uppercasePinPattern.test(normalized);

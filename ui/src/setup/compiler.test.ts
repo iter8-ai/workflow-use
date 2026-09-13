@@ -261,3 +261,11 @@ test("rejects credential PIN values after compatible normalization", () => {
     assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
   }
 });
+
+test("rejects credential terms separated by Unicode format characters and punctuation", () => {
+  for (const text of ["pass\u200Bword", "sign\u200Bin", "pass-word", "pass word"]) {
+    const draft = baseDraft();
+    draft.steps[0] = { ...draft.steps[0], description: text };
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
+  }
+});
