@@ -50,8 +50,9 @@ test("compiles an intent-based computer-use stage with explicit runtime inputs",
   assert.deepEqual(compiled.options, { version: 1, engine: "computer" });
   assert.equal(compiled.url, "https://portal.example.test/reports");
   assert.deepEqual(compiled.parameters, {});
-  assert.equal(compiled.stages.length, 1);
+  assert.equal(compiled.stages.length, 2);
   assert.equal(compiled.stages[0]?.type, "agent");
+  assert.equal(compiled.stages[1]?.type, "download");
   assert.equal(compiled.stages[0]?.step_limit, 64);
   assert.match(compiled.prompt, /Download monthly statement/);
   assert.match(compiled.stages[0]?.prompt ?? "", /\{statement_month\}/);
@@ -80,6 +81,7 @@ test("retains literal values and escapes their braces when no input was assigned
 
   const compiled = compileAgent(draft);
 
+  assert.equal(compiled.stages[0]?.type, "agent");
   assert.match(compiled.stages[0]?.prompt ?? "", /Monthly \{\{draft\}\}/);
   assert.doesNotMatch(compiled.stages[0]?.prompt ?? "", /Monthly \{draft\}/);
 });
@@ -114,6 +116,8 @@ test("compiles recorder steps with serialized null optional fields", () => {
 
   const compiled = compileAgent(draft);
 
+  assert.deepEqual(compiled.stages.map((stage) => stage.type), ["agent", "download"]);
+  assert.equal(compiled.stages[0]?.type, "agent");
   assert.match(compiled.stages[0]?.prompt ?? "", /Navigate to https:\/\/github\.com\/example\/setup-check/);
   assert.match(compiled.stages[0]?.prompt ?? "", /Click Download sample CSV to download the sample CSV\./);
 });

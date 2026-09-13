@@ -30,11 +30,17 @@ type AgentStage = {
   step_limit: number;
 };
 
+type DownloadStage = {
+  type: "download";
+};
+
+type WorkflowStage = AgentStage | DownloadStage;
+
 type CompiledAgent = {
   url: string;
   prompt: string;
   options: { version: 1; engine: "computer" };
-  stages: AgentStage[];
+  stages: WorkflowStage[];
   parameters: Record<string, never>;
 };
 
@@ -65,7 +71,7 @@ export function compileAgent(draft: SetupDraft): CompiledAgent {
     url: draft.url,
     prompt: task,
     options: { version: 1, engine: "computer" },
-    stages: [{ type: "agent", prompt, step_limit: 64 }],
+    stages: [{ type: "agent", prompt, step_limit: 64 }, { type: "download" }],
     parameters: {},
   };
 }
