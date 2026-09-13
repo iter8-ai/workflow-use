@@ -10,7 +10,7 @@ The host application owns the agent list, authentication, saved-agent settings, 
 - Name, starting website, and task objective are the first step. A concrete example helps users describe the expected result.
 - A large browser sits beside the captured steps. Progress navigation stays compact so it does not consume browser width.
 - Finishing the demonstration leads to editable instructions, then a test. Finishing a recording does not imply that the agent works.
-- After a successful test, the user checks the result before finishing setup. Manual runs are the default. A daily schedule is optional and uses the tested input values.
+- After a successful test, the user checks the result before finishing setup. Manual runs are the default. A daily schedule is optional and repeats the tested workflow.
 - Closing setup opens the saved agent when one exists. The host chooses the agent from its own setup state.
 - Leaving unfinished setup requires confirmation. The copy distinguishes discarded demonstration work from an agent already saved by a test.
 

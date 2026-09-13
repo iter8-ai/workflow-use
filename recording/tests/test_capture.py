@@ -25,20 +25,22 @@ async def test_playwright_capture_records_visible_click_and_compacts_input() -> 
         page = await context.new_page()
         fixture = '<label>Invoice <input aria-label="Invoice number"></label><button>Save invoice</button>'
         await page.goto("data:text/html," + quote(fixture))
-        await page.get_by_label("Invoice number").fill("42")
+        await page.get_by_label("Invoice number").fill("generic-synthetic-secret")
         await page.get_by_role("button", name="Save invoice").click()
         await asyncio.sleep(0.05)
         await browser.close()
 
     assert any(event["type"] == "input" and event["target"] == "Invoice number" for event in events)
     assert any(event["type"] == "click" and event["target"] == "Save invoice" for event in events)
+    assert all("value" not in event for event in events if event["type"] == "input")
+    assert all("generic-synthetic-secret" not in str(event) for event in events)
 
 
 @pytest.mark.asyncio
-async def test_capture_preserves_exact_input_whitespace() -> None:
+async def test_capture_never_reads_generic_input_values() -> None:
     playwright = pytest.importorskip("playwright.async_api")
     events: list[dict[str, Any]] = []
-    value = "  first line\n    second line  "
+    value = "generic-synthetic-secret"
 
     async def record(event: dict[str, Any]) -> None:
         events.append(event)
@@ -54,7 +56,36 @@ async def test_capture_preserves_exact_input_whitespace() -> None:
         await asyncio.sleep(0.05)
         await browser.close()
 
-    assert any(event.get("type") == "input" and event.get("value") == value for event in events)
+    inputs = [event for event in events if event.get("type") == "input"]
+    assert inputs
+    assert all("value" not in event for event in inputs)
+    assert all(value not in str(event) for event in events)
+
+
+@pytest.mark.asyncio
+async def test_capture_never_uses_unlabeled_editable_text_as_a_target() -> None:
+    playwright = pytest.importorskip("playwright.async_api")
+    events: list[dict[str, Any]] = []
+    value = "generic-synthetic-secret"
+
+    async def record(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    async with playwright.async_playwright() as runtime:
+        browser = await runtime.chromium.launch()
+        context = await browser.new_context()
+        await context.expose_binding("workflowUseRecord", lambda _, event: record(event))
+        await context.add_init_script(CAPTURE_SCRIPT)
+        page = await context.new_page()
+        await page.goto("data:text/html," + quote('<div contenteditable></div>'))
+        await page.locator("[contenteditable]").fill(value)
+        await asyncio.sleep(0.05)
+        await browser.close()
+
+    inputs = [event for event in events if event.get("type") == "input"]
+    assert inputs
+    assert all(event["target"] == "div" for event in inputs)
+    assert all(value not in str(event) for event in events)
 
 
 @pytest.mark.asyncio
@@ -112,7 +143,7 @@ async def test_capture_blocks_plain_text_token_and_contenteditable_credentials()
 
 
 @pytest.mark.asyncio
-async def test_capture_records_selected_visible_text_and_scroll_direction() -> None:
+async def test_capture_records_select_target_without_selected_value() -> None:
     playwright = pytest.importorskip("playwright.async_api")
     events: list[dict[str, Any]] = []
 
@@ -137,5 +168,7 @@ async def test_capture_records_selected_visible_text_and_scroll_direction() -> N
         await asyncio.sleep(0.1)
         await browser.close()
 
-    assert {event.get("value") for event in events if event["type"] == "select_change"} == {"Paid invoices"}
+    select_events = [event for event in events if event["type"] == "select_change"]
+    assert select_events == [{"type": "select_change", "target": "Status"}]
+    assert all("Paid invoices" not in str(event) for event in events)
     assert [event["value"] for event in events if event["type"] == "scroll"] == ["down", "up"]

@@ -157,12 +157,14 @@ async def test_secret_input_blocks_recording_and_omits_value() -> None:
                 "secret": True,
             }
         )
+        await provider.sessions[0].emit({"type": "click", "target": "Must not be recorded"})
         response = http.get(f"/recordings/{recording['id']}", headers=headers())
 
     body = response.json()
     assert body["blockedReason"] == "Credentials and one-time codes cannot be taught yet."
     assert "do-not-store-me" not in response.text
     assert all(step["type"] != "input" for step in body["steps"])
+    assert all(step.get("target") != "Must not be recorded" for step in body["steps"])
 
 
 @pytest.mark.asyncio
@@ -171,8 +173,8 @@ async def test_typing_is_compacted_and_late_events_are_ignored_after_stop() -> N
     with client(provider) as http:
         recording = create_recording(http)
         session = provider.sessions[0]
-        await session.emit({"type": "input", "target": "Invoice number", "value": "4"})
-        await session.emit({"type": "input", "target": "Invoice number", "value": "42"})
+        await session.emit({"type": "input", "target": "Invoice number", "value": "generic-synthetic-secret"})
+        await session.emit({"type": "input", "target": "Invoice number", "value": "generic-synthetic-secret-2"})
         stopped = http.post(f"/recordings/{recording['id']}/stop", headers=headers())
         await session.emit({"type": "click", "target": "Submit"})
         read = http.get(f"/recordings/{recording['id']}", headers=headers())
@@ -181,21 +183,38 @@ async def test_typing_is_compacted_and_late_events_are_ignored_after_stop() -> N
     assert session.closed
     inputs = [step for step in read.json()["steps"] if step["type"] == "input"]
     assert len(inputs) == 1
-    assert inputs[0]["value"] == "42"
+    assert inputs[0].get("value") is None
+    assert "generic-synthetic-secret" not in read.text
     assert all(step.get("target") != "Submit" for step in read.json()["steps"])
 
 
 @pytest.mark.asyncio
-async def test_input_values_preserve_exact_whitespace() -> None:
+async def test_input_values_are_never_persisted() -> None:
     provider = FakeProvider()
-    value = "  Invoice line one\n    Invoice line two  "
+    value = "generic-synthetic-secret"
     with client(provider) as http:
         recording = create_recording(http)
         await provider.sessions[0].emit({"type": "input", "target": "Notes", "value": value})
         response = http.get(f"/recordings/{recording['id']}", headers=headers())
 
     inputs = [step for step in response.json()["steps"] if step["type"] == "input"]
-    assert inputs[0]["value"] == value
+    assert inputs[0].get("value") is None
+    assert value not in response.text
+
+
+@pytest.mark.asyncio
+async def test_selected_option_values_are_never_persisted() -> None:
+    provider = FakeProvider()
+    value = "generic-synthetic-secret"
+    with client(provider) as http:
+        recording = create_recording(http)
+        await provider.sessions[0].emit({"type": "select_change", "target": "Status", "value": value})
+        response = http.get(f"/recordings/{recording['id']}", headers=headers())
+
+    selects = [step for step in response.json()["steps"] if step["type"] == "select_change"]
+    assert selects[0].get("value") is None
+    assert selects[0]["description"] == "Choose option in Status"
+    assert value not in response.text
 
 
 @pytest.mark.asyncio
@@ -206,6 +225,7 @@ async def test_capture_limit_is_visible_to_the_user(monkeypatch: pytest.MonkeyPa
         recording = create_recording(http)
         await provider.sessions[0].emit({"type": "click", "target": "First action"})
         await provider.sessions[0].emit({"type": "click", "target": "Ignored action"})
+        await provider.sessions[0].emit({"type": "click", "target": "Must not be recorded"})
         response = http.get(f"/recordings/{recording['id']}", headers=headers())
 
     assert response.json()["blockedReason"] == CAPTURE_LIMIT_REASON
@@ -272,19 +292,30 @@ async def test_plain_text_credential_event_blocks_without_persisting_contents() 
     assert "credential-that-must-not-persist" not in response.text
 
 
-def test_navigation_redacts_sensitive_query_and_fragment() -> None:
+def test_create_rejects_query_and_fragment_urls_without_creating_a_recording() -> None:
     provider = FakeProvider()
     with client(provider) as http:
         response = http.post(
             "/recordings",
-            json={"url": "https://example.com/callback?accessToken=do-not-store-me&tab=home#code=also-secret"},
+            json={"url": "https://example.com/callback?p=opaque-value#latest"},
             headers=headers(),
         )
 
-    assert response.status_code == 201
-    assert response.json()["steps"][0]["url"] == "https://example.com/callback"
-    assert "do-not-store-me" not in response.text
-    assert "also-secret" not in response.text
+    assert response.status_code == 422
+    assert provider.sessions == []
+    assert "opaque-value" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_navigation_event_with_query_is_omitted_from_recorded_steps() -> None:
+    provider = FakeProvider()
+    with client(provider) as http:
+        recording = create_recording(http)
+        await provider.sessions[0].emit({"type": "navigation", "url": "https://example.com/callback?p=opaque-value"})
+        response = http.get(f"/recordings/{recording['id']}", headers=headers())
+
+    assert [step["url"] for step in response.json()["steps"]] == ["https://example.com"]
+    assert "opaque-value" not in response.text
 
 
 def test_health_endpoint_never_requires_or_leaks_credentials() -> None:
@@ -334,4 +365,4 @@ async def test_typing_with_same_visible_label_in_distinct_fields_does_not_merge(
         response = http.get(f"/recordings/{recording['id']}", headers=headers())
 
     inputs = [step for step in response.json()["steps"] if step["type"] == "input"]
-    assert [step["value"] for step in inputs] == ["10", "20"]
+    assert [step.get("value") for step in inputs] == [None, None]

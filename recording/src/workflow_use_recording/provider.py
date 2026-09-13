@@ -115,7 +115,11 @@ class BrowserbaseProvider:
             keep_alive=True,
             region=self.region,
             api_timeout=max(self.timeout_seconds, 60),
-            browser_settings={"viewport": {"width": 1280, "height": 720}},
+            browser_settings={
+                "viewport": {"width": 1280, "height": 720},
+                "record_session": False,
+                "log_session": False,
+            },
         )
         runtime: Any | None = None
         try:

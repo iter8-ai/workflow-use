@@ -1,6 +1,6 @@
 # Workflow Use agent setup
 
-This public fork adds a demonstration-based setup flow for computer-use agents. Users describe a task, demonstrate it in a remote browser, edit the captured steps, choose reusable inputs, and test before scheduling.
+This public fork adds a demonstration-based setup flow for computer-use agents. Users describe a task, demonstrate a non-form-entry task in a remote browser, edit the captured steps, and test before scheduling.
 
 The default `ui/` app is an embedded authoring interface. Its host handles authentication, agent storage, test execution, and scheduling through an origin-checked message bridge. The separate `recording/` service captures browser actions. It does not run agents. Compiled configurations select the computer-use engine explicitly.
 
@@ -38,9 +38,9 @@ The image serves `ui/dist/` on port 8080. Its Content Security Policy permits em
 
 For an optional deployment smoke check, open `/setup-check.html` and download its synthetic CSV. This page is unlinked and is not part of the customer setup wizard.
 
-Start with a website address without query parameters or fragments; navigate to the required page inside the demonstration browser. Recordings are ephemeral and expire after 15 minutes. Login and credential demonstrations are blocked until secure credential binding is available. Do not type passwords, one-time codes, API keys, or other secrets into the demonstration browser. Heuristics can detect marked credential fields but cannot identify every secret entered into an ordinary text field.
+Start with a website address without query parameters or fragments; the compiler rejects either so they cannot enter a saved configuration or agent prompt. Navigate to the required page inside the demonstration browser. Recordings are ephemeral and expire after 15 minutes. Form-entry tasks, login demonstrations, and credential-required tasks are not supported in this release.
 
-Schedules reuse the exact tested input values. Relative dates such as “previous month” are not resolved automatically. A successful test still requires the user to inspect the result before scheduling.
+Schedules repeat the tested workflow. Relative dates such as “previous month” are not resolved automatically. A successful test still requires the user to inspect the result before scheduling.
 
 ## Source and license
 

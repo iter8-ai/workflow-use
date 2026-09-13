@@ -115,6 +115,7 @@ class RecordingService:
             if (
                 recording.status != "recording"
                 or recording.closing
+                or recording.blocked_reason is not None
                 or datetime.now(UTC) >= recording.expires_at
             ):
                 return
@@ -246,7 +247,7 @@ def _to_step(event: dict[str, Any]) -> SetupStep | None:
     if event_type not in {"navigation", "click", "input", "select_change", "key_press", "scroll", "agent"}:
         return None
     target = _text(event.get("target"), maximum=240)
-    value = _text(event.get("value"))
+    value = None if event_type in {"input", "select_change"} else _text(event.get("value"))
     url = safe_public_url(event.get("url", "")) if event_type == "navigation" else None
     if event_type == "navigation" and url is None:
         return None
