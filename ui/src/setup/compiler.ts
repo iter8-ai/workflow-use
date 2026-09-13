@@ -44,7 +44,8 @@ type CompiledAgent = {
   parameters: Record<string, never>;
 };
 
-const sensitivePattern = /\b(?:password|passcode|secret|token|api[_ -]?key|credential|authorization|auth(?:entication)?|cvv|cvc|social security|ssn|credit card|card number|user ?name|one.?time|otp|totp|mfa|pin|log[ -]?in|sign[ -]?in)\b/i;
+const sensitivePattern = /\b(?:password|passcode|secret|token|api[_ -]?key|credential|authorization|auth(?:entication|enticate|enticated)?|cvv|cvc|social security|ssn|credit card|card number|user ?name|one.?time|otp|totp|mfa|log[ -]?in|sign[ -]?in)\b/i;
+const pinIntentPattern = /\b(?:enter|provide|type|use|submit|verify)\s+(?:your\s+)?pin\b|\bpin\s+(?:code|verification)\b/i;
 const rawReplayPattern = /\b(?:css|xpath|selector)\b|#[a-z][\w-]*(?:\s*[>+~]|\[)|\[[^\]]+\]|(?:^|\s)(?:x|y)\s*[:=]\s*\d+|^\s*\d+(?:px)?\s*,\s*\d+(?:px)?\s*$/i;
 const maximumNameLength = 150;
 const maximumUrlLength = 2_048;
@@ -192,7 +193,7 @@ function validateUrl(value: string, label: string): void {
   if (url.search !== "" || url.hash !== "") {
     throw new Error(`${label} must not include query parameters or a fragment.`);
   }
-  if (containsSensitiveText(value)) {
+  if (containsSensitiveText(value) || containsSensitiveText(decodedPathname(url.pathname))) {
     throw credentialError();
   }
 }
@@ -210,7 +211,19 @@ function requireMaximumLength(value: string, maximum: number, label: string): vo
 }
 
 function containsSensitiveText(value: string): boolean {
-  return sensitivePattern.test(value);
+  const normalized = value
+    .normalize("NFKC")
+    .replace(/[\u2010-\u2015\u2212]/gu, "-")
+    .replace(/\s+/gu, " ");
+  return sensitivePattern.test(normalized) || pinIntentPattern.test(normalized);
+}
+
+function decodedPathname(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    throw credentialError();
+  }
 }
 
 function isMaskedValue(value: string): boolean {

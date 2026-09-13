@@ -206,3 +206,33 @@ test("rejects standalone credential and sign-in intent", () => {
     assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
   }
 });
+
+test("rejects normalized and encoded credential intent", () => {
+  const mutations: Array<(draft: SetupDraft) => void> = [
+    (draft) => { draft.steps[0] = { ...draft.steps[0], target: "Sign‑in" }; },
+    (draft) => { draft.steps[0] = { ...draft.steps[0], target: "Log in" }; },
+    (draft) => { draft.goal = "Authenticate before downloading the report."; },
+    (draft) => { draft.steps[0] = { ...draft.steps[0], expectedOutcome: "Authenticated" }; },
+    (draft) => { draft.url = "https://portal.example.test/sign%2Din"; },
+    (draft) => { draft.url = "https://portal.example.test/%6cogin"; },
+    (draft) => { draft.url = "https://portal.example.test/%zz"; },
+  ];
+
+  for (const mutate of mutations) {
+    const draft = baseDraft();
+    mutate(draft);
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
+  }
+});
+
+test("allows PIN as an ordinary verb but rejects credential PIN phrases", () => {
+  const benign = baseDraft();
+  benign.steps[0] = { ...benign.steps[0], description: "Pin the report to the dashboard" };
+  assert.doesNotThrow(() => compileAgent(benign));
+
+  for (const text of ["Enter PIN", "Provide your PIN", "PIN verification"]) {
+    const draft = baseDraft();
+    draft.steps[0] = { ...draft.steps[0], description: text };
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
+  }
+});
