@@ -80,6 +80,9 @@ function validateDraft(draft: SetupDraft): void {
   requireText(draft.name, "Agent name");
   requireMaximumLength(draft.name, maximumNameLength, "Agent name");
   requireText(draft.goal, "Agent goal");
+  if (containsSensitiveText(draft.name) || containsSensitiveText(draft.goal)) {
+    throw credentialError();
+  }
   validateUrl(draft.url, "Setup URL");
 
   if (draft.steps.length === 0) {
@@ -105,7 +108,7 @@ function validateDraft(draft: SetupDraft): void {
     if (inputNames.has(input.name)) {
       throw new Error(`Input name ${input.name} is duplicated.`);
     }
-    if (containsSensitiveText(input.name) || containsSensitiveText(input.label)) {
+    if (containsSensitiveText(input.name) || containsSensitiveText(input.label) || containsSensitiveText(input.example)) {
       throw credentialError();
     }
     inputNames.add(input.name);
@@ -115,6 +118,9 @@ function validateDraft(draft: SetupDraft): void {
   for (const step of draft.steps) {
     requireText(step.id, "Step id");
     requireText(step.description, `Description for step ${step.id}`);
+    if (containsSensitiveText(step.description) || containsSensitiveText(optionalStepText(step.expectedOutcome) ?? "")) {
+      throw credentialError();
+    }
     if (stepIds.has(step.id)) {
       throw new Error(`Step id ${step.id} is duplicated.`);
     }

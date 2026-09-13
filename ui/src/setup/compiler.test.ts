@@ -191,6 +191,28 @@ test("rejects credentials, secret-like targets, and masked password values", () 
   }
 });
 
+test("rejects credential intent in every saved draft field", () => {
+  const mutations: Array<(draft: SetupDraft) => void> = [
+    (draft) => { draft.name = "Login report"; },
+    (draft) => { draft.goal = "Enter the one-time code"; },
+    (draft) => { draft.steps[0] = { ...draft.steps[0], description: "Enter password" }; },
+    (draft) => { draft.steps[0] = { ...draft.steps[0], expectedOutcome: "OTP accepted" }; },
+    (draft) => { draft.steps[0] = { ...draft.steps[0], target: "Log in" }; },
+    (draft) => {
+      draft.inputs[0] = { ...draft.inputs[0], name: "otp_value" };
+      draft.steps[1] = { ...draft.steps[1], inputName: "otp_value" };
+    },
+    (draft) => { draft.inputs[0] = { ...draft.inputs[0], label: "API token" }; },
+    (draft) => { draft.inputs[0] = { ...draft.inputs[0], example: "secret example" }; },
+  ];
+
+  for (const mutate of mutations) {
+    const draft = baseDraft();
+    mutate(draft);
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
+  }
+});
+
 test("rejects unsafe input names, invalid setup URLs, and raw browser replay targets", () => {
   const unsafeName = baseDraft();
   unsafeName.inputs[0] = { ...unsafeName.inputs[0], name: "__proto__" };

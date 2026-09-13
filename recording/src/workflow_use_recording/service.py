@@ -115,6 +115,7 @@ class RecordingService:
             if (
                 recording.status != "recording"
                 or recording.closing
+                or recording.blocked_reason is not None
                 or datetime.now(UTC) >= recording.expires_at
             ):
                 return

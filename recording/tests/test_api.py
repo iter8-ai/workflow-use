@@ -157,12 +157,14 @@ async def test_secret_input_blocks_recording_and_omits_value() -> None:
                 "secret": True,
             }
         )
+        await provider.sessions[0].emit({"type": "click", "target": "Must not be recorded"})
         response = http.get(f"/recordings/{recording['id']}", headers=headers())
 
     body = response.json()
     assert body["blockedReason"] == "Credentials and one-time codes cannot be taught yet."
     assert "do-not-store-me" not in response.text
     assert all(step["type"] != "input" for step in body["steps"])
+    assert all(step.get("target") != "Must not be recorded" for step in body["steps"])
 
 
 @pytest.mark.asyncio
@@ -223,6 +225,7 @@ async def test_capture_limit_is_visible_to_the_user(monkeypatch: pytest.MonkeyPa
         recording = create_recording(http)
         await provider.sessions[0].emit({"type": "click", "target": "First action"})
         await provider.sessions[0].emit({"type": "click", "target": "Ignored action"})
+        await provider.sessions[0].emit({"type": "click", "target": "Must not be recorded"})
         response = http.get(f"/recordings/{recording['id']}", headers=headers())
 
     assert response.json()["blockedReason"] == CAPTURE_LIMIT_REASON
