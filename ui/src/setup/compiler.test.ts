@@ -310,3 +310,23 @@ test("allows a valid literal percent after path decoding", () => {
   draft.url = "https://portal.example.test/reports/100%25";
   assert.doesNotThrow(() => compileAgent(draft));
 });
+
+test("rejects grammatical authentication and sign-in variants", () => {
+  for (const text of ["Authenticating with the bank", "Logged in to the portal", "Signed in to the portal", "Review previous logins", "Review previous signins"]) {
+    const draft = baseDraft();
+    draft.steps[0] = { ...draft.steps[0], description: text };
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, text);
+  }
+});
+
+test("allows ordinary one-time work but rejects one-time credential phrases", () => {
+  const benign = baseDraft();
+  benign.steps[0] = { ...benign.steps[0], description: "Create a one time export" };
+  assert.doesNotThrow(() => compileAgent(benign));
+
+  for (const text of ["Enter the one-time password", "Enter the one-time passcode", "Enter the one-time code"]) {
+    const draft = baseDraft();
+    draft.steps[0] = { ...draft.steps[0], description: text };
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
+  }
+});
