@@ -5,35 +5,10 @@ import pytest
 from workflow_use_recording.security import safe_public_url
 
 
-@pytest.mark.parametrize(
-    "name",
-    [
-        "access_token",
-        "api-key",
-        "authorization",
-        "client_secret",
-        "code",
-        "credential",
-        "id_token",
-        "jwt",
-        "otp",
-        "password",
-        "refresh_token",
-        "secret",
-        "session",
-        "signature",
-        "sig",
-        "token",
-    ],
-)
-def test_safe_public_url_strips_recorder_sensitive_query_parameters(name: str) -> None:
-    assert safe_public_url(f"https://example.com/reports?{name}=synthetic-value&tab=home#latest") == (
-        "https://example.com/reports"
-    )
+@pytest.mark.parametrize("query", ["p=opaque-value", "token=synthetic-value", "session_id=safe-value"])
+def test_safe_public_url_rejects_every_query_parameter_and_fragment(query: str) -> None:
+    assert safe_public_url(f"https://example.com/reports?{query}#latest") is None
 
 
-@pytest.mark.parametrize("name", ["api_version", "client_id", "codebook", "jwt_mode", "session_id", "tokenized"])
-def test_safe_public_url_preserves_benign_similarly_named_query_parameters(name: str) -> None:
-    assert safe_public_url(f"https://example.com/reports?{name}=safe-value#latest") == (
-        f"https://example.com/reports?{name}=safe-value"
-    )
+def test_safe_public_url_preserves_a_plain_public_path() -> None:
+    assert safe_public_url("https://example.com/reports") == "https://example.com/reports"

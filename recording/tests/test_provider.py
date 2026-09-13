@@ -100,7 +100,7 @@ async def test_browserbase_session_disables_provider_recording_and_logs(monkeypa
     monkeypatch.setitem(sys.modules, "playwright.async_api", playwright_async_api)
 
     provider = BrowserbaseProvider(project_id="project-1")
-    session = await provider.create("https://example.com/reports?month=2026-09", _ignore_event)
+    session = await provider.create("https://example.com/reports", _ignore_event)
 
     assert session.live_view_url == "https://live.browserbase.com/session-1"
     assert clients[0].sessions.create_calls == [
@@ -116,7 +116,7 @@ async def test_browserbase_session_disables_provider_recording_and_logs(monkeypa
             },
         }
     ]
-    assert page.goto_urls == ["https://example.com/reports?month=2026-09"]
+    assert page.goto_urls == ["https://example.com/reports"]
 
     await session.close()
 

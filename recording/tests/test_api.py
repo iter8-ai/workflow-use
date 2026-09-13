@@ -272,19 +272,30 @@ async def test_plain_text_credential_event_blocks_without_persisting_contents() 
     assert "credential-that-must-not-persist" not in response.text
 
 
-def test_navigation_redacts_sensitive_query_and_fragment() -> None:
+def test_create_rejects_query_and_fragment_urls_without_creating_a_recording() -> None:
     provider = FakeProvider()
     with client(provider) as http:
         response = http.post(
             "/recordings",
-            json={"url": "https://example.com/callback?accessToken=do-not-store-me&tab=home#code=also-secret"},
+            json={"url": "https://example.com/callback?p=opaque-value#latest"},
             headers=headers(),
         )
 
-    assert response.status_code == 201
-    assert response.json()["steps"][0]["url"] == "https://example.com/callback"
-    assert "do-not-store-me" not in response.text
-    assert "also-secret" not in response.text
+    assert response.status_code == 422
+    assert provider.sessions == []
+    assert "opaque-value" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_navigation_event_with_query_is_omitted_from_recorded_steps() -> None:
+    provider = FakeProvider()
+    with client(provider) as http:
+        recording = create_recording(http)
+        await provider.sessions[0].emit({"type": "navigation", "url": "https://example.com/callback?p=opaque-value"})
+        response = http.get(f"/recordings/{recording['id']}", headers=headers())
+
+    assert [step["url"] for step in response.json()["steps"]] == ["https://example.com"]
+    assert "opaque-value" not in response.text
 
 
 def test_health_endpoint_never_requires_or_leaks_credentials() -> None:

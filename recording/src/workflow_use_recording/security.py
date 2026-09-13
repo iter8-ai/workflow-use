@@ -3,31 +3,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import socket
-from urllib.parse import parse_qsl, urlsplit, urlunsplit
-
-SENSITIVE_QUERY_NAMES = {
-    "accesstoken",
-    "apikey",
-    "authorization",
-    "clientsecret",
-    "code",
-    "credential",
-    "idtoken",
-    "jwt",
-    "otp",
-    "password",
-    "refreshtoken",
-    "secret",
-    "session",
-    "signature",
-    "sig",
-    "token",
-}
-
-
-def _is_sensitive_query_name(name: str) -> bool:
-    normalized = "".join(character for character in name.lower() if character.isalnum())
-    return normalized in SENSITIVE_QUERY_NAMES
+from urllib.parse import urlsplit
 
 
 def is_public_http_url(url: str) -> bool:
@@ -50,13 +26,13 @@ def is_public_http_url(url: str) -> bool:
 
 
 def safe_public_url(url: str) -> str | None:
-    """Return a safe public URL stripped of sensitive query values and fragments."""
+    """Return a public URL only when it has no query parameters or fragment."""
     if not is_public_http_url(url):
         return None
     parsed = urlsplit(url)
-    query_names = (name for name, _ in parse_qsl(parsed.query, keep_blank_values=True))
-    query = "" if any(_is_sensitive_query_name(name) for name in query_names) else parsed.query
-    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, query, ""))
+    if parsed.query or parsed.fragment:
+        return None
+    return url
 
 
 async def resolves_to_public_host(url: str) -> bool:
