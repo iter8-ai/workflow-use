@@ -44,7 +44,33 @@ type CompiledAgent = {
   parameters: Record<string, never>;
 };
 
-const sensitivePattern = /password|passcode|secret|token|api[_ -]?key|credential|authorization|auth(?:entication)?|cvv|cvc|social security|ssn|credit card|card number|user ?name|one.?time|otp|totp|log ?in|sign ?in/i;
+const credentialIntentPatterns = [
+  /\b(?:passwords?|pass words?)\b/i,
+  /\bpasscodes?\b/i,
+  /\bsecrets?\b/i,
+  /\b(?:api )?tokens?\b/i,
+  /\bapi keys?\b/i,
+  /\bcredentials?\b/i,
+  /\bauth\b/i,
+  /\bauthenticat(?:e|es|ed|ing|ion)\b/i,
+  /\bauthoriz(?:e|es|ed|ing|ation|ations)\b/i,
+  /\boauth(?:2)?\b/i,
+  /\b(?:log(?:ged|ging)?\s*(?:in|into|on)|logins?|logons?)\b/i,
+  /\b(?:sign(?:ed|ing)?\s*(?:in|into|on)|signins?|signons?)\b/i,
+  /\bone time (?:password|passcode|code)\b/i,
+  /\b(?:one time )?(?:otp|totp)\b/i,
+  /\b(?:mfa|m f a|2fa|2 fa|2 f a)\b/i,
+  /\bverification code\b/i,
+  /\b(?:cvv|cvc)\b/i,
+  /\bsocial security(?: number)?\b/i,
+  /\bssn\b/i,
+  /\bcredit cards?\b/i,
+  /\bcard numbers?\b/i,
+  /\buser names?\b/i,
+];
+const pinIntentPattern = /\b(?:enter|provide|type|use|submit|verify) (?:your )?pin\b|\bpin (?:code|verification)\b|\b(?:my )?pin\s*(?:is|:)\s*\S+\b/i;
+const pinValuePattern = /\bpin(?:\s*=\s*|\s+)(?!(?:report|the|this|that|these|those|a|an|my|your|our)\b)(?:\d+|[a-z0-9]+(?:\s+[a-z0-9]+)*)\b/i;
+const maximumPathDecodes = 4;
 const rawReplayPattern = /\b(?:css|xpath|selector)\b|#[a-z][\w-]*(?:\s*[>+~]|\[)|\[[^\]]+\]|(?:^|\s)(?:x|y)\s*[:=]\s*\d+|^\s*\d+(?:px)?\s*,\s*\d+(?:px)?\s*$/i;
 const maximumNameLength = 150;
 const maximumUrlLength = 2_048;
@@ -192,7 +218,7 @@ function validateUrl(value: string, label: string): void {
   if (url.search !== "" || url.hash !== "") {
     throw new Error(`${label} must not include query parameters or a fragment.`);
   }
-  if (containsSensitiveText(value)) {
+  if (containsSensitiveText(decodedPathname(url.pathname))) {
     throw credentialError();
   }
 }
@@ -210,7 +236,37 @@ function requireMaximumLength(value: string, maximum: number, label: string): vo
 }
 
 function containsSensitiveText(value: string): boolean {
-  return sensitivePattern.test(value);
+  const normalized = normalizeIntentText(value);
+  return credentialIntentPatterns.some((pattern) => pattern.test(normalized))
+    || pinIntentPattern.test(normalized)
+    || pinValuePattern.test(normalized);
+}
+
+function normalizeIntentText(value: string): string {
+  return value
+    .normalize("NFKD")
+    .replace(/\p{M}|\p{Cf}/gu, "")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .replace(/[._\p{Pd}\u2212\s]+/gu, " ")
+    .trim();
+}
+
+function decodedPathname(value: string): string {
+  let decoded = value;
+  for (let attempt = 0; attempt < maximumPathDecodes; attempt += 1) {
+    let next: string;
+    try {
+      next = decodeURIComponent(decoded);
+    } catch {
+      throw credentialError();
+    }
+    if (next === decoded || !/%[0-9a-f]{2}/i.test(next)) {
+      return next;
+    }
+    decoded = next;
+  }
+  throw credentialError();
 }
 
 function isMaskedValue(value: string): boolean {
