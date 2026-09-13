@@ -195,6 +195,41 @@ test("rejects unsafe input names, invalid setup URLs, and raw browser replay tar
   assert.throws(() => compileAgent(rawSelector), /semantic target/i);
 });
 
+test("rejects credential query parameters before compiling a host-save payload", () => {
+  const credentialSetupUrl = baseDraft();
+  credentialSetupUrl.url = "https://portal.example.test/reports?token=synthetic-token";
+
+  const credentialStepUrl = baseDraft();
+  credentialStepUrl.steps[0] = {
+    ...credentialStepUrl.steps[0],
+    type: "navigation",
+    url: "https://portal.example.test/reports?access_token=synthetic-token",
+  };
+
+  assert.throws(() => compileAgent(credentialSetupUrl), /credentials.*managed by the host/i);
+  assert.throws(() => compileAgent(credentialStepUrl), /credentials.*managed by the host/i);
+});
+
+test("compiles ordinary query parameters for the host save payload", () => {
+  const draft = baseDraft();
+  draft.url = "https://portal.example.test/reports?month=2026-09&sort=ascending";
+  draft.steps[0] = {
+    ...draft.steps[0],
+    type: "navigation",
+    url: "https://portal.example.test/reports?month=2026-09&sort=ascending",
+  };
+
+  const compiled = compileAgent(draft);
+  const agentStage = compiled.stages[0];
+
+  assert.equal(compiled.url, draft.url);
+  assert.equal(agentStage?.type, "agent");
+  if (agentStage?.type !== "agent") {
+    throw new Error("Expected a computer-use agent stage.");
+  }
+  assert.match(agentStage.prompt, /month=2026-09&sort=ascending/);
+});
+
 test("keeps setup payloads within host limits", () => {
   const tooLongName = baseDraft();
   tooLongName.name = "a".repeat(151);

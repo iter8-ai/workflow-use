@@ -137,6 +137,20 @@ test("invalidates a completed test when reviewed instructions change", async ({ 
   await expect(setup.getByRole("button", { name: "Schedule agent" })).toHaveCount(0);
 });
 
+test("does not start or save an agent when the setup URL has a credential query", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=success`);
+  const setup = page.frameLocator("iframe");
+
+  await setup.getByLabel("Agent name").fill("Download monthly statement");
+  await setup.getByLabel("Website address").fill("https://portal.example.test/reports?token=synthetic-token");
+  await setup.getByLabel("What should the agent do?").fill("Download the selected monthly statement.");
+  await setup.getByRole("button", { name: "Continue to demonstration" }).click();
+
+  await expect(setup.getByRole("alert")).toContainText("Remove anything after ? or #.");
+  await expect(setup.getByRole("button", { name: "Run test" })).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => window.__savedAgents)).toEqual([]);
+});
+
 test("ignores a response posted by the setup iframe instead of its host", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=delayed-ready`);
   const setup = page.frameLocator("iframe");
@@ -229,6 +243,7 @@ function hostPage(url: string): string {
   window.__requestIds = [];
   window.__testArguments = [];
   window.__closeRequests = [];
+  window.__savedAgents = [];
   let recordingActive = false;
   const steps = [
     { id: "open-reports", type: "click", description: "Open the reports section", target: "Reports", expectedOutcome: "The reports list is visible" },
@@ -247,7 +262,7 @@ function hostPage(url: string): string {
     } else if (request.method === "startRecording") { if (recordingActive) { fail("Finish the current demonstration first."); return; } recordingActive = true; send({ id: "recording-1", status: "recording", liveViewUrl: "https://live.browserbase.com/session", steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
     else if (request.method === "getRecording" || request.method === "stopRecording") send({ id: "recording-1", status: "stopped", liveViewUrl: "https://live.browserbase.com/session", steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null });
     else if (request.method === "cancelRecording") { recordingActive = false; send(undefined); }
-    else if (request.method === "saveAgent") send({ id: "agent-1" });
+    else if (request.method === "saveAgent") { window.__savedAgents.push(request.params); send({ id: "agent-1" }); }
     else if (request.method === "testAgent") { window.__testArguments.push(request.params.arguments); send({ id: "run-1" }); }
     else if (request.method === "getTestRun") {
       if (scenario === "failed") send({ status: "failed", error: "The website rejected the request." });
