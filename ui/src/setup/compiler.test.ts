@@ -282,7 +282,9 @@ test("rejects normalized credential token and phrase variants", () => {
     "password_reset",
     "resetPassword",
     "Complete MFA verification",
+    "Complete M.F.A. verification",
     "Complete 2FA verification",
+    "Complete 2-FA verification",
     "Enter the verification code",
     "Sign-in to continue",
     "pass\u200Bword",
@@ -299,10 +301,12 @@ test("rejects normalized credential token and phrase variants", () => {
   assert.throws(() => compileAgent(oauth), /credentials.*managed by the host/i);
 });
 
-test("allows all-caps PIN as an ordinary report label", () => {
-  const draft = baseDraft();
-  draft.steps[0] = { ...draft.steps[0], description: "Open the PIN REPORT" };
-  assert.doesNotThrow(() => compileAgent(draft));
+test("rejects uppercase PIN credential values", () => {
+  for (const text of ["PIN 1234", "PIN-1234", "PIN=1234", "PIN ABCD"]) {
+    const draft = baseDraft();
+    draft.steps[0] = { ...draft.steps[0], description: text };
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
+  }
 });
 
 test("allows a valid literal percent after path decoding", () => {

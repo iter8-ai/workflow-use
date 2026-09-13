@@ -55,11 +55,11 @@ const credentialIntentPatterns = [
   /\bauthenticat(?:e|es|ed|ing|ion)\b/i,
   /\bauthoriz(?:e|es|ed|ing|ation|ations)\b/i,
   /\boauth(?:2)?\b/i,
-  /\b(?:log(?:ged|ging)? (?:in|into|on)|login|logins|loginto|logon|logons)\b/i,
-  /\b(?:sign(?:ed|ing)? (?:in|into|on)|signin|signins|signinto|signon|signons)\b/i,
+  /\b(?:log(?:ged|ging)?\s*(?:in|into|on)|logins?|logons?)\b/i,
+  /\b(?:sign(?:ed|ing)?\s*(?:in|into|on)|signins?|signons?)\b/i,
   /\bone time (?:password|passcode|code)\b/i,
   /\b(?:one time )?(?:otp|totp)\b/i,
-  /\b(?:mfa|2fa)\b/i,
+  /\b(?:mfa|m f a|2fa|2 fa|2 f a)\b/i,
   /\bverification code\b/i,
   /\b(?:cvv|cvc)\b/i,
   /\bsocial security(?: number)?\b/i,
@@ -69,6 +69,7 @@ const credentialIntentPatterns = [
   /\buser names?\b/i,
 ];
 const pinIntentPattern = /\b(?:enter|provide|type|use|submit|verify) (?:your )?pin\b|\bpin (?:code|verification)\b|\b(?:my )?pin\s*(?:is|:)\s*\S+\b/i;
+const uppercasePinPattern = /\bPIN\b/;
 const maximumPathDecodes = 4;
 const rawReplayPattern = /\b(?:css|xpath|selector)\b|#[a-z][\w-]*(?:\s*[>+~]|\[)|\[[^\]]+\]|(?:^|\s)(?:x|y)\s*[:=]\s*\d+|^\s*\d+(?:px)?\s*,\s*\d+(?:px)?\s*$/i;
 const maximumNameLength = 150;
@@ -237,7 +238,8 @@ function requireMaximumLength(value: string, maximum: number, label: string): vo
 function containsSensitiveText(value: string): boolean {
   const normalized = normalizeIntentText(value);
   return credentialIntentPatterns.some((pattern) => pattern.test(normalized))
-    || pinIntentPattern.test(normalized);
+    || pinIntentPattern.test(normalized)
+    || uppercasePinPattern.test(normalized);
 }
 
 function normalizeIntentText(value: string): string {
@@ -246,7 +248,7 @@ function normalizeIntentText(value: string): string {
     .replace(/\p{M}|\p{Cf}/gu, "")
     .replace(/([a-z])([A-Z])/g, "$1 $2")
     .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
-    .replace(/[_\p{Pd}\u2212\s]+/gu, " ")
+    .replace(/[._\p{Pd}\u2212\s]+/gu, " ")
     .trim();
 }
 
