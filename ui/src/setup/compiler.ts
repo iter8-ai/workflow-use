@@ -44,9 +44,33 @@ type CompiledAgent = {
   parameters: Record<string, never>;
 };
 
-const sensitivePattern = /\b(?:pass[- ]?word|passcode|secret|token|api[_ -]?key|credential|authorization|auth(?:entication|enticate|enticated|orize|orized)?|cvv|cvc|social security|ssn|credit card|card number|user ?name|one.?time|otp|totp|mfa|log(?:[ -]?in(?:to)?|[ -]?on)|sign(?:[ -]?in(?:to)?|[ -]?on))\b/i;
-const pinIntentPattern = /\b(?:enter|provide|type|use|submit|verify)\s+(?:your\s+)?pin\b|\bpin\s+(?:code|verification)\b|\b(?:my\s+)?pin\s*(?:is|:)\s*\d+\b/i;
-const uppercasePinPattern = /\bPIN\b/;
+const credentialIntentPatterns = [
+  /\b(?:passwords?|pass words?)\b/i,
+  /\bpasscodes?\b/i,
+  /\bsecrets?\b/i,
+  /\b(?:api )?tokens?\b/i,
+  /\bapi keys?\b/i,
+  /\bcredentials?\b/i,
+  /\bauthorizations?\b/i,
+  /\bauth\b/i,
+  /\bauthenticate(?:d|s|ing)?\b/i,
+  /\bauthentication\b/i,
+  /\bauthorize(?:d|s|ing)?\b/i,
+  /\boauth(?:2)?\b/i,
+  /\b(?:login|log in|log into|log on|logging in|logging into|logging on)\b/i,
+  /\b(?:signin|sign in|sign into|sign on|signing in|signing into|signing on)\b/i,
+  /\bone time(?: code)?\b/i,
+  /\b(?:one time )?(?:otp|totp)\b/i,
+  /\b(?:mfa|2fa)\b/i,
+  /\bverification code\b/i,
+  /\b(?:cvv|cvc)\b/i,
+  /\bsocial security(?: number)?\b/i,
+  /\bssn\b/i,
+  /\bcredit cards?\b/i,
+  /\bcard numbers?\b/i,
+  /\buser names?\b/i,
+];
+const pinIntentPattern = /\b(?:enter|provide|type|use|submit|verify) (?:your )?pin\b|\bpin (?:code|verification)\b|\b(?:my )?pin\s*(?:is|:)\s*\S+\b/i;
 const maximumPathDecodes = 4;
 const rawReplayPattern = /\b(?:css|xpath|selector)\b|#[a-z][\w-]*(?:\s*[>+~]|\[)|\[[^\]]+\]|(?:^|\s)(?:x|y)\s*[:=]\s*\d+|^\s*\d+(?:px)?\s*,\s*\d+(?:px)?\s*$/i;
 const maximumNameLength = 150;
@@ -213,12 +237,19 @@ function requireMaximumLength(value: string, maximum: number, label: string): vo
 }
 
 function containsSensitiveText(value: string): boolean {
-  const normalized = value
+  const normalized = normalizeIntentText(value);
+  return credentialIntentPatterns.some((pattern) => pattern.test(normalized))
+    || pinIntentPattern.test(normalized);
+}
+
+function normalizeIntentText(value: string): string {
+  return value
     .normalize("NFKD")
     .replace(/\p{M}|\p{Cf}/gu, "")
-    .replace(/[\u2010-\u2015\u2212]/gu, "-")
-    .replace(/\s+/gu, " ");
-  return sensitivePattern.test(normalized) || pinIntentPattern.test(normalized) || uppercasePinPattern.test(normalized);
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .replace(/[_\p{Pd}\u2212\s]+/gu, " ")
+    .trim();
 }
 
 function decodedPathname(value: string): string {
@@ -230,15 +261,12 @@ function decodedPathname(value: string): string {
     } catch {
       throw credentialError();
     }
-    if (next === decoded) {
+    if (next === decoded || !/%[0-9a-f]{2}/i.test(next)) {
       return next;
     }
     decoded = next;
   }
-  if (/%[0-9a-f]{2}/i.test(decoded)) {
-    throw credentialError();
-  }
-  return decoded;
+  throw credentialError();
 }
 
 function isMaskedValue(value: string): boolean {

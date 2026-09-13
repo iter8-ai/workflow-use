@@ -269,3 +269,44 @@ test("rejects credential terms separated by Unicode format characters and punctu
     assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
   }
 });
+
+test("rejects normalized credential token and phrase variants", () => {
+  const texts = [
+    "Download saved passwords",
+    "Use API tokens",
+    "Review credentials",
+    "Authenticate to continue",
+    "Authorize access",
+    "Logging in to the portal",
+    "signing in to the portal",
+    "password_reset",
+    "resetPassword",
+    "Complete MFA verification",
+    "Complete 2FA verification",
+    "Enter the verification code",
+    "Sign-in to continue",
+    "pass\u200Bword",
+  ];
+
+  for (const text of texts) {
+    const draft = baseDraft();
+    draft.steps[0] = { ...draft.steps[0], description: text };
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, text);
+  }
+
+  const oauth = baseDraft();
+  oauth.url = "https://portal.example.test/oauth/callback";
+  assert.throws(() => compileAgent(oauth), /credentials.*managed by the host/i);
+});
+
+test("allows all-caps PIN as an ordinary report label", () => {
+  const draft = baseDraft();
+  draft.steps[0] = { ...draft.steps[0], description: "Open the PIN REPORT" };
+  assert.doesNotThrow(() => compileAgent(draft));
+});
+
+test("allows a valid literal percent after path decoding", () => {
+  const draft = baseDraft();
+  draft.url = "https://portal.example.test/reports/100%25";
+  assert.doesNotThrow(() => compileAgent(draft));
+});
