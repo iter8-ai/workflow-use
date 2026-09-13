@@ -146,6 +146,10 @@ function validateStep(step: SetupStep): void {
   if (url !== undefined) {
     validateUrl(url, `URL for step ${step.id}`);
   }
+  if (step.type === "navigation") {
+    validateNavigationFallbackUrl(target, `Navigation target for step ${step.id}`);
+    validateNavigationFallbackUrl(step.description, `Navigation description for step ${step.id}`);
+  }
   if (target !== undefined && containsSensitiveText(target)) {
     throw credentialError();
   }
@@ -220,6 +224,18 @@ function validateUrl(value: string, label: string): void {
   if (url.search !== "" || url.hash !== "") {
     throw new Error(`${label} must not include query parameters or a fragment.`);
   }
+}
+
+function validateNavigationFallbackUrl(value: string | undefined, label: string): void {
+  if (value === undefined) {
+    return;
+  }
+  try {
+    new URL(value);
+  } catch {
+    return;
+  }
+  validateUrl(value, label);
 }
 
 function requireText(value: string, label: string): void {

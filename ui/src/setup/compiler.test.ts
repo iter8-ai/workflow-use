@@ -253,6 +253,28 @@ test("rejects fragments before compiling a host-save payload", () => {
   assert.throws(() => compileAgent(stepUrl), /must not include query parameters or a fragment/i);
 });
 
+test("rejects query and fragment URLs in navigation fallbacks before compiling a host-save payload", () => {
+  const targetUrl = baseDraft();
+  targetUrl.steps[0] = {
+    ...targetUrl.steps[0],
+    type: "navigation",
+    target: "https://portal.example.test/reports?p=opaque-value",
+    url: null,
+  };
+
+  const descriptionUrl = baseDraft();
+  descriptionUrl.steps[0] = {
+    ...descriptionUrl.steps[0],
+    type: "navigation",
+    description: "https://portal.example.test/reports#latest",
+    target: null,
+    url: null,
+  };
+
+  assert.throws(() => compileAgent(targetUrl), /must not include query parameters or a fragment/i);
+  assert.throws(() => compileAgent(descriptionUrl), /must not include query parameters or a fragment/i);
+});
+
 test("keeps setup payloads within host limits", () => {
   const tooLongName = baseDraft();
   tooLongName.name = "a".repeat(151);
