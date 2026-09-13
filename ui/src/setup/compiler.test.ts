@@ -121,7 +121,7 @@ test("escapes braces in non-entry literals", () => {
 
 test("rejects URL credentials, raw replay targets, and host limits", () => {
   const urlCredentials = baseDraft();
-  urlCredentials.url = "https://person:secret@example.test/reports";
+  urlCredentials.url = "https://user:password@example.test/public";
 
   const rawSelector = baseDraft();
   rawSelector.steps[0] = { ...rawSelector.steps[0], target: "#reports > button" };
@@ -301,8 +301,26 @@ test("rejects normalized credential token and phrase variants", () => {
   assert.throws(() => compileAgent(oauth), /credentials.*managed by the host/i);
 });
 
-test("rejects uppercase PIN credential values", () => {
-  for (const text of ["PIN 1234", "PIN-1234", "PIN=1234", "PIN ABCD"]) {
+test("rejects PIN credential values", () => {
+  for (const text of [
+    "PIN 1234",
+    "PIN-1234",
+    "PIN=1234",
+    "PIN = 1234",
+    "PIN ABCD",
+    "Pin 1234",
+    "Pin-1234",
+    "Pin=1234",
+    "Pin = 1234",
+    "Pin ABCD",
+    "pin 1234",
+    "pin-1234",
+    "pin=1234",
+    "pin = 1234",
+    "pin abcd",
+    "pin ABCD",
+    "pin AbCd",
+  ]) {
     const draft = baseDraft();
     draft.steps[0] = { ...draft.steps[0], description: text };
     assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
@@ -333,4 +351,18 @@ test("allows ordinary one-time work but rejects one-time credential phrases", ()
     draft.steps[0] = { ...draft.steps[0], description: text };
     assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
   }
+});
+
+test("allows benign PIN report phrases and an API-key hostname", () => {
+  const label = baseDraft();
+  label.steps[0] = { ...label.steps[0], description: "Open the PIN REPORT" };
+  assert.doesNotThrow(() => compileAgent(label));
+
+  const ordinaryAction = baseDraft();
+  ordinaryAction.steps[0] = { ...ordinaryAction.steps[0], description: "Pin this report" };
+  assert.doesNotThrow(() => compileAgent(ordinaryAction));
+
+  const url = baseDraft();
+  url.url = "https://api.key.example/public-report";
+  assert.doesNotThrow(() => compileAgent(url));
 });

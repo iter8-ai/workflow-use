@@ -69,7 +69,7 @@ const credentialIntentPatterns = [
   /\buser names?\b/i,
 ];
 const pinIntentPattern = /\b(?:enter|provide|type|use|submit|verify) (?:your )?pin\b|\bpin (?:code|verification)\b|\b(?:my )?pin\s*(?:is|:)\s*\S+\b/i;
-const uppercasePinPattern = /\bPIN\b/;
+const pinValuePattern = /\bpin(?:\s*=\s*|\s+)(?!(?:report|the|this|that|these|those|a|an|my|your|our)\b)(?:\d+|[a-z0-9]+(?:\s+[a-z0-9]+)*)\b/i;
 const maximumPathDecodes = 4;
 const rawReplayPattern = /\b(?:css|xpath|selector)\b|#[a-z][\w-]*(?:\s*[>+~]|\[)|\[[^\]]+\]|(?:^|\s)(?:x|y)\s*[:=]\s*\d+|^\s*\d+(?:px)?\s*,\s*\d+(?:px)?\s*$/i;
 const maximumNameLength = 150;
@@ -218,7 +218,7 @@ function validateUrl(value: string, label: string): void {
   if (url.search !== "" || url.hash !== "") {
     throw new Error(`${label} must not include query parameters or a fragment.`);
   }
-  if (containsSensitiveText(value) || containsSensitiveText(decodedPathname(url.pathname))) {
+  if (containsSensitiveText(decodedPathname(url.pathname))) {
     throw credentialError();
   }
 }
@@ -239,7 +239,7 @@ function containsSensitiveText(value: string): boolean {
   const normalized = normalizeIntentText(value);
   return credentialIntentPatterns.some((pattern) => pattern.test(normalized))
     || pinIntentPattern.test(normalized)
-    || uppercasePinPattern.test(normalized);
+    || pinValuePattern.test(normalized);
 }
 
 function normalizeIntentText(value: string): string {
