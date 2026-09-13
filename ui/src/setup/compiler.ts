@@ -44,7 +44,7 @@ type CompiledAgent = {
   parameters: Record<string, never>;
 };
 
-const sensitivePattern = /\b(?:password|passcode|secret|token|api[_ -]?key|credential|authorization|auth(?:entication)?|cvv|cvc|social security|ssn|credit card|card number|user ?name|one.?time|otp|totp|log ?in|sign ?in)\b/i;
+const sensitivePattern = /\b(?:password|passcode|secret|token|api[_ -]?key|credential|authorization|auth(?:entication)?|cvv|cvc|social security|ssn|credit card|card number|user ?name|one.?time|otp|totp|mfa|pin|log[ -]?in|sign[ -]?in)\b/i;
 const rawReplayPattern = /\b(?:css|xpath|selector)\b|#[a-z][\w-]*(?:\s*[>+~]|\[)|\[[^\]]+\]|(?:^|\s)(?:x|y)\s*[:=]\s*\d+|^\s*\d+(?:px)?\s*,\s*\d+(?:px)?\s*$/i;
 const maximumNameLength = 150;
 const maximumUrlLength = 2_048;

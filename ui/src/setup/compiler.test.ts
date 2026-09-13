@@ -189,10 +189,15 @@ test("rejects standalone credential and sign-in intent", () => {
   const mutations: Array<(draft: SetupDraft) => void> = [
     (draft) => { draft.name = "Credential report"; },
     (draft) => { draft.goal = "Use the secret to download the report."; },
+    (draft) => { draft.goal = "Complete MFA verification."; },
     (draft) => { draft.steps[0] = { ...draft.steps[0], description: "Enter password" }; },
+    (draft) => { draft.steps[0] = { ...draft.steps[0], description: "Enter your PIN" }; },
     (draft) => { draft.steps[0] = { ...draft.steps[0], expectedOutcome: "Token accepted" }; },
     (draft) => { draft.steps[0] = { ...draft.steps[0], target: "Sign in" }; },
+    (draft) => { draft.steps[0] = { ...draft.steps[0], target: "Sign-in" }; },
     (draft) => { draft.url = "https://portal.example.test/login"; },
+    (draft) => { draft.url = "https://portal.example.test/sign-in"; },
+    (draft) => { draft.url = "https://portal.example.test/log-in"; },
   ];
 
   for (const mutate of mutations) {
