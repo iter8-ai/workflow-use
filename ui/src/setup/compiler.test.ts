@@ -406,3 +406,18 @@ test("allows benign PIN report phrases and an API-key hostname", () => {
   url.url = "https://api.key.example/public-report";
   assert.doesNotThrow(() => compileAgent(url));
 });
+
+for (const alias of ["username", "usernames", "apikey", "apikeys", "passwd", "pwd"]) {
+  test(`rejects credential alias ${alias} in metadata and input values`, () => {
+    for (const field of ["name", "label", "example"]) {
+      const draft = baseDraft();
+      const input = { name: "period", label: "Period", type: "text" as const, example: "September", [field]: alias };
+      draft.inputs = [input];
+      draft.steps.push({ id: "period", type: "input", description: "Enter period", target: "Period", inputName: input.name });
+      assert.throws(() => compileAgent(draft), /credentials.*host/i);
+    }
+    const draft = baseDraft();
+    draft.steps.push({ id: "period", type: "input", description: "Enter period", target: "Period", value: alias });
+    assert.throws(() => compileAgent(draft), /credentials.*host/i);
+  });
+}

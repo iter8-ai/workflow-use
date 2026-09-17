@@ -45,11 +45,11 @@ type CompiledAgent = {
 };
 
 const credentialIntentPatterns = [
-  /\b(?:passwords?|pass words?)\b/i,
+  /\b(?:passwords?|passwd|pwd|pass words?)\b/i,
   /\bpasscodes?\b/i,
   /\bsecrets?\b/i,
   /\b(?:api )?tokens?\b/i,
-  /\bapi keys?\b/i,
+  /\b(?:api keys?|apikeys?)\b/i,
   /\bcredentials?\b/i,
   /\bauth\b/i,
   /\bauthenticat(?:e|es|ed|ing|ion)\b/i,
@@ -66,7 +66,7 @@ const credentialIntentPatterns = [
   /\bssn\b/i,
   /\bcredit cards?\b/i,
   /\bcard numbers?\b/i,
-  /\buser names?\b/i,
+  /\b(?:user names?|usernames?)\b/i,
 ];
 const pinIntentPattern = /\b(?:enter|provide|type|use|submit|verify) (?:your )?pin\b|\bpin (?:code|verification)\b|\b(?:my )?pin\s*(?:is|:)\s*\S+\b/i;
 const pinValuePattern = /\bpin(?:\s*=\s*|\s+)(?!(?:report|the|this|that|these|those|a|an|my|your|our)\b)(?:\d+|[a-z0-9]+(?:\s+[a-z0-9]+)*)\b/i;
