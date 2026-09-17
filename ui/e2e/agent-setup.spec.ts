@@ -152,17 +152,28 @@ test("does not start or save an agent when the setup URL has a credential query"
   await expect.poll(() => page.evaluate(() => window.__savedAgents)).toEqual([]);
 });
 
-test("requires a form-entry step to be removed before compiling", async ({ page }) => {
+test("binds a discarded recorded value to a reusable input and tests with its example", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=form-entry`);
   const setup = page.frameLocator("iframe");
 
   await describeAndDemonstrate(setup);
-  await expect(setup.getByText("Form-entry tasks are not supported in this release.")).toBeVisible();
+  await expect(setup.getByText("recorded-private-value", { exact: true })).toHaveCount(0);
+  await setup.getByRole("button", { name: "Add reusable input" }).click();
+  await setup.getByLabel("Input 1 name").fill("month_number");
+  await setup.getByLabel("Input 1 label").fill("Statement month");
+  await setup.getByLabel("Input 1 type").selectOption("number");
+  await setup.getByLabel("Input 1 example").fill("9");
+  await setup.getByLabel("Step 2 value source").selectOption("month_number");
   await setup.getByRole("button", { name: "Continue to test" }).click();
-  await expect(setup.getByRole("alert")).toContainText("Remove input and select steps");
-  await setup.locator(".review-step").filter({ hasText: "Choose the statement month" }).getByRole("button", { name: "Remove step" }).click();
-  await setup.getByRole("button", { name: "Continue to test" }).click();
-  await expect(setup.getByRole("heading", { name: "Test a fresh run" })).toBeVisible();
+  await setup.getByRole("button", { name: "Run test" }).click();
+
+  await expect.poll(() => page.evaluate(() => window.__testArguments)).toEqual([{ month_number: 9 }]);
+  await expect.poll(() => page.evaluate(() => window.__savedAgents[0]?.config?.stages?.[0]?.prompt)).toContain("Set Statement month to {month_number}");
+  await expect.poll(() => page.evaluate(() => window.__savedAgents[0]?.config?.parameters)).toEqual({});
+  await setup.getByLabel("I checked the result").check();
+  await setup.getByLabel("Schedule daily").check();
+  await setup.getByRole("button", { name: "Schedule agent" }).click();
+  await expect.poll(() => page.evaluate(() => window.__scheduleArguments)).toEqual([{ month_number: 9 }]);
 });
 
 test("ignores a response posted by the setup iframe instead of its host", async ({ page }) => {
@@ -462,7 +473,7 @@ function hostPage(url: string): string {
   let recordingActive = false;
   const steps = [
     { id: "open-reports", type: "click", description: "Open the reports section", target: "Reports", expectedOutcome: "The reports list is visible" },
-    ...(scenario === "form-entry" ? [{ id: "choose-month", type: "input", description: "Choose the statement month", target: "Statement month" }] : []),
+    ...(scenario === "form-entry" ? [{ id: "choose-month", type: "input", description: "Choose the statement month", target: "Statement month", value: "recorded-private-value" }] : []),
     { id: "download", type: "click", description: "Download the statement", target: "Download statement" }
   ];
   if (scenario === "many-steps") steps.splice(0, steps.length, ...Array.from({ length: 100 }, (_, index) => ({ id: String(index), type: "click", description: "Recorded action " + (index + 1), target: "Reports" })));

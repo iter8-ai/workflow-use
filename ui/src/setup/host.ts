@@ -1,5 +1,7 @@
 import type { SetupDraft, SetupStep } from "./compiler";
 
+export type RunArguments = Record<string, string | number>;
+
 export type Recording = {
   id: string;
   status: "recording" | "stopped" | "expired";
@@ -22,9 +24,9 @@ type RequestMap = {
   stopRecording: { params: { id: string }; result: Recording };
   cancelRecording: { params: { id: string }; result: undefined };
   saveAgent: { params: { draft: SetupDraft; config: unknown; agentId?: string }; result: { id: string } };
-  testAgent: { params: { agentId: string; arguments: Record<string, never> }; result: { id: string } };
+  testAgent: { params: { agentId: string; arguments: RunArguments }; result: { id: string } };
   getTestRun: { params: { agentId: string; runId: string }; result: TestRun };
-  scheduleAgent: { params: { agentId: string; runId: string; arguments: Record<string, never>; cron: string }; result: undefined };
+  scheduleAgent: { params: { agentId: string; runId: string; arguments: RunArguments; cron: string }; result: undefined };
   close: { params: { agentId?: string }; result: undefined };
 };
 
