@@ -126,6 +126,12 @@ select {
 
 .setup-panel.demonstrate {
   width: 100%;
+  gap: 16px;
+}
+
+.setup-content-demonstrate {
+  padding-top: 24px;
+  padding-bottom: 24px;
 }
 
 .setup-panel-compact {
@@ -300,7 +306,8 @@ select {
 .demonstration-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(280px, 0.34fr);
-  min-height: 590px;
+  height: clamp(300px, calc(100vh - 470px), 680px);
+  min-height: 0;
   border: 1px solid #d9dbe7;
   border-radius: 10px;
   overflow: hidden;
@@ -308,14 +315,16 @@ select {
 }
 
 .browser-frame {
-  min-height: 590px;
+  position: relative;
+  min-height: 0;
   background: #f0f0f6;
 }
 
 .browser-frame iframe {
   display: block;
+  height: 100%;
   width: 100%;
-  min-height: 590px;
+  min-height: 0;
   border: 0;
   background: #ffffff;
 }
@@ -326,6 +335,8 @@ select {
 }
 
 .captured-steps {
+  min-height: 0;
+  overflow-wrap: anywhere;
   overflow-y: auto;
   border-left: 1px solid #d9dbe7;
   background: #fbfbfe;
@@ -483,6 +494,7 @@ select {
   }
 
   .demonstration-grid {
+    height: auto;
     grid-template-columns: 1fr;
     min-height: 0;
   }
@@ -522,4 +534,23 @@ select {
   .button {
     transition: none;
   }
+}
+
+.browser-loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  padding: 20px;
+  background: #f0f0f6;
+}
+
+.recorded-target {
+  overflow-wrap: anywhere;
+}
+
+.setup-panel input[readonly] {
+  background: #f7f7fb;
+  color: #5f667c;
 }
