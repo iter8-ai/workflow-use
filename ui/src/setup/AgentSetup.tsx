@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { compileAgent, type SetupDraft, type SetupStep } from "./compiler";
-import { browserbaseLiveViewUrl, createHostBridge, type Recording, type TestRun } from "./host";
+import { compileAgent, type SetupDraft, type SetupInput, type SetupStep } from "./compiler";
+import { browserbaseLiveViewUrl, createHostBridge, type Recording, type RunArguments, type TestRun } from "./host";
 import "./setup.css";
 
 type Screen = "describe" | "demonstrate" | "review" | "test";
@@ -28,9 +28,12 @@ export default function AgentSetup() {
   const [screen, setScreen] = useState<Screen>("describe");
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
+  const [privateLogin, setPrivateLogin] = useState(false);
+  const [privateLoginAllowed, setPrivateLoginAllowed] = useState(false);
   const [goal, setGoal] = useState("");
   const [recording, setRecording] = useState<Recording | null>(null);
   const [steps, setSteps] = useState<SetupStep[]>([]);
+  const [inputs, setInputs] = useState<SetupInput[]>([]);
   const [agentId, setAgentId] = useState<string | null>(null);
   const [testRun, setTestRun] = useState<RunState | null>(null);
   const [checkedResult, setCheckedResult] = useState(false);
@@ -50,7 +53,10 @@ export default function AgentSetup() {
   const [revision, setRevision] = useState(0);
   const [confirmClose, setConfirmClose] = useState(false);
 
-  const draft = useMemo<SetupDraft>(() => ({ name, url, goal, steps, inputs: [] }), [name, url, goal, steps]);
+  const draft = useMemo<SetupDraft>(() => ({ name, url, goal, steps, inputs }), [name, url, goal, steps, inputs]);
+  const recordingId = recording?.id;
+  const recordingStatus = recording?.status;
+  const recordingExpiresAt = recording?.expiresAt;
   const liveViewUrl = browserbaseLiveViewUrl(recording?.liveViewUrl ?? null);
   const hasValidSchedule = isFivePartCron(cron);
   const canSchedule = scheduleAllowed
@@ -116,7 +122,7 @@ export default function AgentSetup() {
     setBridge(next);
     return () => {
       const current = recordingRef.current;
-      if (current?.status === "recording" && next !== null) {
+      if (current && ["recording", "awaiting_login", "verifying_login"].includes(current.status) && next !== null) {
         void next.request("cancelRecording", { id: current.id }).catch(() => undefined);
       }
       next?.destroy();
@@ -140,6 +146,7 @@ export default function AgentSetup() {
       }
       setConnected(true);
       setScheduleAllowed(result.schedule);
+      setPrivateLoginAllowed(result.privateLogin === true);
       setConnecting(false);
     }).catch((requestError: Error) => {
       if (active) {
@@ -157,7 +164,7 @@ export default function AgentSetup() {
   }, [recording]);
 
   useEffect(() => {
-    if (bridge === undefined || bridge === null || recording?.status !== "recording" || busy) {
+    if (bridge === undefined || bridge === null || !recordingId || !recordingStatus || !["recording", "awaiting_login", "verifying_login"].includes(recordingStatus) || busy) {
       return;
     }
     let active = true;
@@ -166,10 +173,11 @@ export default function AgentSetup() {
       if (pending) return;
       pending = true;
       try {
-        const next = await bridge.request("getRecording", { id: recording.id });
+        const next = await bridge.request("getRecording", { id: recordingId });
         if (!active) return;
-        setRecording(next);
-        setSteps(next.steps);
+        const safe = discardRecordedValues(next);
+        setRecording(safe);
+        setSteps(safe.steps);
         setRecordingError(null);
       } catch (requestError) {
         if (active) setRecordingError(errorMessage(requestError));
@@ -183,7 +191,17 @@ export default function AgentSetup() {
       active = false;
       window.clearInterval(interval);
     };
-  }, [bridge, recording?.id, recording?.status, busy, pollAttempt]);
+  }, [bridge, recordingId, recordingStatus, busy, pollAttempt]);
+
+  useEffect(() => {
+    if (!recordingId || !recordingStatus || !recordingExpiresAt || !["awaiting_login", "verifying_login", "recording"].includes(recordingStatus)) return;
+    const remaining = Date.parse(recordingExpiresAt) - Date.now();
+    const timeout = window.setTimeout(() => {
+      setRecording(current => current?.id === recordingId ? { ...current, status: "expired", liveViewUrl: null } : current);
+      void bridge?.request("cancelRecording", { id: recordingId }).catch(() => undefined);
+    }, Number.isFinite(remaining) ? Math.max(0, remaining) : 0);
+    return () => window.clearTimeout(timeout);
+  }, [recordingId, recordingStatus, recordingExpiresAt, bridge]);
 
   useEffect(() => {
     if (bridge === undefined || bridge === null || testRun?.status !== "running" || agentId === null) {
@@ -247,16 +265,17 @@ export default function AgentSetup() {
     }
     setBusy(true);
     try {
-      const next = await bridge.request("startRecording", { url }, {
+      const next = await bridge.request("startRecording", { url, privateLogin: privateLogin && privateLoginAllowed }, {
         onLateResult: (result) => {
           if (isRecording(result)) {
             void bridge.request("cancelRecording", { id: result.id }).catch(() => undefined);
           }
         },
       });
-      setRecording(next);
+      const safe = discardRecordedValues(next);
+      setRecording(safe);
       setRecordingError(null);
-      setSteps(next.steps);
+      setSteps(safe.steps);
       setScreen("demonstrate");
     } catch (requestError) {
       setError(errorMessage(requestError));
@@ -273,9 +292,10 @@ export default function AgentSetup() {
     setError(null);
     try {
       const next = await bridge.request("stopRecording", { id: recording.id });
-      setRecording(next);
+      const safe = discardRecordedValues(next);
+      setRecording(safe);
       setRecordingError(null);
-      setSteps(next.steps);
+      setSteps(safe.steps);
     } catch (requestError) {
       setError(errorMessage(requestError));
     } finally {
@@ -314,6 +334,31 @@ export default function AgentSetup() {
     invalidateTest();
   }
 
+  function addInput(): void {
+    setInputs((current) => [...current, { name: "", label: "", type: "text", example: "" }]);
+    invalidateTest();
+  }
+
+  function updateInput(index: number, updates: Partial<SetupInput>): void {
+    setInputs((current) => current.map((input, currentIndex) => currentIndex === index ? { ...input, ...updates } : input));
+    if (updates.name !== undefined) {
+      const previousName = inputs[index]?.name;
+      if (previousName !== undefined) {
+        setSteps((current) => current.map((step) => step.inputName === previousName ? { ...step, inputName: updates.name } : step));
+      }
+    }
+    invalidateTest();
+  }
+
+  function removeInput(index: number): void {
+    const removedName = inputs[index]?.name;
+    setInputs((current) => current.filter((_, currentIndex) => currentIndex !== index));
+    if (removedName !== undefined) {
+      setSteps((current) => current.map((step) => step.inputName === removedName ? { ...step, inputName: undefined } : step));
+    }
+    invalidateTest();
+  }
+
   function continueToTest(): void {
     setError(null);
     try {
@@ -344,7 +389,7 @@ export default function AgentSetup() {
     try {
       const saved = await bridge.request("saveAgent", { draft, config, agentId: agentId ?? undefined });
       setAgentId(saved.id);
-      const started = await bridge.request("testAgent", { agentId: saved.id, arguments: {} });
+      const started = await bridge.request("testAgent", { agentId: saved.id, arguments: exampleArguments(inputs) });
       setTestRun({ id: started.id, status: "running", files: [], revision });
       setCheckedResult(false);
     } catch (requestError) {
@@ -365,7 +410,7 @@ export default function AgentSetup() {
       await bridge.request("scheduleAgent", {
         agentId,
         runId: testRun.id,
-        arguments: {},
+        arguments: exampleArguments(inputs),
         cron: dailySchedule ? cron.trim() : "",
       });
       setScheduleSaved(true);
@@ -388,6 +433,7 @@ export default function AgentSetup() {
       setRecordingError(null);
       setTestStatusError(null);
       setSteps([]);
+      setInputs([]);
       setTestRun(null);
       setCheckedResult(false);
       setScheduleSaved(false);
@@ -446,9 +492,9 @@ export default function AgentSetup() {
           {(recordingError !== null || testStatusError !== null) && <div className="setup-error" role="alert"><span>{recordingError !== null ? "Could not refresh the demonstration." : "Could not refresh the test result."} {recordingError ?? testStatusError} Retrying automatically.</span><button className="button button-quiet" type="button" onClick={() => setPollAttempt((current) => current + 1)}>Retry status</button></div>}
           {error !== null && <div className="setup-error" role="alert"><span>{error}</span><button type="button" className="button button-quiet" onClick={() => setError(null)}>Dismiss</button></div>}
           {notice !== null && <p className="setup-notice" role="status">{notice}</p>}
-          {screen === "describe" && <Describe name={name} url={url} goal={goal} busy={busy || !connected} onName={(value) => setDraftField(setName, value)} onUrl={(value) => setDraftField(setUrl, value)} onGoal={(value) => setDraftField(setGoal, value)} onContinue={() => void startRecording()} />}
-          {screen === "demonstrate" && <Demonstrate recording={recording} steps={steps} liveViewUrl={liveViewUrl} busy={busy} onStop={() => void stopRecording()} onReview={continueToReview} onReset={() => void reset()} />}
-          {screen === "review" && <Review name={name} url={url} goal={goal} onName={(value) => setDraftField(setName, value)} onGoal={(value) => setDraftField(setGoal, value)} steps={steps} busy={busy} onUpdateStep={updateStep} onRemoveStep={removeStep} onBack={() => setScreen("demonstrate")} onContinue={continueToTest} />}
+          {screen === "describe" && <Describe privateLogin={privateLogin} privateLoginAllowed={privateLoginAllowed} onPrivateLogin={setPrivateLogin} name={name} url={url} goal={goal} busy={busy || !connected} onName={(value) => setDraftField(setName, value)} onUrl={(value) => setDraftField(setUrl, value)} onGoal={(value) => setDraftField(setGoal, value)} onContinue={() => void startRecording()} />}
+          {screen === "demonstrate" && <Demonstrate privateLogin={privateLogin && privateLoginAllowed} recording={recording} steps={steps} liveViewUrl={liveViewUrl} busy={busy} onStop={() => void stopRecording()} onReview={continueToReview} onReset={() => void reset()} />}
+          {screen === "review" && <Review name={name} url={url} goal={goal} onName={(value) => setDraftField(setName, value)} onGoal={(value) => setDraftField(setGoal, value)} steps={steps} inputs={inputs} busy={busy} onUpdateStep={updateStep} onRemoveStep={removeStep} onAddInput={addInput} onUpdateInput={updateInput} onRemoveInput={removeInput} onBack={() => setScreen("demonstrate")} onContinue={continueToTest} />}
           {screen === "test" && !scheduleSaved && <Test run={testRun} checked={checkedResult} canFinish={canFinish} canSchedule={canSchedule} scheduleAllowed={scheduleAllowed} dailySchedule={dailySchedule} cron={cron} scheduleValid={hasValidSchedule} busy={busy} onRun={() => void runTest()} onCheck={setCheckedResult} onDaily={setDailySchedule} onCron={setCron} onSchedule={() => void schedule()} onFinish={() => void close()} onBack={() => setScreen("review")} />}
           {scheduleSaved && <div className="setup-panel"><h2>Your agent is ready</h2><p>The daily schedule is saved. It will repeat the tested workflow.</p><div className="setup-actions"><button className="button button-primary" type="button" onClick={() => void close()} disabled={busy}>Open agent</button></div></div>}
         </section>
@@ -459,28 +505,29 @@ export default function AgentSetup() {
   );
 }
 
-function Describe(props: { name: string; url: string; goal: string; busy: boolean; onName(value: string): void; onUrl(value: string): void; onGoal(value: string): void; onContinue(): void }): JSX.Element {
-  return <div className="setup-panel setup-panel-compact"><div><h2>Describe the job</h2><p>Start with the website and the result you want. You will demonstrate the task next.</p></div><p className="credential-warning">Do not enter logins, passwords, one-time codes, or API keys. Credential-required tasks cannot yet be taught.</p><label>Agent name<input aria-label="Agent name" value={props.name} onChange={(event) => props.onName(event.target.value)} autoComplete="off" /></label><label>Website address<input aria-label="Website address" value={props.url} onChange={(event) => props.onUrl(event.target.value)} placeholder="https://example.com" inputMode="url" autoComplete="off" /></label><label>What should the agent do?<textarea aria-label="What should the agent do?" value={props.goal} onChange={(event) => props.onGoal(event.target.value)} placeholder="For example: download the latest public annual report." /></label><div className="setup-actions"><button className="button button-primary" type="button" onClick={props.onContinue} disabled={props.busy}>Continue to demonstration</button></div></div>;
+function Describe(props: { privateLogin: boolean; privateLoginAllowed: boolean; onPrivateLogin(value: boolean): void; name: string; url: string; goal: string; busy: boolean; onName(value: string): void; onUrl(value: string): void; onGoal(value: string): void; onContinue(): void }): JSX.Element {
+  return <div className="setup-panel setup-panel-compact"><div><h2>Describe the job</h2><p>Start with the website and the result you want. You will demonstrate the task next.</p></div><p className="credential-warning">Do not enter logins, passwords, one-time codes, or API keys. {props.privateLogin ? "Sign-in and reusable credentials are handled privately in Reiterate before recording." : "Credential-required tasks cannot yet be taught."}</p>{props.privateLoginAllowed && <label className="result-check"><input type="checkbox" disabled={props.busy} checked={props.privateLogin} onChange={event => props.onPrivateLogin(event.target.checked)} />This website requires sign-in</label>}<label>Agent name<input disabled={props.busy} aria-label="Agent name" value={props.name} onChange={(event) => props.onName(event.target.value)} autoComplete="off" /></label><label>Website address<input disabled={props.busy} aria-label="Website address" value={props.url} onChange={(event) => props.onUrl(event.target.value)} placeholder="https://example.com" inputMode="url" autoComplete="off" /></label><label>What should the agent do?<textarea disabled={props.busy} aria-label="What should the agent do?" value={props.goal} onChange={(event) => props.onGoal(event.target.value)} placeholder="For example: download the latest public annual report." /></label><div className="setup-actions"><button className="button button-primary" type="button" onClick={props.onContinue} disabled={props.busy}>Continue to demonstration</button></div></div>;
 }
 
-function Demonstrate(props: { recording: Recording | null; steps: SetupStep[]; liveViewUrl: string | null; busy: boolean; onStop(): void; onReview(): void; onReset(): void }): JSX.Element {
+function Demonstrate(props: { privateLogin: boolean; recording: Recording | null; steps: SetupStep[]; liveViewUrl: string | null; busy: boolean; onStop(): void; onReview(): void; onReset(): void }): JSX.Element {
   const isRecording = props.recording?.status === "recording";
+  const pendingLogin = props.recording?.status === "awaiting_login" || props.recording?.status === "verifying_login";
   const expired = props.recording?.status === "expired";
   const blocked = props.recording?.blockedReason != null;
   const stopped = props.recording?.status === "stopped";
   const empty = stopped && props.steps.length === 0;
   const canReview = stopped && !blocked && !empty;
-  const state = expired ? "Demonstration expired" : blocked ? "Demonstration blocked" : isRecording ? "Recording in progress" : "Demonstration finished";
+  const state = pendingLogin ? "Waiting for private sign-in" : expired ? "Demonstration expired" : blocked ? "Demonstration blocked" : isRecording ? "Recording in progress" : "Demonstration finished";
   const showBrowser = isRecording && !blocked;
   return <div className="setup-panel demonstrate">
     <div><h2>Demonstrate the task</h2><p>Show each step you want the agent to follow. You can review and edit the steps afterwards.</p></div>
-    <p className="credential-warning">Do not enter logins, passwords, one-time codes, or API keys. Credential-required tasks cannot yet be taught.</p>
+    <p className="credential-warning">Do not enter logins, passwords, one-time codes, or API keys. {props.privateLogin ? "Sign-in and reusable credentials are handled privately in Reiterate before recording." : "Credential-required tasks cannot yet be taught."}</p>
     {blocked && <div className="setup-error" role="alert">Cannot continue: {props.recording?.blockedReason} Start over to record a supported task.</div>}
     {expired && <div className="setup-error" role="alert">Recording expired. Start a new demonstration.</div>}
     {empty && !blocked && <div className="setup-error" role="alert">No usable steps were recorded. Start over and demonstrate the task before finishing.</div>}
     <div className={`recording-state ${isRecording && !blocked ? "recording-state-active" : ""}`} role="status"><span aria-hidden="true" />{state}</div>
     <div className="demonstration-grid">
-      <div className="browser-frame">{showBrowser ? <LiveBrowser key={props.recording?.id} url={props.liveViewUrl} /> : <p>{canReview ? "Demonstration finished. Review the recorded steps to continue." : "This demonstration cannot be used. Start over to try again."}</p>}</div>
+      <div className="browser-frame">{showBrowser ? <LiveBrowser key={props.recording?.id} url={props.liveViewUrl} /> : <p>{pendingLogin ? "Complete private sign-in in Reiterate. Recording is off while you sign in and verify the fresh session." : canReview ? "Demonstration finished. Review the recorded steps to continue." : "This demonstration cannot be used. Start over to try again."}</p>}</div>
       <aside className="captured-steps" aria-label="Captured demonstration steps" tabIndex={0}>
         <h3>Recorded steps ({props.steps.length})</h3>
         {props.steps.length === 0 ? <p>{isRecording ? "Actions will appear here while you demonstrate." : "No steps were recorded."}</p> : <ol>{props.steps.map((step) => <li key={step.id}>{step.description}</li>)}</ol>}
@@ -511,13 +558,23 @@ function LiveBrowser({ url }: { url: string | null }): JSX.Element {
   </div>;
 }
 
-function Review(props: { name: string; url: string; goal: string; onName(value: string): void; onGoal(value: string): void; steps: SetupStep[]; busy: boolean; onUpdateStep(id: string, updates: Partial<SetupStep>): void; onRemoveStep(id: string): void; onBack(): void; onContinue(): void }): JSX.Element {
+function Review(props: { name: string; url: string; goal: string; onName(value: string): void; onGoal(value: string): void; steps: SetupStep[]; inputs: SetupInput[]; busy: boolean; onUpdateStep(id: string, updates: Partial<SetupStep>): void; onRemoveStep(id: string): void; onAddInput(): void; onUpdateInput(index: number, updates: Partial<SetupInput>): void; onRemoveInput(index: number): void; onBack(): void; onContinue(): void }): JSX.Element {
   return <div className="setup-panel">
-    <div><h2>Review the draft</h2><p>Make the instructions clear. Form-entry tasks are not supported in this release.</p></div>
+    <div><h2>Review the draft</h2><p>Make the instructions clear and choose each form value deliberately.</p></div>
     <label>Agent name<input value={props.name} onChange={(event) => props.onName(event.target.value)} disabled={props.busy} autoComplete="off" /></label>
     <label>What should the agent do?<textarea value={props.goal} onChange={(event) => props.onGoal(event.target.value)} disabled={props.busy} /></label>
     <label>Recorded starting address<input value={props.url} readOnly /></label>
     <p>The starting address and recorded targets stay fixed. To change them, go back to the demonstration and start over.</p>
+    <section aria-labelledby="reusable-inputs-heading">
+      <div className="review-step-heading"><div><h3 id="reusable-inputs-heading">Reusable inputs</h3><p>Examples are used for the test and any schedule.</p></div><button type="button" className="button button-quiet" onClick={props.onAddInput} disabled={props.busy}>Add reusable input</button></div>
+      {props.inputs.map((input, index) => <article className="review-step" key={index}>
+        <div className="review-step-heading"><h3>Input {index + 1}</h3><button type="button" className="text-button" onClick={() => props.onRemoveInput(index)} disabled={props.busy}>Remove input</button></div>
+        <label>Name<input aria-label={`Input ${index + 1} name`} value={input.name} onChange={(event) => props.onUpdateInput(index, { name: event.target.value })} disabled={props.busy} autoComplete="off" /></label>
+        <label>Label<input aria-label={`Input ${index + 1} label`} value={input.label} onChange={(event) => props.onUpdateInput(index, { label: event.target.value })} disabled={props.busy} autoComplete="off" /></label>
+        <label>Type<select aria-label={`Input ${index + 1} type`} value={input.type} onChange={(event) => props.onUpdateInput(index, { type: event.target.value as SetupInput["type"] })} disabled={props.busy}><option value="text">Text</option><option value="date">Date</option><option value="number">Number</option></select></label>
+        <label>Example<input aria-label={`Input ${index + 1} example`} type={input.type} value={input.example} onChange={(event) => props.onUpdateInput(index, { example: event.target.value })} disabled={props.busy} autoComplete="off" /></label>
+      </article>)}
+    </section>
     {props.steps.length === 0 && <p role="status">No steps remain. Go back to the demonstration and start over to capture the task again.</p>}
     {props.steps.map((step, index) => <article className="review-step" key={step.id}>
       <div className="review-step-heading"><h3>Step {index + 1}</h3><button type="button" className="text-button" onClick={() => props.onRemoveStep(step.id)} disabled={props.busy}>Remove step</button></div>
@@ -525,7 +582,11 @@ function Review(props: { name: string; url: string; goal: string; onName(value: 
       {step.type === "key_press" && step.value != null && <p className="recorded-target">Recorded key: {step.value}</p>}
       <label>Description<textarea aria-label={`Step ${index + 1} description`} value={step.description} onChange={(event) => props.onUpdateStep(step.id, { description: event.target.value })} disabled={props.busy} /></label>
       <label>Expected outcome<textarea aria-label={`Step ${index + 1} expected outcome`} value={step.expectedOutcome ?? ""} onChange={(event) => props.onUpdateStep(step.id, { expectedOutcome: event.target.value || undefined })} disabled={props.busy} /></label>
-      {(step.type === "input" || step.type === "select_change") && <p className="credential-warning">Remove this form-entry step before continuing. Login and credential-required tasks cannot yet be taught.</p>}
+      {(step.type === "input" || step.type === "select_change") && <>
+        <p className="credential-warning">Recorded form values are discarded. Choose a fixed value or reusable input.</p>
+        <label>Value source<select aria-label={`Step ${index + 1} value source`} value={step.inputName ?? (step.value !== undefined && step.value !== null ? "__literal" : "")} onChange={(event) => event.target.value === "__literal" ? props.onUpdateStep(step.id, { value: "", inputName: undefined }) : event.target.value === "" ? props.onUpdateStep(step.id, { value: undefined, inputName: undefined }) : props.onUpdateStep(step.id, { value: undefined, inputName: event.target.value })} disabled={props.busy}><option value="">Choose a value</option><option value="__literal">Fixed value</option>{props.inputs.filter((input) => input.name !== "").map((input, inputIndex) => <option value={input.name} key={`${input.name}-${inputIndex}`}>{input.label || input.name}</option>)}</select></label>
+        {step.inputName === undefined && step.value !== undefined && step.value !== null && <label>Fixed value<input aria-label={`Step ${index + 1} fixed value`} value={step.value} onChange={(event) => props.onUpdateStep(step.id, { value: event.target.value })} disabled={props.busy} autoComplete="off" /></label>}
+      </>}
     </article>)}
     <div className="setup-actions"><button className="button button-quiet" type="button" onClick={props.onBack} disabled={props.busy}>Back to demonstration</button><button className="button button-primary" type="button" onClick={props.onContinue} disabled={props.busy || props.steps.length === 0}>Continue to test</button></div>
   </div>;
@@ -569,6 +630,20 @@ function isFivePartCron(value: string): boolean {
 
 function isRecording(value: unknown): value is Recording {
   return typeof value === "object" && value !== null && "id" in value && typeof value.id === "string";
+}
+
+function discardRecordedValues(recording: Recording): Recording {
+  if (recording.status === "awaiting_login" || recording.status === "verifying_login") return { ...recording, liveViewUrl: null, steps: [] };
+  return {
+    ...recording,
+    steps: recording.steps.map((step) => step.type === "input" || step.type === "select_change"
+      ? { ...step, value: undefined, inputName: undefined }
+      : step),
+  };
+}
+
+function exampleArguments(inputs: SetupInput[]): RunArguments {
+  return Object.fromEntries(inputs.map((input) => [input.name, input.type === "number" ? Number(input.example) : input.example]));
 }
 
 

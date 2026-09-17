@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
 from .capture import CAPTURE_SCRIPT
-from .security import is_public_http_url, resolves_to_public_host, safe_public_url
+from .security import is_public_http_url, resolves_to_public_host, safe_public_url, url_origin
 
 EventSink = Callable[[dict[str, Any]], Awaitable[None]]
 
@@ -16,9 +16,15 @@ class BrowserSession(Protocol):
 
     async def close(self) -> None: ...
 
+    async def activate(self, on_event: EventSink) -> None: ...
+
 
 class BrowserProvider(Protocol):
     async def create(self, start_url: str, on_event: EventSink) -> BrowserSession: ...
+
+    async def create_private(self, start_url: str) -> BrowserSession: ...
+
+    async def prepare(self, login: BrowserSession, start_url: str) -> BrowserSession: ...
 
 
 class PlaywrightRecordingSession:
@@ -40,6 +46,25 @@ class PlaywrightRecordingSession:
         self._browser_closed = False
         self._runtime_stopped = False
         self._released = False
+        self.approved_url: str | None = None
+        self._capture_active = False
+
+    async def activate(self, on_event: EventSink) -> None:
+        if self._capture_active:
+            return
+        context = self.browser.contexts[0]
+        if not self.approved_url or not context.pages:
+            raise ValueError("Private browser is unavailable.")
+        for page in context.pages:
+            if url_origin(page.url) != url_origin(self.approved_url):
+                raise ValueError("Private browser left the approved origin.")
+        await _install_capture(context, on_event)
+        for page in context.pages:
+            _install_page_events(self, page, on_event)
+            for frame in page.frames:
+                await frame.evaluate(CAPTURE_SCRIPT)
+        context.on("page", lambda page: _install_page_events(self, page, on_event))
+        self._capture_active = True
 
     def track(self, coroutine: Awaitable[None]) -> None:
         task = asyncio.create_task(coroutine)
@@ -62,16 +87,68 @@ class PlaywrightRecordingSession:
             self._released = True
 
 
-async def _configure_context(context: Any, on_event: EventSink) -> None:
+async def _configure_context(context: Any, on_event: EventSink | None, approved_url: str | None = None) -> None:
     async def guarded_route(route: Any) -> None:
-        if not await resolves_to_public_host(route.request.url):
+        request = route.request
+        if approved_url and request.is_navigation_request():
+            # Includes popups and frames. Navigation never broadens the login origin.
+            if url_origin(request.url) != url_origin(approved_url):
+                await route.abort()
+                return
+        if not await resolves_to_public_host(request.url):
             await route.abort()
             return
         await route.continue_()
 
     await context.route("**/*", guarded_route)
+    if on_event is not None:
+        await _install_capture(context, on_event)
+
+
+async def _install_capture(context: Any, on_event: EventSink) -> None:
     await context.expose_binding("workflowUseRecord", lambda _source, event: on_event(event))
     await context.add_init_script(CAPTURE_SCRIPT)
+
+
+def _guard_private_pages(session: PlaywrightRecordingSession, context: Any) -> None:
+    def guard(page: Any) -> None:
+        def navigation(frame: Any) -> None:
+            if frame == page.main_frame and url_origin(frame.url) != url_origin(session.approved_url or ""):
+                session.track(page.close())
+
+        page.on("framenavigated", navigation)
+
+    for page in context.pages:
+        guard(page)
+    context.on("page", guard)
+
+
+async def _prepare(provider: Any, login: Any, start_url: str) -> BrowserSession:
+    if (
+        not login.approved_url
+        or safe_public_url(start_url) != start_url
+        or url_origin(start_url) != url_origin(login.approved_url)
+    ):
+        raise ValueError("Preparation requires an exact URL on the approved origin.")
+    # Ask Playwright for cookies applicable to this origin, then narrow parent-domain
+    # cookies to the exact host so credentials cannot expand the approved boundary.
+    from urllib.parse import urlsplit
+
+    host = urlsplit(start_url).hostname
+    cookies = await login.browser.contexts[0].cookies()
+    approved = []
+    for cookie in cookies:
+        domain = cookie.get("domain", "").lstrip(".").lower()
+        if not domain or cookie.get("partitionKey") or (host != domain and not host.endswith("." + domain)):
+            continue
+        copied = {
+            key: value
+            for key, value in cookie.items()
+            if key in {"name", "value", "path", "expires", "httpOnly", "secure", "sameSite"}
+        }
+        copied["domain"] = host
+        approved.append(copied)
+    return await provider._create(start_url, None, cookies=approved)
 
 
 def _install_page_events(session: PlaywrightRecordingSession, page: Any, on_event: EventSink) -> None:
@@ -101,6 +178,17 @@ class BrowserbaseProvider:
         self.timeout_seconds = min(max(timeout_seconds, 1), 900)
 
     async def create(self, start_url: str, on_event: EventSink) -> BrowserSession:
+        return await self._create(start_url, on_event)
+
+    async def create_private(self, start_url: str) -> BrowserSession:
+        return await self._create(start_url, None)
+
+    async def prepare(self, login: BrowserSession, start_url: str) -> BrowserSession:
+        return await _prepare(self, login, start_url)
+
+    async def _create(
+        self, start_url: str, on_event: EventSink | None, *, cookies: list[dict[str, Any]] | None = None
+    ) -> BrowserSession:
         if safe_public_url(start_url) is None:
             raise ValueError("The recording URL must be a public HTTP(S) URL.")
         if not self.project_id:
@@ -141,14 +229,20 @@ class BrowserbaseProvider:
                 release=release,
             )
             context = contexts[0]
-            await _configure_context(context, on_event)
-            for existing_page in context.pages:
+            session.approved_url = start_url if on_event is None else None
+            await _configure_context(context, on_event, session.approved_url)
+            if session.approved_url:
+                _guard_private_pages(session, context)
+            if cookies:
+                await context.add_cookies(cookies)
+            for existing_page in context.pages if on_event is not None else []:
                 _install_page_events(session, existing_page, on_event)
 
             def on_new_page(page: Any) -> None:
                 _install_page_events(session, page, on_event)
 
-            context.on("page", on_new_page)
+            if on_event is not None:
+                context.on("page", on_new_page)
             page = context.pages[0] if context.pages else await context.new_page()
             await page.goto(start_url, wait_until="domcontentloaded", timeout=self.timeout_seconds * 1000)
             return session
@@ -167,6 +261,17 @@ class LocalPlaywrightProvider:
         self.last_session: PlaywrightRecordingSession | None = None
 
     async def create(self, start_url: str, on_event: EventSink) -> BrowserSession:
+        return await self._create(start_url, on_event)
+
+    async def create_private(self, start_url: str) -> BrowserSession:
+        return await self._create(start_url, None)
+
+    async def prepare(self, login: BrowserSession, start_url: str) -> BrowserSession:
+        return await _prepare(self, login, start_url)
+
+    async def _create(
+        self, start_url: str, on_event: EventSink | None, *, cookies: list[dict[str, Any]] | None = None
+    ) -> BrowserSession:
         if safe_public_url(start_url) is None:
             raise ValueError("The recording URL must be a public HTTP(S) URL.")
         from playwright.async_api import async_playwright
@@ -175,10 +280,20 @@ class LocalPlaywrightProvider:
         browser = await runtime.chromium.launch()
         context = await browser.new_context()
         session = PlaywrightRecordingSession(browser=browser, runtime=runtime, live_view_url=None)
-        await _configure_context(context, on_event)
-        page = await context.new_page()
-        _install_page_events(session, page, on_event)
-        context.on("page", lambda new_page: _install_page_events(session, new_page, on_event))
-        await page.goto(start_url, wait_until="domcontentloaded")
-        self.last_session = session
-        return session
+        try:
+            session.approved_url = start_url if on_event is None else None
+            await _configure_context(context, on_event, session.approved_url)
+            if session.approved_url:
+                _guard_private_pages(session, context)
+            if cookies:
+                await context.add_cookies(cookies)
+            page = await context.new_page()
+            if on_event is not None:
+                _install_page_events(session, page, on_event)
+                context.on("page", lambda new_page: _install_page_events(session, new_page, on_event))
+            await page.goto(start_url, wait_until="domcontentloaded")
+            self.last_session = session
+            return session
+        except BaseException:
+            await session.close()
+            raise

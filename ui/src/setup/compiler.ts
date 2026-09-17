@@ -45,11 +45,11 @@ type CompiledAgent = {
 };
 
 const credentialIntentPatterns = [
-  /\b(?:passwords?|pass words?)\b/i,
+  /\b(?:passwords?|passwd|pwd|pass words?)\b/i,
   /\bpasscodes?\b/i,
   /\bsecrets?\b/i,
   /\b(?:api )?tokens?\b/i,
-  /\bapi keys?\b/i,
+  /\b(?:api keys?|apikeys?)\b/i,
   /\bcredentials?\b/i,
   /\bauth\b/i,
   /\bauthenticat(?:e|es|ed|ing|ion)\b/i,
@@ -66,7 +66,7 @@ const credentialIntentPatterns = [
   /\bssn\b/i,
   /\bcredit cards?\b/i,
   /\bcard numbers?\b/i,
-  /\buser names?\b/i,
+  /\b(?:user names?|usernames?)\b/i,
 ];
 const pinIntentPattern = /\b(?:enter|provide|type|use|submit|verify) (?:your )?pin\b|\bpin (?:code|verification)\b|\b(?:my )?pin\s*(?:is|:)\s*\S+\b/i;
 const pinValuePattern = /\bpin(?:\s*=\s*|\s+)(?!(?:report|the|this|that|these|those|a|an|my|your|our)\b)(?:\d+|[a-z0-9]+(?:\s+[a-z0-9]+)*)\b/i;
@@ -75,6 +75,11 @@ const rawReplayPattern = /\b(?:css|xpath|selector)\b|#[a-z][\w-]*(?:\s*[>+~]|\[)
 const maximumNameLength = 150;
 const maximumUrlLength = 2_048;
 const maximumSteps = 200;
+const maximumInputs = 50;
+const maximumInputNameLength = 64;
+const maximumInputExampleLength = 2_000;
+const inputNamePattern = /^[a-zA-Z][a-zA-Z0-9_]*$/;
+const forbiddenInputNames = new Set(["constructor", "prototype", "__proto__"]);
 
 export function compileAgent(draft: SetupDraft): CompiledAgent {
   validateDraft(draft);
@@ -114,9 +119,8 @@ function validateDraft(draft: SetupDraft): void {
   if (draft.steps.length > maximumSteps) {
     throw new Error(`A setup can contain at most ${maximumSteps} demonstrated steps.`);
   }
-  if (draft.inputs.length > 0) {
-    throw new Error("Form-entry tasks are not supported in this release. Remove input and select steps.");
-  }
+  const inputNames = validateInputs(draft.inputs);
+  const usedInputNames = new Set<string>();
 
   const stepIds = new Set<string>();
   for (const step of draft.steps) {
@@ -132,12 +136,71 @@ function validateDraft(draft: SetupDraft): void {
 
     validateStep(step);
     if (step.type === "input" || step.type === "select_change") {
-      throw new Error("Form-entry tasks are not supported in this release. Remove input and select steps.");
-    }
-    if (step.inputName !== undefined) {
-      throw new Error("Reusable inputs are not supported in this release.");
+      const target = optionalStepText(step.target);
+      const value = optionalStepText(step.value);
+      const inputName = optionalStepText(step.inputName);
+      if (target === undefined || target.trim() === "") {
+        throw new Error(`Form step ${step.id} requires a semantic target.`);
+      }
+      if ((value === undefined) === (inputName === undefined)) {
+        throw new Error(`Form step ${step.id} requires either a literal value or one reusable input.`);
+      }
+      if (value !== undefined && value.trim() === "") {
+        throw new Error(`Form step ${step.id} requires a non-empty literal value.`);
+      }
+      if (inputName !== undefined && !inputNames.has(inputName)) {
+        throw new Error(`Form step ${step.id} references unknown input ${inputName}.`);
+      }
+      if (inputName !== undefined) {
+        usedInputNames.add(inputName);
+      }
+    } else if (step.inputName !== undefined) {
+      throw new Error(`Step ${step.id} cannot bind a reusable input.`);
     }
   }
+  for (const inputName of inputNames) {
+    if (!usedInputNames.has(inputName)) {
+      throw new Error(`Reusable input ${inputName} is not used by a form step.`);
+    }
+  }
+}
+
+function validateInputs(inputs: SetupInput[]): Set<string> {
+  if (inputs.length > maximumInputs) {
+    throw new Error(`A setup can contain at most ${maximumInputs} reusable inputs.`);
+  }
+  const names = new Set<string>();
+  for (const [index, input] of inputs.entries()) {
+    const label = `Reusable input ${index + 1}`;
+    requireText(input.name, `${label} name`);
+    if (input.name.length > maximumInputNameLength || !inputNamePattern.test(input.name) || forbiddenInputNames.has(input.name)) {
+      throw new Error(`${label} name must start with a letter and contain at most 64 letters, numbers, or underscores.`);
+    }
+    if (names.has(input.name)) {
+      throw new Error(`Reusable input name ${input.name} is duplicated.`);
+    }
+    requireText(input.label, `${label} label`);
+    requireMaximumLength(input.label, maximumNameLength, `${label} label`);
+    requireText(input.example, `${label} example`);
+    requireMaximumLength(input.example, maximumInputExampleLength, `${label} example`);
+    if (isMaskedValue(input.example)) {
+      throw credentialError();
+    }
+    if (input.type !== "text" && input.type !== "date" && input.type !== "number") {
+      throw new Error(`${label} type must be text, date, or number.`);
+    }
+    if (input.type === "date" && !isCalendarDate(input.example)) {
+      throw new Error(`${label} example must be a valid date in YYYY-MM-DD format.`);
+    }
+    if (input.type === "number" && !isFiniteNumber(input.example)) {
+      throw new Error(`${label} example must be a finite number.`);
+    }
+    if (containsSensitiveText(input.name) || containsSensitiveText(input.label) || containsSensitiveText(input.example)) {
+      throw credentialError();
+    }
+    names.add(input.name);
+  }
+  return names;
 }
 
 function validateStep(step: SetupStep): void {
@@ -168,7 +231,9 @@ function formatStep(step: SetupStep, index: number): string {
   const literalValue = optionalStepText(step.value);
   const expectedOutcome = optionalStepText(step.expectedOutcome);
   const target = targetValue === undefined ? undefined : escapeLiteral(targetValue);
-  const value = literalValue === undefined ? undefined : escapeLiteral(literalValue);
+  const value = step.inputName === undefined
+    ? literalValue === undefined ? undefined : escapeLiteral(literalValue)
+    : `{${step.inputName}}`;
   const description = escapeLiteral(step.description);
 
   const instruction = formatInstruction(step, target, value, description);
@@ -275,6 +340,18 @@ function isMaskedValue(value: string): boolean {
 
 function optionalStepText(value: string | null | undefined): string | undefined {
   return value ?? undefined;
+}
+
+function isCalendarDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+  const date = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
+function isFiniteNumber(value: string): boolean {
+  return /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(value) && Number.isFinite(Number(value));
 }
 
 function looksLikeRawReplay(value: string | null | undefined): boolean {

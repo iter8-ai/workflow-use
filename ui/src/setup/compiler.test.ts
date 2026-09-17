@@ -57,26 +57,66 @@ test("compiles recorder steps with serialized null optional fields", () => {
   assert.doesNotThrow(() => compileAgent(draft));
 });
 
-test("rejects every form-entry step and declared input", () => {
-  const inputStep = baseDraft();
-  inputStep.steps.push({ id: "input", type: "input", description: "Enter report month", target: "Month" });
+test("compiles reviewed reusable and literal form values", () => {
+  const draft = baseDraft();
+  draft.inputs = [{ name: "month", label: "Statement month", type: "date", example: "2026-09-01" }];
+  draft.steps.push({ id: "month", type: "input", description: "Enter the statement month", target: "Statement month", inputName: "month" });
+  draft.steps.push({ id: "format", type: "select_change", description: "Choose the export format", target: "Export format", value: "Report {draft}" });
 
-  const selectStep = baseDraft();
-  selectStep.steps.push({ id: "select", type: "select_change", description: "Choose month", target: "Month" });
+  const compiled = compileAgent(draft);
+  assert.equal(compiled.stages[0]?.type, "agent");
+  assert.match(compiled.stages[0]?.prompt ?? "", /Set Statement month to \{month\}/);
+  assert.match(compiled.stages[0]?.prompt ?? "", /Set Export format to Report \{\{draft\}\}/);
+  assert.deepEqual(compiled.parameters, {});
+});
 
-  const declaredInput = baseDraft();
-  declaredInput.inputs = [{ name: "month", label: "Month", type: "text", example: "September" }];
+test("requires a deliberate form binding and semantic target", () => {
+  const cases: Array<[(draft: SetupDraft) => void, RegExp]> = [
+    [(draft) => { draft.steps.push({ id: "missing", type: "input", description: "Enter month", target: "Month" }); }, /literal value or one reusable input/i],
+    [(draft) => { draft.steps.push({ id: "target", type: "input", description: "Enter month", value: "September" }); }, /semantic target/i],
+    [(draft) => { draft.steps.push({ id: "both", type: "input", description: "Enter month", target: "Month", value: "September", inputName: "month" }); }, /literal value or one reusable input/i],
+    [(draft) => { draft.steps[0] = { ...draft.steps[0], inputName: "month" }; }, /cannot bind a reusable input/i],
+    [(draft) => { draft.steps.push({ id: "unknown", type: "select_change", description: "Choose month", target: "Month", inputName: "missing" }); }, /unknown input missing/i],
+  ];
 
-  for (const draft of [inputStep, selectStep, declaredInput]) {
-    assert.throws(() => compileAgent(draft), /form-entry tasks are not supported/i);
+  for (const [mutate, expected] of cases) {
+    const draft = baseDraft();
+    draft.inputs = [{ name: "month", label: "Month", type: "text", example: "September" }];
+    draft.steps.push({ id: "valid-input", type: "input", description: "Enter month", target: "Month", inputName: "month" });
+    mutate(draft);
+    assert.throws(() => compileAgent(draft), expected);
   }
 });
 
-test("rejects reusable input references", () => {
-  const draft = baseDraft();
-  draft.steps[0] = { ...draft.steps[0], inputName: "month" };
+test("validates reusable input declarations", () => {
+  const cases: Array<[SetupDraft["inputs"], RegExp]> = [
+    [[{ name: "report month", label: "Month", type: "text", example: "September" }], /name must start with a letter/i],
+    [[{ name: "constructor", label: "Month", type: "text", example: "September" }], /name must start with a letter/i],
+    [[{ name: `m${"o".repeat(64)}`, label: "Month", type: "text", example: "September" }], /at most 64/i],
+    [[{ name: "month", label: "Month", type: "text", example: "September" }, { name: "month", label: "Other month", type: "text", example: "October" }], /name month is duplicated/i],
+    [[{ name: "month", label: "", type: "text", example: "September" }], /input 1 label is required/i],
+    [[{ name: "month", label: "Month", type: "choice", example: "September" }] as unknown as SetupDraft["inputs"], /type must be text, date, or number/i],
+    [[{ name: "month", label: "Month", type: "text", example: "" }], /input 1 example is required/i],
+    [[{ name: "month", label: "Month", type: "text", example: "[redacted]" }], /credentials must be managed by the host/i],
+    [[{ name: "month", label: "Month", type: "date", example: "2026-02-30" }], /valid date/i],
+    [[{ name: "month", label: "Month", type: "date", example: "2026-99-99" }], /valid date/i],
+    [[{ name: "amount", label: "Amount", type: "number", example: "twelve" }], /finite number/i],
+    [Array.from({ length: 51 }, (_, index) => ({ name: `input${index}`, label: `Input ${index}`, type: "text" as const, example: "value" })), /at most 50 reusable inputs/i],
+  ];
 
-  assert.throws(() => compileAgent(draft), /reusable inputs are not supported/i);
+  for (const [inputs, expected] of cases) {
+    const draft = baseDraft();
+    draft.inputs = inputs;
+    draft.steps.push(...inputs.map((input, index) => ({ id: `input-${index}`, type: "input" as const, description: "Enter value", target: "Field", inputName: input.name })));
+    assert.throws(() => compileAgent(draft), expected);
+  }
+});
+
+test("rejects reusable inputs that no form step uses", () => {
+  const draft = baseDraft();
+  draft.inputs = [{ name: "month", label: "Month", type: "text", example: "September" }];
+
+  assert.throws(() => compileAgent(draft), /input month.*not used/i);
 });
 
 test("rejects credential intent in saved or prompt-bearing fields", () => {
@@ -366,3 +406,18 @@ test("allows benign PIN report phrases and an API-key hostname", () => {
   url.url = "https://api.key.example/public-report";
   assert.doesNotThrow(() => compileAgent(url));
 });
+
+for (const alias of ["username", "usernames", "apikey", "apikeys", "passwd", "pwd"]) {
+  test(`rejects credential alias ${alias} in metadata and input values`, () => {
+    for (const field of ["name", "label", "example"]) {
+      const draft = baseDraft();
+      const input = { name: "period", label: "Period", type: "text" as const, example: "September", [field]: alias };
+      draft.inputs = [input];
+      draft.steps.push({ id: "period", type: "input", description: "Enter period", target: "Period", inputName: input.name });
+      assert.throws(() => compileAgent(draft), /credentials.*host/i);
+    }
+    const draft = baseDraft();
+    draft.steps.push({ id: "period", type: "input", description: "Enter period", target: "Period", value: alias });
+    assert.throws(() => compileAgent(draft), /credentials.*host/i);
+  });
+}
