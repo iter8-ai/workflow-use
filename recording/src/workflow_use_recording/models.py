@@ -19,14 +19,25 @@ class SetupStep(BaseModel):
 
 
 class CreateRecordingRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
     url: str
+    private_login: bool = Field(default=False, alias="privateLogin")
+
+
+class PrepareRecordingRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    url: str
+
+
+class PrivateViewResponse(BaseModel):
+    live_view_url: str | None = Field(serialization_alias="liveViewUrl")
 
 
 class RecordingResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     id: str
-    status: Literal["recording", "stopped", "expired"]
+    status: Literal["awaiting_login", "verifying_login", "recording", "stopped", "expired"]
     live_view_url: str | None = Field(serialization_alias="liveViewUrl")
     steps: list[SetupStep]
     expires_at: datetime = Field(serialization_alias="expiresAt")

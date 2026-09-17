@@ -54,3 +54,11 @@ async def resolves_to_public_host(url: str) -> bool:
         return all(ipaddress.ip_address(address[4][0]).is_global for address in addresses)
     except ValueError:
         return False
+
+
+def url_origin(url: str) -> tuple[str, str | None, int | None]:
+    parsed = urlsplit(url)
+    try:
+        return parsed.scheme, parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError:
+        return "", None, None

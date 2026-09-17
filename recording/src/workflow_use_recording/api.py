@@ -10,9 +10,9 @@ from typing import Annotated, AsyncIterator
 from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
 from fastapi.responses import JSONResponse
 
-from .models import CreateRecordingRequest, RecordingResponse
+from .models import CreateRecordingRequest, PrepareRecordingRequest, PrivateViewResponse, RecordingResponse
 from .provider import BrowserbaseProvider, BrowserProvider
-from .service import InvalidRecordingUrl, RecordingOwner, RecordingService
+from .service import InvalidRecordingUrl, RecordingConflict, RecordingOwner, RecordingService
 
 SERVICE_UNAVAILABLE = "Recording service is temporarily unavailable."
 
@@ -31,9 +31,7 @@ class RecordingConfig:
 
 
 def create_app(provider: BrowserProvider, config: RecordingConfig) -> FastAPI:
-    service = RecordingService(
-        provider, timeout_seconds=config.timeout_seconds, max_sessions=config.max_sessions
-    )
+    service = RecordingService(provider, timeout_seconds=config.timeout_seconds, max_sessions=config.max_sessions)
     cleanup_task: asyncio.Task[None] | None = None
 
     @asynccontextmanager
@@ -74,26 +72,57 @@ def create_app(provider: BrowserProvider, config: RecordingConfig) -> FastAPI:
 
     @app.post("/recordings", response_model=RecordingResponse, status_code=201)
     async def create_recording(
-        request: CreateRecordingRequest, recording_owner: RecordingOwner = Depends(owner)
+        request: CreateRecordingRequest,
+        recording_owner: RecordingOwner = Depends(owner),
+        idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key", max_length=200)] = None,
     ) -> JSONResponse:
         try:
-            recording = await service.create(recording_owner, request.url)
+            recording = await service.create(
+                recording_owner, request.url, private_login=request.private_login, idempotency_key=idempotency_key
+            )
+        except RecordingConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
         except InvalidRecordingUrl as error:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
         except Exception:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=SERVICE_UNAVAILABLE
-            ) from None
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=SERVICE_UNAVAILABLE) from None
         return _response(service.response(recording), status_code=status.HTTP_201_CREATED)
+
+    async def private_action(action):
+        try:
+            return await action
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Recording not found.") from None
+        except RecordingConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except InvalidRecordingUrl as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except Exception:
+            raise HTTPException(status_code=503, detail=SERVICE_UNAVAILABLE) from None
+
+    @app.get("/recordings/{recording_id}/private-view", response_model=PrivateViewResponse)
+    async def private_view(recording_id: str, recording_owner: RecordingOwner = Depends(owner)) -> JSONResponse:
+        url = await private_action(service.private_view(recording_id, recording_owner))
+        return JSONResponse(content={"liveViewUrl": url}, headers={"Cache-Control": "no-store"})
+
+    @app.post("/recordings/{recording_id}/prepare", response_model=RecordingResponse)
+    async def prepare(
+        recording_id: str, request: PrepareRecordingRequest, recording_owner: RecordingOwner = Depends(owner)
+    ) -> JSONResponse:
+        recording = await private_action(service.prepare(recording_id, recording_owner, request.url))
+        return _response(service.response(recording))
+
+    @app.post("/recordings/{recording_id}/activate", response_model=RecordingResponse)
+    async def activate(recording_id: str, recording_owner: RecordingOwner = Depends(owner)) -> JSONResponse:
+        recording = await private_action(service.activate(recording_id, recording_owner))
+        return _response(service.response(recording))
 
     @app.get("/recordings/{recording_id}", response_model=RecordingResponse)
     async def get_recording(recording_id: str, recording_owner: RecordingOwner = Depends(owner)) -> JSONResponse:
         try:
             recording = await service.get(recording_id, recording_owner)
         except Exception:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=SERVICE_UNAVAILABLE
-            ) from None
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=SERVICE_UNAVAILABLE) from None
         if recording is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -106,9 +135,7 @@ def create_app(provider: BrowserProvider, config: RecordingConfig) -> FastAPI:
         try:
             recording = await service.stop(recording_id, recording_owner)
         except Exception:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=SERVICE_UNAVAILABLE
-            ) from None
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=SERVICE_UNAVAILABLE) from None
         if recording is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording not found.")
         return _response(service.response(recording))
@@ -118,9 +145,7 @@ def create_app(provider: BrowserProvider, config: RecordingConfig) -> FastAPI:
         try:
             deleted = await service.delete(recording_id, recording_owner)
         except Exception:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=SERVICE_UNAVAILABLE
-            ) from None
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=SERVICE_UNAVAILABLE) from None
         if not deleted:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording not found.")
         return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -131,7 +156,7 @@ def create_app(provider: BrowserProvider, config: RecordingConfig) -> FastAPI:
 def _response(recording: RecordingResponse, *, status_code: int = status.HTTP_200_OK) -> JSONResponse:
     body = recording.model_dump(mode="json", by_alias=True)
     body["steps"] = [step.model_dump(mode="json", by_alias=True, exclude_none=True) for step in recording.steps]
-    return JSONResponse(status_code=status_code, content=body)
+    return JSONResponse(status_code=status_code, content=body, headers={"Cache-Control": "no-store"})
 
 
 def create_default_app() -> FastAPI:
