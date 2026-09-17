@@ -387,6 +387,26 @@ test("distinguishes opening from an unavailable browser and permits restart", as
   await expect(setup.getByRole("heading", { name: "Describe the job" })).toBeVisible();
 });
 
+test("reloads a browser that loaded an error page", async ({ page }) => {
+  let firstLoad = true;
+  await page.route("https://live.browserbase.com/**", (route) => {
+    const body = firstLoad ? "<h1>Browser connection failed</h1>" : "<h1>Demonstration website recovered</h1>";
+    firstLoad = false;
+    return route.fulfill({ contentType: "text/html", body });
+  });
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto(`${baseUrl}/host?scenario=success`);
+  const setup = page.frameLocator("iframe");
+  await describe(setup);
+  const browser = setup.frameLocator('iframe[title="Virtual browser"]');
+  await expect(browser.getByRole("heading", { name: "Browser connection failed" })).toBeVisible();
+  await expect(setup.getByRole("button", { name: "Reload browser" })).toBeInViewport({ ratio: 1 });
+  await setup.getByRole("button", { name: "Reload browser" }).click();
+  await expect(browser.getByRole("heading", { name: "Demonstration website recovered" })).toBeVisible();
+  await expect(setup.getByRole("button", { name: "Reload browser" })).toBeVisible();
+  await expect(setup.getByRole("button", { name: "Finish demonstration" })).toBeInViewport({ ratio: 1 });
+});
+
 test("shows recorded navigation destinations while editing their purpose", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=navigation`);
   const setup = page.frameLocator("iframe");

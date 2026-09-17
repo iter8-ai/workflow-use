@@ -500,13 +500,15 @@ function LiveBrowser({ url }: { url: string | null }): JSX.Element {
     const timeout = window.setTimeout(() => setSlow(true), 15_000);
     return () => window.clearTimeout(timeout);
   }, [url, attempt]);
-  return <>
-    {(!loaded || url === null) && <div className="browser-loading" role="status">
-      <p>{slow ? url === null ? "The virtual browser is unavailable. Start over to open a new session." : "The virtual browser has not opened. Retry the browser, or start over if the session is unavailable." : "Opening the virtual browser. This can take a few seconds."}</p>
-      {slow && url !== null && <button className="button button-quiet" type="button" onClick={() => setAttempt((current) => current + 1)}>Retry browser</button>}
-    </div>}
-    {url !== null && <iframe key={attempt} title="Virtual browser" src={url} onLoad={() => setLoaded(true)} onError={() => { setLoaded(false); setSlow(true); }} />}
-  </>;
+  return <div className="live-browser">
+    {url !== null && <div className="browser-toolbar"><button className="button button-quiet" type="button" onClick={() => setAttempt((current) => current + 1)}>Reload browser</button></div>}
+    <div className="browser-viewport">
+      {(!loaded || url === null) && <div className="browser-loading" role="status">
+        <p>{slow ? url === null ? "The virtual browser is unavailable. Start over to open a new session." : "The browser frame is taking longer than expected. Reload the browser, or start over if the session is unavailable." : "Opening the virtual browser. This can take a few seconds."}</p>
+      </div>}
+      {url !== null && <iframe key={attempt} title="Virtual browser" src={url} onLoad={() => setLoaded(true)} onError={() => { setLoaded(false); setSlow(true); }} />}
+    </div>
+  </div>;
 }
 
 function Review(props: { name: string; url: string; goal: string; onName(value: string): void; onGoal(value: string): void; steps: SetupStep[]; busy: boolean; onUpdateStep(id: string, updates: Partial<SetupStep>): void; onRemoveStep(id: string): void; onBack(): void; onContinue(): void }): JSX.Element {

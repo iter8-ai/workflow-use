@@ -554,3 +554,22 @@ select {
   background: #f7f7fb;
   color: #5f667c;
 }
+
+.live-browser {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.browser-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 4px 8px;
+  border-bottom: 1px solid #d9dbe7;
+}
+
+.browser-viewport {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
