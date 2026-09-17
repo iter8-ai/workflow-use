@@ -24,10 +24,12 @@ test("waits for host sign-in without exposing a browser or recording secrets", a
   await expect(setup.getByText("Complete private sign-in in Reiterate. Recording is off while you sign in and verify the fresh session.")).toBeVisible();
   await expect(setup.getByTitle("Virtual browser")).toHaveCount(0);
   await expect(setup.getByRole("button", { name: "Finish demonstration" })).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => window.__startParams)).toEqual({ url: "https://portal.example.test", privateLogin: true });
+  const privateSignIn = page.getByRole("region", { name: "Private sign-in" });
+  await expect(privateSignIn.getByText("Sign in to portal.example.test in Reiterate.")).toBeVisible();
   await page.clock.runFor(46_000);
   await expect(setup.getByText("Waiting for private sign-in", { exact: true })).toBeVisible();
-  await page.evaluate(() => { window.__privateActivated = true; });
+  await privateSignIn.getByRole("button", { name: "Complete private sign-in" }).click();
+  await expect(privateSignIn.getByText("Private sign-in complete.")).toBeVisible();
   await page.clock.runFor(2_100);
   await expect(setup.getByRole("button", { name: "Finish demonstration" })).toBeVisible();
   await expect(setup.getByTitle("Virtual browser")).toBeVisible();
@@ -199,13 +201,17 @@ test("binds a discarded recorded value to a reusable input and tests with its ex
   await setup.getByRole("button", { name: "Continue to test" }).click();
   await setup.getByRole("button", { name: "Run test" }).click();
 
-  await expect.poll(() => page.evaluate(() => window.__testArguments)).toEqual([{ month_number: 9 }]);
-  await expect.poll(() => page.evaluate(() => window.__savedAgents[0]?.config?.stages?.[0]?.prompt)).toContain("Set Statement month to {month_number}");
-  await expect.poll(() => page.evaluate(() => window.__savedAgents[0]?.config?.parameters)).toEqual({});
+  await expect(setup.getByRole("link", { name: "statement-month-9.pdf" })).toBeVisible();
   await setup.getByLabel("I checked the result").check();
   await setup.getByLabel("Schedule daily").check();
   await setup.getByRole("button", { name: "Schedule agent" }).click();
-  await expect.poll(() => page.evaluate(() => window.__scheduleArguments)).toEqual([{ month_number: 9 }]);
+  await expect(setup.getByRole("heading", { name: "Your agent is ready" })).toBeVisible();
+  await setup.getByRole("button", { name: "Open agent" }).click();
+
+  const savedAgent = page.getByRole("region", { name: "Saved agent" });
+  await expect(savedAgent.getByRole("heading", { name: "Download monthly statement" })).toBeVisible();
+  await expect(savedAgent).toContainText("Statement month: 9");
+  await expect(savedAgent).toContainText("Runs daily at 09:00 UTC");
 });
 
 test("ignores a response posted by the setup iframe instead of its host", async ({ page }) => {
@@ -488,8 +494,27 @@ async function completeToTest(setup: FrameLocator): Promise<void> {
 function hostPage(url: string): string {
   const encodedOrigin = encodeURIComponent(url);
   return `<!doctype html>
-<html><body><iframe src="${url}/?parentOrigin=${encodedOrigin}" title="Agent setup"></iframe>
-<style>html,body,iframe{margin:0;width:100%;height:100%;border:0}body{height:100vh}</style>
+<html><body>
+<iframe src="${url}/?parentOrigin=${encodedOrigin}" title="Agent setup"></iframe>
+<section id="private-sign-in" class="host-panel" aria-labelledby="private-sign-in-heading" hidden>
+  <h1 id="private-sign-in-heading">Private sign-in</h1>
+  <p id="private-sign-in-message">Sign in to portal.example.test in Reiterate.</p>
+  <button id="complete-private-sign-in" type="button">Complete private sign-in</button>
+</section>
+<section id="saved-agent" class="host-panel" aria-labelledby="saved-agent-heading" hidden>
+  <h1 id="saved-agent-heading">Saved agent</h1>
+  <h2 id="saved-agent-name"></h2>
+  <p id="saved-agent-input"></p>
+  <p id="saved-agent-schedule"></p>
+</section>
+<style>
+  html,body,iframe{margin:0;width:100%;height:100%;border:0}body{height:100vh}
+  body.with-host-panel{display:grid;grid-template-columns:minmax(0,1fr) 20rem}
+  body.with-host-panel iframe{grid-column:1;width:100%;height:100vh}
+  .host-panel{grid-column:2;padding:2rem;font:16px/1.5 system-ui,sans-serif;background:#f7f7f5;border-left:1px solid #ddd}
+  .host-panel button{padding:.65rem 1rem;font:inherit}
+  [hidden]{display:none!important}
+</style>
 <script>
   let scenario = new URLSearchParams(location.search).get("scenario");
   let readyAttempts = 0;
@@ -503,7 +528,51 @@ function hostPage(url: string): string {
   window.__closeRequests = [];
   window.__savedAgents = [];
   let recordingActive = false;
-  window.__privateActivated = false;
+  let privateActivated = false;
+  let savedAgent = null;
+  let testResult = null;
+  let scheduledAgent = null;
+  const setupFrame = document.querySelector('iframe[title="Agent setup"]');
+  const privateSignIn = document.getElementById("private-sign-in");
+  const privateSignInMessage = document.getElementById("private-sign-in-message");
+  const completePrivateSignIn = document.getElementById("complete-private-sign-in");
+  const savedAgentView = document.getElementById("saved-agent");
+  if (scenario === "private-login" || scenario === "form-entry") document.body.classList.add("with-host-panel");
+  completePrivateSignIn.addEventListener("click", () => {
+    privateActivated = true;
+    privateSignInMessage.textContent = "Private sign-in complete.";
+    completePrivateSignIn.hidden = true;
+  });
+  const executeAgent = (agent, runArguments) => {
+    const prompt = agent?.config?.stages?.find((stage) => stage.type === "agent")?.prompt;
+    const formStep = agent?.draft?.steps?.find((step) => step.type === "input" || step.type === "select_change");
+    const input = agent?.draft?.inputs?.find((candidate) => candidate.name === formStep?.inputName);
+    if (typeof prompt !== "string" || !formStep || !input || !(input.name in runArguments)) {
+      return { status: "failed", error: "The reusable input was not configured." };
+    }
+    const resolvedPrompt = prompt.replace(/\\{([a-zA-Z][a-zA-Z0-9_]*)\\}/g, (_, name) => String(runArguments[name]));
+    const value = runArguments[input.name];
+    if (!resolvedPrompt.includes("Set " + formStep.target + " to " + value)) {
+      return { status: "failed", error: "The reusable input was not applied to the form step." };
+    }
+    return {
+      status: "succeeded",
+      files: [{ name: "statement-month-" + value + ".pdf", url: "https://files.example.test/statement-month-" + value + ".pdf" }],
+      input: { label: input.label, value }
+    };
+  };
+  const dailyTime = (cron) => {
+    const parts = cron.split(" ");
+    return String(parts[1]).padStart(2, "0") + ":" + String(parts[0]).padStart(2, "0");
+  };
+  const showSavedAgent = () => {
+    setupFrame.hidden = true;
+    privateSignIn.hidden = true;
+    document.getElementById("saved-agent-name").textContent = scheduledAgent.agent.draft.name;
+    document.getElementById("saved-agent-input").textContent = scheduledAgent.execution.input.label + ": " + scheduledAgent.execution.input.value;
+    document.getElementById("saved-agent-schedule").textContent = "Runs daily at " + dailyTime(scheduledAgent.cron) + " UTC";
+    savedAgentView.hidden = false;
+  };
   const steps = [
     { id: "open-reports", type: "click", description: "Open the reports section", target: "Reports", expectedOutcome: "The reports list is visible" },
     ...(scenario === "form-entry" ? [{ id: "choose-month", type: "input", description: "Choose the statement month", target: "Statement month", value: "recorded-private-value" }] : []),
@@ -522,24 +591,25 @@ function hostPage(url: string): string {
       if (scenario === "ready-failed" && ++readyAttempts === 1) fail("Connection unavailable.");
       else if (scenario === "delayed-ready") setTimeout(() => send({ schedule: true, privateLogin: true }), 300);
       else send({ schedule: true, privateLogin: true });
-    } else if (request.method === "startRecording") { if (recordingActive) { fail("Finish the current demonstration first."); return; } recordingActive = true; window.__startParams = request.params; if (scenario === "slow-start") { setTimeout(() => send(recording("recording")), 6000); return; } send(scenario === "private-login" ? { ...recording("awaiting_login"), liveViewUrl: null, steps: [] } : recording("recording")); }
+    } else if (request.method === "startRecording") { if (recordingActive) { fail("Finish the current demonstration first."); return; } recordingActive = true; if (scenario === "slow-start") { setTimeout(() => send(recording("recording")), 6000); return; } if (scenario === "private-login") { if (request.params.privateLogin !== true) { fail("Private sign-in was not requested."); return; } privateSignInMessage.textContent = "Sign in to " + new URL(request.params.url).hostname + " in Reiterate."; privateSignIn.hidden = false; send({ ...recording("awaiting_login"), liveViewUrl: null, steps: [] }); } else send(recording("recording")); }
     else if (request.method === "getRecording" || request.method === "stopRecording") {
-      if (scenario === "private-login" && !window.__privateActivated) send({ ...recording("verifying_login"), liveViewUrl: null, steps: [] });
+      if (scenario === "private-login" && !privateActivated) send({ ...recording("verifying_login"), liveViewUrl: null, steps: [] });
       else if (request.method === "getRecording" && scenario === "recording-poll-failed" && ++recordingPolls === 1) fail("Temporary connection problem.");
       else if (request.method === "getRecording" && scenario === "late-recording-poll") setTimeout(() => send(recording("recording")), 1500);
       else send(recording(request.method === "stopRecording" ? "stopped" : "recording"));
     }
     else if (request.method === "cancelRecording") { recordingActive = false; scenario = "success"; send(undefined); }
-    else if (request.method === "saveAgent") { window.__savedAgents.push(request.params); if (++saveAttempts === 2 && scenario === "retry-save-failed") fail("Try the test again."); else send({ id: "agent-1" }); }
-    else if (request.method === "testAgent") { window.__testArguments.push(request.params.arguments); if (++testAttempts === 2 && scenario === "retry-start-failed") fail("Try the test again."); else send({ id: "run-" + testAttempts }); }
+    else if (request.method === "saveAgent") { savedAgent = request.params; window.__savedAgents.push(request.params); if (++saveAttempts === 2 && scenario === "retry-save-failed") fail("Try the test again."); else send({ id: "agent-1" }); }
+    else if (request.method === "testAgent") { window.__testArguments.push(request.params.arguments); testResult = scenario === "form-entry" ? executeAgent(savedAgent, request.params.arguments) : null; if (++testAttempts === 2 && scenario === "retry-start-failed") fail("Try the test again."); else send({ id: "run-" + testAttempts }); }
     else if (request.method === "getTestRun") {
       if (scenario === "test-poll-failed" && ++testPolls === 1) fail("Temporary connection problem.");
       else if (scenario === "running") send({ status: "running" });
       else if (scenario === "no-files") send({ status: "succeeded", files: [] });
       else if (scenario === "failed") send({ status: "failed", error: "The website rejected the request." });
+      else if (scenario === "form-entry") send(testResult);
       else send({ status: "succeeded", files: [{ name: "statement.pdf", url: "https://files.example.test/statement.pdf" }] });
-    } else if (request.method === "scheduleAgent") { window.__savedSchedule = request.params.cron; window.__scheduleArguments.push(request.params.arguments); send(undefined); }
-    else if (request.method === "close") { window.__closeRequests.push(request.params); send(undefined); }
+    } else if (request.method === "scheduleAgent") { window.__savedSchedule = request.params.cron; window.__scheduleArguments.push(request.params.arguments); if (scenario === "form-entry") { const execution = executeAgent(savedAgent, request.params.arguments); if (execution.status !== "succeeded") { fail(execution.error); return; } scheduledAgent = { agent: savedAgent, execution, cron: request.params.cron }; } send(undefined); }
+    else if (request.method === "close") { window.__closeRequests.push(request.params); if (scenario === "form-entry" && scheduledAgent !== null) showSavedAgent(); send(undefined); }
     else fail("Unknown request");
   });
 </script></body></html>`;

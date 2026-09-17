@@ -1,43 +1,84 @@
 import asyncio
-from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
+from playwright.async_api import async_playwright
 
 from workflow_use_recording.api import RecordingConfig, create_app
 from workflow_use_recording.service import InvalidRecordingUrl, RecordingConflict, RecordingOwner, RecordingService
 
 
 class Session:
-    def __init__(self, name):
-        self.live_view_url = f"https://view.example/{name}"
-        self.closed = False
-        self.capture = False
+    """Boundary fake with a real browser page as its disposable resource."""
+
+    def __init__(self, page, *, activation_error=False, close_error=False, close_gate=None):
+        self.page = page
+        self.live_view_url = page.url
+        self.activation_error = activation_error
+        self.close_error = close_error
+        self.close_gate = close_gate
 
     async def close(self):
-        self.closed = True
+        if self.close_gate:
+            started, proceed = self.close_gate
+            started.set()
+            await proceed.wait()
+        if self.close_error:
+            self.close_error = False
+            raise RuntimeError("transient close failure")
+        await self.page.context.close()
 
     async def activate(self, sink):
-        self.capture = True
-        self.sink = sink
+        if self.activation_error:
+            raise RuntimeError("activation failed")
 
 
 class Provider:
-    def __init__(self):
-        self.sessions = []
-        self.preparing = None
-        self.continue_prepare = None
+    def __init__(self, login, fresh, *, prepare_error=False, prepare_gate=None):
+        self.login = login
+        self.fresh = fresh
+        self.prepare_error = prepare_error
+        self.prepare_gate = prepare_gate
 
     async def create_private(self, url):
-        session = Session(str(len(self.sessions)))
-        self.sessions.append(session)
-        return session
+        return self.login
 
     async def prepare(self, login, url):
-        if self.preparing:
-            self.preparing.set()
-            await self.continue_prepare.wait()
-        return await self.create_private(url)
+        if self.prepare_gate:
+            started, proceed = self.prepare_gate
+            started.set()
+            await proceed.wait()
+        if self.prepare_error:
+            raise RuntimeError("prepare failed")
+        return self.fresh
+
+
+@pytest.fixture
+async def make_provider():
+    async with async_playwright() as runtime:
+        browser = await runtime.chromium.launch()
+
+        async def make(
+            *, activation_error=False, close_error=False, close_gate=None, prepare_error=False, prepare_gate=None
+        ):
+            pages = []
+            for name in ["login", "fresh"]:
+                context = await browser.new_context()
+                await context.route("**/*", lambda route: route.fulfill(body="<h1>Private browser</h1>"))
+                page = await context.new_page()
+                await page.goto(f"https://view.example/{name}")
+                pages.append(page)
+            login, fresh = pages
+            provider = Provider(
+                Session(login, close_gate=close_gate),
+                Session(fresh, activation_error=activation_error, close_error=close_error),
+                prepare_error=prepare_error,
+                prepare_gate=prepare_gate,
+            )
+            return provider, login, fresh
+
+        yield make
+        await browser.close()
 
 
 OWNER = RecordingOwner("tenant", "person@example.com")
@@ -47,42 +88,41 @@ READY = "https://example.com/reports"
 
 
 @pytest.mark.asyncio
-async def test_manual_login_is_separate_until_fresh_session_activation():
-    provider = Provider()
+async def test_manual_login_is_separate_until_fresh_session_activation(make_provider):
+    provider, login, fresh = await make_provider()
     service = RecordingService(provider)
     r = await service.create(OWNER, URL, private_login=True, idempotency_key="one")
-    assert r is await service.create(OWNER, URL, private_login=True, idempotency_key="one")
-    assert len(provider.sessions) == 1
+    repeated = await service.create(OWNER, URL, private_login=True, idempotency_key="one")
+    assert repeated.id == r.id
     assert service.response(r).live_view_url is None
-    assert await service.private_view(r.id, OWNER) == provider.sessions[0].live_view_url
+    assert await service.private_view(r.id, OWNER) == login.url
     await service.record_event(r.id, {"type": "input", "target": "password", "secret": True})
-    assert r.steps == [] and r.blocked_reason is None
-    assert not provider.sessions[0].capture
+    assert service.response(r).steps == [] and service.response(r).blocked_reason is None
     await service.prepare(r.id, OWNER, READY)
-    await service.prepare(r.id, OWNER, READY)
-    assert len(provider.sessions) == 2
-    assert not provider.sessions[0].closed
-    assert not provider.sessions[1].capture
-    assert r.status == "verifying_login"
-    assert service.response(r).live_view_url is None
-    assert await service.private_view(r.id, OWNER) == provider.sessions[1].live_view_url
+    prepared = service.response(await service.prepare(r.id, OWNER, READY))
+    assert prepared.status == "verifying_login" and prepared.live_view_url is None
+    assert await login.get_by_role("heading", name="Private browser").is_visible()
+    assert await service.private_view(r.id, OWNER) == fresh.url
+    await service.record_event(r.id, {"type": "click", "target": "Private account"})
+    assert service.response(await service.get(r.id, OWNER)).steps == []
     await service.activate(r.id, OWNER)
-    await service.activate(r.id, OWNER)
-    assert provider.sessions[0].closed and provider.sessions[1].capture
-    assert r.status == "recording" and len(r.steps) == 1
-    assert r.steps[0].url == READY
+    activated = service.response(await service.activate(r.id, OWNER))
+    assert login.is_closed()
+    assert activated.status == "recording" and len(activated.steps) == 1
+    assert activated.steps[0].url == READY
     with pytest.raises(RecordingConflict):
         await service.private_view(r.id, OWNER)
     await service.record_event(r.id, {"type": "navigation", "url": "https://other.example/"})
-    assert len(r.steps) == 1
+    assert len(service.response(await service.get(r.id, OWNER)).steps) == 1
     await service.delete(r.id, OWNER)
-    assert all(s.closed for s in provider.sessions)
+    assert fresh.is_closed()
+    assert await service.get(r.id, OWNER) is None
 
 
 @pytest.mark.asyncio
-async def test_owner_origin_expiry_capacity_and_cancel():
-    provider = Provider()
-    service = RecordingService(provider, max_sessions=1)
+async def test_owner_origin_expiry_capacity_and_cancel(make_provider):
+    provider, login, _ = await make_provider()
+    service = RecordingService(provider, max_sessions=1, timeout_seconds=1)
     r = await service.create(OWNER, URL, private_login=True)
     with pytest.raises(RuntimeError):
         await service.create(OWNER, URL, private_login=True)
@@ -100,32 +140,33 @@ async def test_owner_origin_expiry_capacity_and_cancel():
     ]:
         with pytest.raises(InvalidRecordingUrl):
             await service.prepare(r.id, OWNER, url)
-    r.expires_at = datetime.now(UTC) - timedelta(seconds=1)
-    assert (await service.get(r.id, OWNER)).status == "expired"
-    assert provider.sessions[0].closed
+    await asyncio.sleep(1.05)
+    assert service.response(await service.get(r.id, OWNER)).status == "expired"
+    assert login.is_closed()
     with pytest.raises(RecordingConflict):
         await service.activate(r.id, OWNER)
 
 
 @pytest.mark.asyncio
-async def test_delete_during_preparation_closes_late_fresh_browser():
-    provider = Provider()
+async def test_delete_during_preparation_closes_late_fresh_browser(make_provider):
+    preparing, continue_prepare = asyncio.Event(), asyncio.Event()
+    provider, login, fresh = await make_provider(prepare_gate=(preparing, continue_prepare))
     service = RecordingService(provider)
     r = await service.create(OWNER, URL, private_login=True)
-    provider.preparing, provider.continue_prepare = asyncio.Event(), asyncio.Event()
     task = asyncio.create_task(service.prepare(r.id, OWNER, READY))
-    await provider.preparing.wait()
-    assert (await asyncio.wait_for(service.get(r.id, OWNER), 0.1)).status == "awaiting_login"
+    await asyncio.wait_for(preparing.wait(), 2)
+    assert service.response(await asyncio.wait_for(service.get(r.id, OWNER), 0.1)).status == "awaiting_login"
     await service.delete(r.id, OWNER)
-    provider.continue_prepare.set()
+    continue_prepare.set()
     with pytest.raises(RecordingConflict):
         await task
-    assert all(s.closed for s in provider.sessions)
+    assert login.is_closed() and fresh.is_closed()
+    assert await service.get(r.id, OWNER) is None
 
 
 @pytest.mark.asyncio
-async def test_api_private_capability_is_owner_bound_and_never_public():
-    provider = Provider()
+async def test_api_private_capability_is_owner_bound_and_never_public(make_provider):
+    provider, _, _ = await make_provider()
     app = create_app(provider, RecordingConfig(service_key="key"))
     headers = {
         "X-Workflow-Key": "key",
@@ -155,119 +196,83 @@ async def test_api_private_capability_is_owner_bound_and_never_public():
 
 
 @pytest.mark.asyncio
-async def test_expiry_closes_both_verification_sessions():
-    provider = Provider()
-    service = RecordingService(provider)
+async def test_expiry_closes_both_verification_sessions(make_provider):
+    provider, login, fresh = await make_provider()
+    service = RecordingService(provider, timeout_seconds=1)
     r = await service.create(OWNER, URL, private_login=True)
     await service.prepare(r.id, OWNER, READY)
-    r.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    await asyncio.sleep(1.05)
     await service.cleanup()
-    assert r.status == "expired"
-    assert all(s.closed for s in provider.sessions)
+    assert service.response(await service.get(r.id, OWNER)).status == "expired"
+    assert login.is_closed() and fresh.is_closed()
     with pytest.raises(RecordingConflict):
         await service.private_view(r.id, OWNER)
 
 
 @pytest.mark.asyncio
-async def test_failed_activation_closes_both_sessions():
-    provider = Provider()
+async def test_failed_activation_closes_both_sessions(make_provider):
+    provider, login, fresh = await make_provider(activation_error=True)
     service = RecordingService(provider)
     r = await service.create(OWNER, URL, private_login=True)
     await service.prepare(r.id, OWNER, READY)
-
-    async def fail(sink):
-        raise RuntimeError("activation failed")
-
-    provider.sessions[1].activate = fail
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="activation failed"):
         await service.activate(r.id, OWNER)
-    assert r.status == "stopped"
-    assert all(s.closed for s in provider.sessions)
-    assert r.steps == []
+    result = service.response(await service.get(r.id, OWNER))
+    assert result.status == "stopped" and result.steps == []
+    assert login.is_closed() and fresh.is_closed()
 
 
 @pytest.mark.asyncio
-async def test_close_failure_still_attempts_both_handles_then_retries():
-    provider = Provider()
+async def test_close_failure_still_closes_login_then_cleanup_retries_fresh(make_provider):
+    provider, login, fresh = await make_provider(close_error=True)
     service = RecordingService(provider)
     r = await service.create(OWNER, URL, private_login=True)
     await service.prepare(r.id, OWNER, READY)
-    original = provider.sessions[1].close
-
-    async def fail_once():
-        provider.sessions[1].close = original
-        raise RuntimeError("close failed")
-
-    provider.sessions[1].close = fail_once
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="transient close failure"):
         await service.stop(r.id, OWNER)
-    assert provider.sessions[0].closed
+    assert login.is_closed()
+    assert await fresh.get_by_role("heading", name="Private browser").is_visible()
     assert service.response(r).live_view_url is None
     await service.cleanup()
-    assert all(s.closed for s in provider.sessions)
-    assert r.status == "stopped"
+    assert fresh.is_closed()
+    assert service.response(await service.get(r.id, OWNER)).status == "stopped"
 
 
 @pytest.mark.asyncio
-async def test_failed_preparation_closes_login():
-    provider = Provider()
+async def test_failed_preparation_closes_login(make_provider):
+    provider, login, _ = await make_provider(prepare_error=True)
     service = RecordingService(provider)
     r = await service.create(OWNER, URL, private_login=True)
-
-    async def fail(login, url):
-        raise RuntimeError("prepare failed")
-
-    provider.prepare = fail
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="prepare failed"):
         await service.prepare(r.id, OWNER, READY)
-    assert provider.sessions[0].closed
-    assert r.status == "stopped"
+    assert login.is_closed()
+    assert service.response(await service.get(r.id, OWNER)).status == "stopped"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fail_fresh_close", [False, True])
-async def test_prepare_returning_while_delete_closes_login_is_cleaned_up(fail_fresh_close):
-    provider = Provider()
+async def test_prepare_returning_while_delete_closes_login_is_cleaned_up(make_provider, fail_fresh_close):
+    closing, finish_close = asyncio.Event(), asyncio.Event()
+    preparing, continue_prepare = asyncio.Event(), asyncio.Event()
+    provider, login, fresh = await make_provider(
+        close_error=fail_fresh_close,
+        close_gate=(closing, finish_close),
+        prepare_gate=(preparing, continue_prepare),
+    )
     service = RecordingService(provider)
     recording = await service.create(OWNER, URL, private_login=True)
-    login = provider.sessions[0]
-    closing, finish_close = asyncio.Event(), asyncio.Event()
-    provider.preparing, provider.continue_prepare = asyncio.Event(), asyncio.Event()
-
-    async def close_login():
-        closing.set()
-        await finish_close.wait()
-        login.closed = True
-
-    login.close = close_login
-    original_create = provider.create_private
-
-    async def create_fresh(url):
-        fresh = await original_create(url)
-        original_close = fresh.close
-
-        async def fail_once():
-            fresh.close = original_close
-            raise RuntimeError("transient close failure")
-
-        if fail_fresh_close:
-            fresh.close = fail_once
-        return fresh
-
-    provider.create_private = create_fresh
-    preparing = asyncio.create_task(service.prepare(recording.id, OWNER, READY))
-    await asyncio.wait_for(provider.preparing.wait(), 1)
+    preparing_task = asyncio.create_task(service.prepare(recording.id, OWNER, READY))
+    await asyncio.wait_for(preparing.wait(), 2)
     deleting = asyncio.create_task(service.delete(recording.id, OWNER))
     try:
-        await asyncio.wait_for(closing.wait(), 1)
-        provider.continue_prepare.set()
+        await asyncio.wait_for(closing.wait(), 2)
+        continue_prepare.set()
         with pytest.raises(RuntimeError):
-            await asyncio.wait_for(preparing, 1)
-        assert len(provider.sessions) == 2
-        assert provider.sessions[1].closed is (not fail_fresh_close)
+            await asyncio.wait_for(preparing_task, 2)
+        assert fresh.is_closed() is (not fail_fresh_close)
     finally:
         finish_close.set()
         await deleting
         await service.cleanup()
-    assert all(session.closed for session in provider.sessions)
+    assert login.is_closed() and fresh.is_closed()
     assert await service.get(recording.id, OWNER) is None
