@@ -4,7 +4,7 @@ export type RunArguments = Record<string, string | number>;
 
 export type Recording = {
   id: string;
-  status: "recording" | "stopped" | "expired";
+  status: "awaiting_login" | "verifying_login" | "recording" | "stopped" | "expired";
   liveViewUrl: string | null;
   steps: SetupStep[];
   expiresAt: string;
@@ -18,8 +18,8 @@ export type TestRun = {
 };
 
 type RequestMap = {
-  ready: { params: Record<string, never>; result: { schedule: boolean } };
-  startRecording: { params: { url: string }; result: Recording };
+  ready: { params: Record<string, never>; result: { schedule: boolean; privateLogin?: boolean } };
+  startRecording: { params: { url: string; privateLogin: boolean }; result: Recording };
   getRecording: { params: { id: string }; result: Recording };
   stopRecording: { params: { id: string }; result: Recording };
   cancelRecording: { params: { id: string }; result: undefined };

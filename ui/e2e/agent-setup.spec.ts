@@ -12,6 +12,38 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
+test("waits for host sign-in without exposing a browser or recording secrets", async ({ page }) => {
+  await page.clock.install();
+  await page.goto(`${baseUrl}/host?scenario=private-login`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByLabel("Agent name").fill("Reports");
+  await setup.getByLabel("Website address").fill("https://portal.example.test");
+  await setup.getByLabel("What should the agent do?").fill("Download report");
+  await setup.getByLabel("This website requires sign-in").check();
+  await setup.getByRole("button", { name: "Continue to demonstration" }).click();
+  await expect(setup.getByText("Complete private sign-in in Reiterate. Recording is off while you sign in and verify the fresh session.")).toBeVisible();
+  await expect(setup.getByTitle("Virtual browser")).toHaveCount(0);
+  await expect(setup.getByRole("button", { name: "Finish demonstration" })).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => window.__startParams)).toEqual({ url: "https://portal.example.test", privateLogin: true });
+  await page.clock.runFor(46_000);
+  await expect(setup.getByText("Waiting for private sign-in", { exact: true })).toBeVisible();
+  await page.evaluate(() => { window.__privateActivated = true; });
+  await page.clock.runFor(2_100);
+  await expect(setup.getByRole("button", { name: "Finish demonstration" })).toBeVisible();
+  await expect(setup.getByTitle("Virtual browser")).toBeVisible();
+});
+
+test("locks the website and sign-in choice while a browser is opening", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=slow-start`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByLabel("Agent name").fill("Reports");
+  await setup.getByLabel("Website address").fill("https://portal.example.test");
+  await setup.getByLabel("What should the agent do?").fill("Download report");
+  await setup.getByRole("button", { name: "Continue to demonstration" }).click();
+  await expect(setup.getByLabel("Website address")).toBeDisabled();
+  await expect(setup.getByLabel("This website requires sign-in")).toBeDisabled();
+});
+
 test("takes a user through demonstration, review, testing, and result confirmation", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=success`);
   const setup = page.frameLocator("iframe");
@@ -471,6 +503,7 @@ function hostPage(url: string): string {
   window.__closeRequests = [];
   window.__savedAgents = [];
   let recordingActive = false;
+  window.__privateActivated = false;
   const steps = [
     { id: "open-reports", type: "click", description: "Open the reports section", target: "Reports", expectedOutcome: "The reports list is visible" },
     ...(scenario === "form-entry" ? [{ id: "choose-month", type: "input", description: "Choose the statement month", target: "Statement month", value: "recorded-private-value" }] : []),
@@ -487,11 +520,12 @@ function hostPage(url: string): string {
     const fail = (error) => event.source.postMessage({ type: "workflow-use:response", version: 1, id: request.id, error }, event.origin);
     if (request.method === "ready") {
       if (scenario === "ready-failed" && ++readyAttempts === 1) fail("Connection unavailable.");
-      else if (scenario === "delayed-ready") setTimeout(() => send({ schedule: true }), 300);
-      else send({ schedule: true });
-    } else if (request.method === "startRecording") { if (recordingActive) { fail("Finish the current demonstration first."); return; } recordingActive = true; send(recording("recording")); }
+      else if (scenario === "delayed-ready") setTimeout(() => send({ schedule: true, privateLogin: true }), 300);
+      else send({ schedule: true, privateLogin: true });
+    } else if (request.method === "startRecording") { if (recordingActive) { fail("Finish the current demonstration first."); return; } recordingActive = true; window.__startParams = request.params; if (scenario === "slow-start") { setTimeout(() => send(recording("recording")), 6000); return; } send(scenario === "private-login" ? { ...recording("awaiting_login"), liveViewUrl: null, steps: [] } : recording("recording")); }
     else if (request.method === "getRecording" || request.method === "stopRecording") {
-      if (request.method === "getRecording" && scenario === "recording-poll-failed" && ++recordingPolls === 1) fail("Temporary connection problem.");
+      if (scenario === "private-login" && !window.__privateActivated) send({ ...recording("verifying_login"), liveViewUrl: null, steps: [] });
+      else if (request.method === "getRecording" && scenario === "recording-poll-failed" && ++recordingPolls === 1) fail("Temporary connection problem.");
       else if (request.method === "getRecording" && scenario === "late-recording-poll") setTimeout(() => send(recording("recording")), 1500);
       else send(recording(request.method === "stopRecording" ? "stopped" : "recording"));
     }
