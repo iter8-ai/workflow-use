@@ -332,7 +332,7 @@ class RecordingService:
             recording.creating = False
             if self._closed or self._recordings.get(recording.id) is not recording:
                 close_detached_browser = True
-            elif recording.status not in ACTIVE:
+            elif recording.closing or recording.status not in ACTIVE:
                 close_detached_browser = True
             else:
                 recording.browser = browser

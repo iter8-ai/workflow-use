@@ -222,3 +222,52 @@ async def test_failed_preparation_closes_login():
         await service.prepare(r.id, OWNER, READY)
     assert provider.sessions[0].closed
     assert r.status == "stopped"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_fresh_close", [False, True])
+async def test_prepare_returning_while_delete_closes_login_is_cleaned_up(fail_fresh_close):
+    provider = Provider()
+    service = RecordingService(provider)
+    recording = await service.create(OWNER, URL, private_login=True)
+    login = provider.sessions[0]
+    closing, finish_close = asyncio.Event(), asyncio.Event()
+    provider.preparing, provider.continue_prepare = asyncio.Event(), asyncio.Event()
+
+    async def close_login():
+        closing.set()
+        await finish_close.wait()
+        login.closed = True
+
+    login.close = close_login
+    original_create = provider.create_private
+
+    async def create_fresh(url):
+        fresh = await original_create(url)
+        original_close = fresh.close
+
+        async def fail_once():
+            fresh.close = original_close
+            raise RuntimeError("transient close failure")
+
+        if fail_fresh_close:
+            fresh.close = fail_once
+        return fresh
+
+    provider.create_private = create_fresh
+    preparing = asyncio.create_task(service.prepare(recording.id, OWNER, READY))
+    await asyncio.wait_for(provider.preparing.wait(), 1)
+    deleting = asyncio.create_task(service.delete(recording.id, OWNER))
+    try:
+        await asyncio.wait_for(closing.wait(), 1)
+        provider.continue_prepare.set()
+        with pytest.raises(RuntimeError):
+            await asyncio.wait_for(preparing, 1)
+        assert len(provider.sessions) == 2
+        assert provider.sessions[1].closed is (not fail_fresh_close)
+    finally:
+        finish_close.set()
+        await deleting
+        await service.cleanup()
+    assert all(session.closed for session in provider.sessions)
+    assert await service.get(recording.id, OWNER) is None

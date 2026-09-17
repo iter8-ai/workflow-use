@@ -1,15 +1,17 @@
+import asyncio
 import sys
 from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from workflow_use_recording.provider import BrowserbaseProvider
+from workflow_use_recording.provider import BrowserbaseProvider, PlaywrightRecordingSession
 
 
 class Page:
     def __init__(self):
         self.url = "about:blank"
         self.main_frame = self
+        self.frames = [self]
         self.evaluated = []
         self.callbacks = {}
 
@@ -180,3 +182,42 @@ async def test_navigation_guard_applies_before_and_after_activation(browserbase,
         assert await request("https://elsewhere.example.com/login", True) == ["abort"]
         assert await request("http://127.0.0.1/private", False) == ["abort"]
     await login.close()
+
+
+@pytest.mark.asyncio
+async def test_activation_captures_clicks_in_existing_iframe_documents():
+    from playwright.async_api import async_playwright
+
+    runtime = await async_playwright().start()
+    browser = await runtime.chromium.launch()
+    session = PlaywrightRecordingSession(browser=browser, runtime=runtime, live_view_url=None)
+    session.approved_url = "https://app.example.com/reports"
+    events = []
+    captured = asyncio.Event()
+
+    async def sink(event):
+        events.append(event)
+        if event.get("type") == "click" and event.get("target") == "Download report":
+            captured.set()
+
+    async def serve(route):
+        body = (
+            "<button>Download report</button>"
+            if route.request.url.endswith("/frame")
+            else '<button>Open report</button><iframe src="/frame"></iframe>'
+        )
+        await route.fulfill(content_type="text/html", body=body)
+
+    try:
+        context = await browser.new_context()
+        await context.route("**/*", serve)
+        page = await context.new_page()
+        await page.goto(session.approved_url)
+        await page.frame_locator("iframe").get_by_role("button").wait_for()
+        await session.activate(sink)
+        await page.get_by_role("button", name="Open report").click()
+        await page.frame_locator("iframe").get_by_role("button", name="Download report").click()
+        await asyncio.wait_for(captured.wait(), 1)
+        assert any(event.get("target") == "Open report" for event in events)
+    finally:
+        await session.close()

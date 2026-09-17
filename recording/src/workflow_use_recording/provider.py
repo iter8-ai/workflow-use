@@ -61,7 +61,8 @@ class PlaywrightRecordingSession:
         await _install_capture(context, on_event)
         for page in context.pages:
             _install_page_events(self, page, on_event)
-            await page.evaluate(CAPTURE_SCRIPT)
+            for frame in page.frames:
+                await frame.evaluate(CAPTURE_SCRIPT)
         context.on("page", lambda page: _install_page_events(self, page, on_event))
         self._capture_active = True
 
