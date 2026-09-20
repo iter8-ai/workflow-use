@@ -307,7 +307,6 @@ test("rejects PIN credential values", () => {
     "PIN-1234",
     "PIN=1234",
     "PIN = 1234",
-    "PIN ABCD",
     "Pin 1234",
     "Pin-1234",
     "Pin=1234",
@@ -372,6 +371,20 @@ test("rejects compact credential names in text and URL paths", () => {
   }
 });
 
+test("rejects slash-separated credential intent in text and URL paths", () => {
+  for (const text of ["Sign/in to continue", "Log/in", "Enter user/name", "Enter api/key", "Enter pass/word"]) {
+    const draft = baseDraft();
+    draft.steps[0] = { ...draft.steps[0], description: text };
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, text);
+  }
+
+  for (const path of ["sign/in", "log/in", "user/name", "api/key", "pass/word"]) {
+    const draft = baseDraft();
+    draft.url = `https://portal.example.test/${path}`;
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, path);
+  }
+});
+
 test("allows PIN action phrases without allowing PIN values", () => {
   for (const text of [
     "Pin invoice to dashboard",
@@ -384,13 +397,18 @@ test("allows PIN action phrases without allowing PIN values", () => {
     "pin task",
     "pin note",
     "pin abcd",
+    "PIN THIS REPORT",
+    "PIN TASK",
+    "PIN NOTE",
+    "PIN FILE",
+    "PIN ABCD",
   ]) {
     const draft = baseDraft();
     draft.steps[0] = { ...draft.steps[0], description: text };
     assert.doesNotThrow(() => compileAgent(draft), text);
   }
 
-  for (const text of ["PIN 1234", "PIN ABCD", "the PIN ABCD", "PIN A1B2", "PIN=abcdef", "Pin 1234"]) {
+  for (const text of ["PIN 1234", "PIN A1B2", "PIN=abcdef", "Pin 1234", "Enter PIN ABCD", "the PIN is ABCD"]) {
     const draft = baseDraft();
     draft.steps[0] = { ...draft.steps[0], description: text };
     assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, text);
