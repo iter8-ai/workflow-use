@@ -312,14 +312,10 @@ test("rejects PIN credential values", () => {
     "Pin-1234",
     "Pin=1234",
     "Pin = 1234",
-    "Pin ABCD",
     "pin 1234",
     "pin-1234",
     "pin=1234",
     "pin = 1234",
-    "pin abcd",
-    "pin ABCD",
-    "pin AbCd",
   ]) {
     const draft = baseDraft();
     draft.steps[0] = { ...draft.steps[0], description: text };
@@ -350,6 +346,54 @@ test("allows ordinary one-time work but rejects one-time credential phrases", ()
     const draft = baseDraft();
     draft.steps[0] = { ...draft.steps[0], description: text };
     assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
+  }
+});
+
+test("rejects compact credential names in text and URL paths", () => {
+  for (const text of [
+    "Enter apikey",
+    "Enter apikeys",
+    "Enter API keys",
+    "Enter username",
+    "Enter usernames",
+    "Enter onetime code",
+    "Enter onetime-code",
+    "Enter onetimecode",
+  ]) {
+    const draft = baseDraft();
+    draft.steps[0] = { ...draft.steps[0], description: text };
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, text);
+  }
+
+  for (const path of ["apikey", "api-keys", "username", "usernames", "onetime-code", "onetime%20code", "onetimecode"]) {
+    const draft = baseDraft();
+    draft.url = `https://portal.example.test/${path}`;
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, path);
+  }
+});
+
+test("allows PIN action phrases without allowing PIN values", () => {
+  for (const text of [
+    "Pin invoice to dashboard",
+    "Pin dashboard",
+    "Pin to dashboard",
+    "pin invoice to dashboard",
+    "pin dashboard",
+    "pin to dashboard",
+    "pin file",
+    "pin task",
+    "pin note",
+    "pin abcd",
+  ]) {
+    const draft = baseDraft();
+    draft.steps[0] = { ...draft.steps[0], description: text };
+    assert.doesNotThrow(() => compileAgent(draft), text);
+  }
+
+  for (const text of ["PIN 1234", "PIN ABCD", "the PIN ABCD", "PIN A1B2", "PIN=abcdef", "Pin 1234"]) {
+    const draft = baseDraft();
+    draft.steps[0] = { ...draft.steps[0], description: text };
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, text);
   }
 });
 

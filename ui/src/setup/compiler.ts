@@ -49,7 +49,7 @@ const credentialIntentPatterns = [
   /\bpasscodes?\b/i,
   /\bsecrets?\b/i,
   /\b(?:api )?tokens?\b/i,
-  /\bapi keys?\b/i,
+  /\bapi ?keys?\b/i,
   /\bcredentials?\b/i,
   /\bauth\b/i,
   /\bauthenticat(?:e|es|ed|ing|ion)\b/i,
@@ -57,7 +57,7 @@ const credentialIntentPatterns = [
   /\boauth(?:2)?\b/i,
   /\b(?:log(?:ged|ging)?\s*(?:in|into|on)|logins?|logons?)\b/i,
   /\b(?:sign(?:ed|ing)?\s*(?:in|into|on)|signins?|signons?)\b/i,
-  /\bone time (?:password|passcode|code)\b/i,
+  /\b(?:one ?time) ?(?:passwords?|passcodes?|codes?)\b/i,
   /\b(?:one time )?(?:otp|totp)\b/i,
   /\b(?:mfa|m f a|2fa|2 fa|2 f a)\b/i,
   /\bverification code\b/i,
@@ -66,10 +66,11 @@ const credentialIntentPatterns = [
   /\bssn\b/i,
   /\bcredit cards?\b/i,
   /\bcard numbers?\b/i,
-  /\buser names?\b/i,
+  /\buser ?names?\b/i,
 ];
 const pinIntentPattern = /\b(?:enter|provide|type|use|submit|verify) (?:your )?pin\b|\bpin (?:code|verification)\b|\b(?:my )?pin\s*(?:is|:)\s*\S+\b/i;
-const pinValuePattern = /\bpin(?:\s*=\s*|\s+)(?!(?:report|the|this|that|these|those|a|an|my|your|our)\b)(?:\d+|[a-z0-9]+(?:\s+[a-z0-9]+)*)\b/i;
+const pinValuePattern = /\bpin\s*[:=]\s*\S+|\bpin\s+(?:\d+|(?=[a-z0-9]*\d)[a-z0-9]+)\b/i;
+const uppercasePinValuePattern = /\bPIN[\s_\p{Pd}\u2212]+[A-Z]{4}\b/u;
 const maximumPathDecodes = 4;
 const rawReplayPattern = /\b(?:css|xpath|selector)\b|#[a-z][\w-]*(?:\s*[>+~]|\[)|\[[^\]]+\]|(?:^|\s)(?:x|y)\s*[:=]\s*\d+|^\s*\d+(?:px)?\s*,\s*\d+(?:px)?\s*$/i;
 const maximumNameLength = 150;
@@ -239,6 +240,8 @@ function containsSensitiveText(value: string): boolean {
   const normalized = normalizeIntentText(value);
   return credentialIntentPatterns.some((pattern) => pattern.test(normalized))
     || pinIntentPattern.test(normalized)
+    || uppercasePinValuePattern.test(value)
+    || pinValuePattern.test(value)
     || pinValuePattern.test(normalized);
 }
 
