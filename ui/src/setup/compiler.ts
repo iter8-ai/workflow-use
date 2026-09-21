@@ -52,7 +52,7 @@ const credentialIntentPatterns = [
   /\bapi ?keys?\b/i,
   /\bcredentials?\b/i,
   /\bauth\b/i,
-  /\bauthenticat(?:e|es|ed|ing|ion)\b/i,
+  /\bauthenticat(?:e|es|ed|ing|ion|or|ors)\b/i,
   /\bauthoriz(?:e|es|ed|ing|ation|ations)\b/i,
   /\boauth(?:2)?\b/i,
   /\b(?:log(?:ged|ging)?\s*(?:in|into|on)|logins?|logons?)\b/i,
@@ -68,8 +68,10 @@ const credentialIntentPatterns = [
   /\bcard numbers?\b/i,
   /\buser ?names?\b/i,
 ];
-const pinIntentPattern = /\b(?:enter|provide|type|use|submit|verify) (?:(?:the|your) )?pin\b|\bpin (?:code|number|verification)\b|\bpersonal identification number\b|\b(?:my )?pin\s*(?:is|:)\s*\S+\b/i;
-const pinValuePattern = /\bpin\s*[:=]\s*\S+|\bpin\s+(?=[a-z0-9]{4,12}\b)(?=[a-z0-9]*\d)[a-z0-9]+\b/i;
+const pinIntentPattern = /\b(?:enter|provide|type|use|submit|verify) (?:(?:the|your) )?pin\b|\b(?:my|your|our) pin\b|\bpin (?:code|number|verification)\b|\bpersonal identification number\b|\b(?:my )?pin\s*(?:is|:)\s*\S+\b/i;
+const pinAssignmentPattern = /\bpin\s*[:=]\s*\S+/iu;
+const pinCodePattern = /\bpin\s*(?=[\p{L}\p{N}]{4,12}(?![\p{L}\p{N}]))(?=[\p{L}\p{N}]*\p{N})[\p{L}\p{N}]+/iu;
+const hostnamePattern = /\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\b/giu;
 const maximumPathDecodes = 4;
 const rawReplayPattern = /\b(?:css|xpath|selector)\b|#[a-z][\w-]*(?:\s*[>+~]|\[)|\[[^\]]+\]|(?:^|\s)(?:x|y)\s*[:=]\s*\d+|^\s*\d+(?:px)?\s*,\s*\d+(?:px)?\s*$/i;
 const maximumNameLength = 150;
@@ -218,7 +220,10 @@ function validateUrl(value: string, label: string): void {
   if (url.search !== "" || url.hash !== "") {
     throw new Error(`${label} must not include query parameters or a fragment.`);
   }
-  if (containsSensitiveText(decodedPathname(url.pathname))) {
+  if (
+    containsSensitiveText(decodedPathname(rawPathname(value)), false)
+    || containsSensitiveText(decodedPathname(url.pathname), false)
+  ) {
     throw credentialError();
   }
 }
@@ -235,12 +240,13 @@ function requireMaximumLength(value: string, maximum: number, label: string): vo
   }
 }
 
-function containsSensitiveText(value: string): boolean {
-  const normalized = normalizeIntentText(value);
+function containsSensitiveText(value: string, allowHostname = true): boolean {
+  const inspected = allowHostname ? value.replace(hostnamePattern, " ") : value;
+  const normalized = normalizeIntentText(inspected);
   return credentialIntentPatterns.some((pattern) => pattern.test(normalized))
     || pinIntentPattern.test(normalized)
-    || pinValuePattern.test(value)
-    || pinValuePattern.test(normalized);
+    || pinAssignmentPattern.test(inspected)
+    || pinCodePattern.test(normalized);
 }
 
 function normalizeIntentText(value: string): string {
@@ -268,6 +274,12 @@ function decodedPathname(value: string): string {
     decoded = next;
   }
   throw credentialError();
+}
+
+function rawPathname(value: string): string {
+  const schemeEnd = value.indexOf("://");
+  const pathStart = value.indexOf("/", schemeEnd + 3);
+  return pathStart === -1 ? "" : value.slice(pathStart).split(/[?#]/, 1)[0]!;
 }
 
 function isMaskedValue(value: string): boolean {

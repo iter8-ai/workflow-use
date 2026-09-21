@@ -392,6 +392,12 @@ test("rejects punctuation-separated credential intent in text and URL paths", ()
   }
 });
 
+test("rejects raw credential URL segments before URL normalization", () => {
+  const draft = baseDraft();
+  draft.url = "https://portal.example.test/password/2468/../../reports";
+  assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
+});
+
 test("allows PIN action phrases without allowing PIN values", () => {
   for (const text of [
     "Pin invoice to dashboard",
@@ -425,6 +431,13 @@ test("allows PIN action phrases without allowing PIN values", () => {
     "Enter PIN ABCD",
     "Enter the PIN number 2468",
     "Enter personal identification number 2468",
+    "Enter authenticator code 123456",
+    "Enter my PIN",
+    "Paste your PIN",
+    "Fill in your PIN",
+    "PIN1234",
+    "PIN ١٢٣٤",
+    "PIN\u200B1234",
     "the PIN is ABCD",
   ]) {
     const draft = baseDraft();
@@ -445,4 +458,12 @@ test("allows benign PIN report phrases and an API-key hostname", () => {
   const url = baseDraft();
   url.url = "https://api.key.example/public-report";
   assert.doesNotThrow(() => compileAgent(url));
+
+  const recordedHost = baseDraft();
+  recordedHost.steps[0] = { ...recordedHost.steps[0], description: "Open api.key.example" };
+  assert.doesNotThrow(() => compileAgent(recordedHost));
+
+  const recordedCredentialPath = baseDraft();
+  recordedCredentialPath.steps[0] = { ...recordedCredentialPath.steps[0], description: "Open api.key.example/password" };
+  assert.throws(() => compileAgent(recordedCredentialPath), /credentials.*managed by the host/i);
 });
