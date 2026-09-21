@@ -68,8 +68,8 @@ const credentialIntentPatterns = [
   /\bcard numbers?\b/i,
   /\buser ?names?\b/i,
 ];
-const pinIntentPattern = /\b(?:enter|provide|type|use|submit|verify) (?:your )?pin\b|\bpin (?:code|verification)\b|\b(?:my )?pin\s*(?:is|:)\s*\S+\b/i;
-const pinValuePattern = /\bpin\s*[:=]\s*\S+|\bpin\s+(?:\d+|(?=[a-z0-9]*\d)[a-z0-9]+)\b/i;
+const pinIntentPattern = /\b(?:enter|provide|type|use|submit|verify) (?:(?:the|your) )?pin\b|\bpin (?:code|number|verification)\b|\bpersonal identification number\b|\b(?:my )?pin\s*(?:is|:)\s*\S+\b/i;
+const pinValuePattern = /\bpin\s*[:=]\s*\S+|\bpin\s+(?=[a-z0-9]{4,12}\b)(?=[a-z0-9]*\d)[a-z0-9]+\b/i;
 const maximumPathDecodes = 4;
 const rawReplayPattern = /\b(?:css|xpath|selector)\b|#[a-z][\w-]*(?:\s*[>+~]|\[)|\[[^\]]+\]|(?:^|\s)(?:x|y)\s*[:=]\s*\d+|^\s*\d+(?:px)?\s*,\s*\d+(?:px)?\s*$/i;
 const maximumNameLength = 150;
@@ -249,7 +249,7 @@ function normalizeIntentText(value: string): string {
     .replace(/\p{M}|\p{Cf}/gu, "")
     .replace(/([a-z])([A-Z])/g, "$1 $2")
     .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
-    .replace(/[./_\p{Pd}\u2212\s]+/gu, " ")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
     .trim();
 }
 

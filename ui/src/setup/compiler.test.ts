@@ -371,14 +371,21 @@ test("rejects compact credential names in text and URL paths", () => {
   }
 });
 
-test("rejects slash-separated credential intent in text and URL paths", () => {
-  for (const text of ["Sign/in to continue", "Log/in", "Enter user/name", "Enter api/key", "Enter pass/word"]) {
+test("rejects punctuation-separated credential intent in text and URL paths", () => {
+  for (const text of [
+    "Sign/in to continue",
+    "Log\\in",
+    "Enter user:name",
+    "Enter api+key",
+    "Enter pass/word",
+    "Enter the one:time code 2468",
+  ]) {
     const draft = baseDraft();
     draft.steps[0] = { ...draft.steps[0], description: text };
     assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, text);
   }
 
-  for (const path of ["sign/in", "log/in", "user/name", "api/key", "pass/word"]) {
+  for (const path of ["sign/in", "log%5Cin", "user%3Aname", "api%2Bkey", "pass/word", "one%3Atime%20code"]) {
     const draft = baseDraft();
     draft.url = `https://portal.example.test/${path}`;
     assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, path);
@@ -402,13 +409,24 @@ test("allows PIN action phrases without allowing PIN values", () => {
     "PIN NOTE",
     "PIN FILE",
     "PIN ABCD",
+    "Pin 2 reports to the dashboard",
+    "Pin 3 files for review",
   ]) {
     const draft = baseDraft();
     draft.steps[0] = { ...draft.steps[0], description: text };
     assert.doesNotThrow(() => compileAgent(draft), text);
   }
 
-  for (const text of ["PIN 1234", "PIN A1B2", "PIN=abcdef", "Pin 1234", "Enter PIN ABCD", "the PIN is ABCD"]) {
+  for (const text of [
+    "PIN 1234",
+    "PIN A1B2",
+    "PIN=abcdef",
+    "Pin 1234",
+    "Enter PIN ABCD",
+    "Enter the PIN number 2468",
+    "Enter personal identification number 2468",
+    "the PIN is ABCD",
+  ]) {
     const draft = baseDraft();
     draft.steps[0] = { ...draft.steps[0], description: text };
     assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, text);
