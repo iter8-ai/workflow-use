@@ -951,3 +951,38 @@ for (const goal of [
     assert.doesNotThrow(() => compileAgent(draft));
   });
 }
+
+for (const [texts, sensitive] of [
+  [["root2password1234", "ops7apikey1234", "service1token1234", "userpassword1234", "teamXsecret1234"], true],
+  [["oldsecretary2024", "banktokenomics2024", "user1author2024", "team7secretary2024"], false],
+] as const) {
+  for (const text of texts) {
+    for (const field of ["name", "goal", "description", "target", "expectedOutcome", "value", "url"] as const) {
+      test(`classifies prefixed token ${text} in ${field}`, () => {
+        const draft = baseDraft();
+        if (field === "url") draft.url = `https://portal.example.test/${text}`;
+        else if (field === "name" || field === "goal") draft[field] = text;
+        else draft.steps[0] = { ...draft.steps[0], [field]: text };
+        if (sensitive) assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
+        else assert.doesNotThrow(() => compileAgent(draft));
+      });
+    }
+  }
+}
+
+for (const [texts, sensitive] of [
+  [["Set your pin at 10 Downing Street on this map", "Choose my pin for the map", "Place our pin near 5th Avenue on that map"], false],
+  [["Enter your pin on the map", "Show my pin on the map", "Set your pin to ABCD on the map", "Place our pin A1B2 on the map", "Choose my pin for the map then reveal PIN", "Place our pin:ABCD on the map", "Place pin near show pin on the map"], true],
+] as const) {
+  for (const text of texts) {
+    for (const field of ["goal", "description", "target"] as const) {
+      test(`classifies full map action ${text} in ${field}`, () => {
+        const draft = baseDraft();
+        if (field === "goal") draft.goal = text;
+        else draft.steps[0] = { ...draft.steps[0], [field]: text };
+        if (sensitive) assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
+        else assert.doesNotThrow(() => compileAgent(draft));
+      });
+    }
+  }
+}
