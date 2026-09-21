@@ -563,7 +563,7 @@ test("rejects PIN action intent across goals, descriptions, and targets", () => 
     (draft, text) => { draft.steps[0] = { ...draft.steps[0], target: text }; },
   ];
 
-  for (const action of ["Reset", "Change", "Update", "Paste", "Fill in", "Insert"]) {
+  for (const action of ["Reset", "Set", "Change", "Update", "Copy", "Send", "Choose", "Paste", "Fill in", "Insert"]) {
     for (const determiner of ["", "the "]) {
       const text = `${action} ${determiner}PIN`;
       for (const mutate of mutations) {
@@ -589,16 +589,44 @@ test("rejects normalized PIN assignment phrases", () => {
 
 test("allows setting a map pin to a place", () => {
   const draft = baseDraft();
-  draft.goal = "Set the pin to London";
+  draft.goal = "Set the map pin to London";
 
   assert.doesNotThrow(() => compileAgent(draft));
 });
 
-test("rejects a sensitive PIN assignment after a benign map assignment", () => {
-  const draft = baseDraft();
-  draft.goal = "Set the pin to London, then set the PIN to ABCD";
+test("rejects alphabetic PIN assignments across goals, descriptions, and targets", () => {
+  const mutations: Array<(draft: SetupDraft, text: string) => void> = [
+    (draft, text) => { draft.goal = text; },
+    (draft, text) => { draft.steps[0] = { ...draft.steps[0], description: text }; },
+    (draft, text) => { draft.steps[0] = { ...draft.steps[0], target: text }; },
+  ];
 
-  assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
+  for (const value of ["abcd", "Abcd"]) {
+    for (const prefix of ["", "Set the map pin to London, then "]) {
+      const text = `${prefix}set the PIN to ${value}`;
+      for (const mutate of mutations) {
+        const draft = baseDraft();
+        mutate(draft, text);
+        assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, text);
+      }
+    }
+  }
+});
+
+test("allows content PIN identifiers only in explicit click and path contexts", () => {
+  const click = baseDraft();
+  click.steps[0] = {
+    ...click.steps[0],
+    description: "Choose PIN REPORT2024",
+    target: "Choose PIN REPORT2024",
+  };
+  assert.doesNotThrow(() => compileAgent(click));
+
+  for (const identifier of ["DEMO1234", "OTP1234", "CODE1234"]) {
+    const draft = baseDraft();
+    draft.url = `https://portal.example.test/pin/${identifier}`;
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, identifier);
+  }
 });
 
 test("allows recorded clicks that pin report identifiers", () => {
@@ -669,7 +697,7 @@ test("rejects uppercase PIN assignments after a determiner", () => {
   assert.throws(() => compileAgent(path), /credentials.*managed by the host/i);
 
   const mapPin = baseDraft();
-  mapPin.goal = "Set the pin to London";
+  mapPin.goal = "Set the map pin to London";
   assert.doesNotThrow(() => compileAgent(mapPin));
 });
 
