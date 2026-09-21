@@ -47,6 +47,7 @@ type CompiledAgent = {
 const credentialIntentPatterns = [
   /\b(?:passwords?|pass words?)\b/i,
   /\bpasscodes?\b/i,
+  /\bpassphrases?\b/i,
   /\bsecrets?\b/i,
   /\b(?:api )?tokens?\b/i,
   /\bapi ?keys?\b/i,
@@ -60,7 +61,8 @@ const credentialIntentPatterns = [
   /\b(?:one ?time) ?(?:passwords?|passcodes?|codes?)\b/i,
   /\b(?:one time )?(?:otp|totp)\b/i,
   /\b(?:mfa|m f a|2fa|2 fa|2 f a)\b/i,
-  /\bverification code\b/i,
+  /\bverification codes?\b/i,
+  /\brecovery codes?\b/i,
   /\b(?:cvv|cvc)\b/i,
   /\bsocial security(?: number)?\b/i,
   /\bssn\b/i,
@@ -68,10 +70,10 @@ const credentialIntentPatterns = [
   /\bcard numbers?\b/i,
   /\buser ?names?\b/i,
 ];
-const pinIntentPattern = /\b(?:enter|provide|type|use|submit|verify) (?:(?:the|your) )?pin\b|\b(?:my|your|our) pin\b|\bpin (?:code|number|verification)\b|\bpersonal identification number\b|\b(?:my )?pin\s*(?:is|:)\s*\S+\b/i;
+const pinIntentPattern = /\b(?:enter|provide|type|use|submit|verify) (?:(?:the|your) )?pin\b|\b(?:a|account|my|your|our) pin\b|\bpin (?:code|number|verification)\b|\bpersonal identification number\b|\b(?:my )?pin\s*(?:is|:)\s*\S+\b/i;
 const pinAssignmentPattern = /\bpin\s*[:=]\s*\S+/iu;
-const pinCodePattern = /\bpin\s*(?=[\p{L}\p{N}]{4,12}(?![\p{L}\p{N}]))(?=[\p{L}\p{N}]*\p{N})[\p{L}\p{N}]+/iu;
-const hostnamePattern = /\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\b/giu;
+const pinCodePattern = /\b[Pp][Ii][Nn]\s*(?:\p{N}{4,12}|(?=[A-Z0-9]{4,8}(?![A-Z0-9]))(?=[A-Z0-9]*\d)[A-Z0-9]+)\s*$/u;
+const recorderHostDescriptionPattern = /^\s*open\s+(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\s*[.!]?\s*$/i;
 const maximumPathDecodes = 4;
 const rawReplayPattern = /\b(?:css|xpath|selector)\b|#[a-z][\w-]*(?:\s*[>+~]|\[)|\[[^\]]+\]|(?:^|\s)(?:x|y)\s*[:=]\s*\d+|^\s*\d+(?:px)?\s*,\s*\d+(?:px)?\s*$/i;
 const maximumNameLength = 150;
@@ -240,12 +242,14 @@ function requireMaximumLength(value: string, maximum: number, label: string): vo
   }
 }
 
-function containsSensitiveText(value: string, allowHostname = true): boolean {
-  const inspected = allowHostname ? value.replace(hostnamePattern, " ") : value;
-  const normalized = normalizeIntentText(inspected);
+function containsSensitiveText(value: string, allowRecorderHost = true): boolean {
+  if (allowRecorderHost && recorderHostDescriptionPattern.test(value)) {
+    return false;
+  }
+  const normalized = normalizeIntentText(value);
   return credentialIntentPatterns.some((pattern) => pattern.test(normalized))
     || pinIntentPattern.test(normalized)
-    || pinAssignmentPattern.test(inspected)
+    || pinAssignmentPattern.test(value)
     || pinCodePattern.test(normalized);
 }
 
@@ -278,8 +282,11 @@ function decodedPathname(value: string): string {
 
 function rawPathname(value: string): string {
   const schemeEnd = value.indexOf("://");
-  const pathStart = value.indexOf("/", schemeEnd + 3);
-  return pathStart === -1 ? "" : value.slice(pathStart).split(/[?#]/, 1)[0]!;
+  const remainder = value.slice(schemeEnd + 3);
+  const relativePathStart = remainder.search(/[\\/]/);
+  return relativePathStart === -1
+    ? ""
+    : remainder.slice(relativePathStart).split(/[?#]/, 1)[0]!.replace(/\\/g, "/");
 }
 
 function isMaskedValue(value: string): boolean {
