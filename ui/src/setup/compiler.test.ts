@@ -812,6 +812,26 @@ for (const text of ["mypasswordless1234", "mytokenization1234"]) {
 }
 
 const appendedCredentialCases: Array<[string, (draft: SetupDraft, text: string) => void]> = [
+  ["mytoken1234", (draft, text) => { draft.goal = text; }],
+  ["mysecret1234", (draft, text) => { draft.name = text; }],
+  ["myapikey1234", (draft, text) => { draft.steps[0] = { ...draft.steps[0], description: text }; }],
+  ["accountpassword1234", (draft, text) => { draft.steps[0] = { ...draft.steps[0], target: text }; }],
+  ["mypasswordabc1234", (draft, text) => { draft.steps[0] = { ...draft.steps[0], expectedOutcome: text }; }],
+  ["yourtokenabc1234", (draft, text) => { draft.steps[0] = { ...draft.steps[0], type: "key_press", value: text }; }],
+  ["oursecret1234", (draft, text) => { draft.goal = text; }],
+  ["accountapikey1234", (draft, text) => { draft.goal = text; }],
+  ["mypassphrase1234", (draft, text) => { draft.goal = text; }],
+  ["yourauthenticator1234", (draft, text) => { draft.goal = text; }],
+  ["ourauthentication1234", (draft, text) => { draft.goal = text; }],
+  ["accountauthorization1234", (draft, text) => { draft.goal = text; }],
+  ["myoauth21234", (draft, text) => { draft.goal = text; }],
+  ["yoursignin1234", (draft, text) => { draft.goal = text; }],
+  ["ourmfa1234", (draft, text) => { draft.goal = text; }],
+  ["accountrecoverycode1234", (draft, text) => { draft.goal = text; }],
+  ["myverificationcode1234", (draft, text) => { draft.goal = text; }],
+  ["yourbackupcode1234", (draft, text) => { draft.goal = text; }],
+  ["ourssn1234", (draft, text) => { draft.goal = text; }],
+  ["accountcardnumber1234", (draft, text) => { draft.goal = text; }],
   ["mypassword1234", (draft, text) => { draft.name = text; }],
   ["mypasscode1234", (draft, text) => { draft.goal = text; }],
   ["mycredential1234", (draft, text) => { draft.steps[0] = { ...draft.steps[0], description: text }; }],
@@ -853,5 +873,21 @@ for (const [text, mutate] of appendedCredentialCases) {
     const draft = baseDraft();
     draft.url = `https://portal.example.test/${text}`;
     assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, text);
+  });
+}
+
+for (const goal of ["Set a pin on the map", "Set this pin on the map", "Choose a pin on the map"]) {
+  test(`allows ordinary map goal: ${goal}`, () => {
+    const draft = baseDraft();
+    draft.goal = goal;
+    assert.doesNotThrow(() => compileAgent(draft), goal);
+  });
+}
+
+for (const goal of ["Set your PIN", "Choose a PIN", "Choose your PIN"]) {
+  test(`rejects sensitive PIN goal: ${goal}`, () => {
+    const draft = baseDraft();
+    draft.goal = goal;
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, goal);
   });
 }
