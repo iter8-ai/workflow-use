@@ -73,7 +73,6 @@ const credentialIntentPatterns = [
 const pinIntentPattern = /\b(?:enter|provide|type|use|submit|verify) (?:(?:the|your) )?pin\b|\b(?:a|account|my|your|our) pin\b|\bpin (?:code|number|verification)\b|\bpersonal identification number\b|\b(?:my )?pin\s*(?:is|:)\s*\S+\b/i;
 const pinAssignmentPattern = /\bpin\s*[:=]\s*\S+/iu;
 const pinCodePattern = /\b[Pp][Ii][Nn]\s*(?:\p{N}{4,12}|(?=[A-Z0-9]{4,8}(?![A-Z0-9]))(?=[A-Z0-9]*\d)[A-Z0-9]+)\s*$/u;
-const recorderHostDescriptionPattern = /^\s*open\s+(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\s*[.!]?\s*$/i;
 const maximumPathDecodes = 4;
 const rawReplayPattern = /\b(?:css|xpath|selector)\b|#[a-z][\w-]*(?:\s*[>+~]|\[)|\[[^\]]+\]|(?:^|\s)(?:x|y)\s*[:=]\s*\d+|^\s*\d+(?:px)?\s*,\s*\d+(?:px)?\s*$/i;
 const maximumNameLength = 150;
@@ -126,7 +125,10 @@ function validateDraft(draft: SetupDraft): void {
   for (const step of draft.steps) {
     requireText(step.id, "Step id");
     requireText(step.description, `Description for step ${step.id}`);
-    if (containsSensitiveText(step.description) || containsSensitiveText(optionalStepText(step.expectedOutcome) ?? "")) {
+    if (
+      (containsSensitiveText(step.description) && !isRecorderHostDescription(step))
+      || containsSensitiveText(optionalStepText(step.expectedOutcome) ?? "")
+    ) {
       throw credentialError();
     }
     if (stepIds.has(step.id)) {
@@ -223,8 +225,8 @@ function validateUrl(value: string, label: string): void {
     throw new Error(`${label} must not include query parameters or a fragment.`);
   }
   if (
-    containsSensitiveText(decodedPathname(rawPathname(value)), false)
-    || containsSensitiveText(decodedPathname(url.pathname), false)
+    containsSensitiveText(decodedPathname(rawPathname(value)))
+    || containsSensitiveText(decodedPathname(url.pathname))
   ) {
     throw credentialError();
   }
@@ -242,15 +244,23 @@ function requireMaximumLength(value: string, maximum: number, label: string): vo
   }
 }
 
-function containsSensitiveText(value: string, allowRecorderHost = true): boolean {
-  if (allowRecorderHost && recorderHostDescriptionPattern.test(value)) {
-    return false;
-  }
+function containsSensitiveText(value: string): boolean {
   const normalized = normalizeIntentText(value);
   return credentialIntentPatterns.some((pattern) => pattern.test(normalized))
     || pinIntentPattern.test(normalized)
     || pinAssignmentPattern.test(value)
     || pinCodePattern.test(normalized);
+}
+
+function isRecorderHostDescription(step: SetupStep): boolean {
+  if (step.type !== "navigation" || step.url === null || step.url === undefined) {
+    return false;
+  }
+  try {
+    return step.description.toLowerCase() === `open ${new URL(step.url).host}`.toLowerCase();
+  } catch {
+    return false;
+  }
 }
 
 function normalizeIntentText(value: string): string {

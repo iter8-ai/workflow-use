@@ -473,8 +473,17 @@ test("allows benign PIN report phrases and an API-key hostname", () => {
   assert.doesNotThrow(() => compileAgent(url));
 
   const recordedHost = baseDraft();
-  recordedHost.steps[0] = { ...recordedHost.steps[0], description: "Open api.key.example" };
+  recordedHost.steps[0] = {
+    ...recordedHost.steps[0],
+    type: "navigation",
+    description: "Open api.key.example",
+    url: "https://api.key.example/reports",
+  };
   assert.doesNotThrow(() => compileAgent(recordedHost));
+
+  const unrelatedHostText = baseDraft();
+  unrelatedHostText.steps[0] = { ...unrelatedHostText.steps[0], description: "Open api.key.example" };
+  assert.throws(() => compileAgent(unrelatedHostText), /credentials.*managed by the host/i);
 
   const recordedCredentialPath = baseDraft();
   recordedCredentialPath.steps[0] = { ...recordedCredentialPath.steps[0], description: "Open api.key.example/password" };
