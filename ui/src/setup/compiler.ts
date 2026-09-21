@@ -258,7 +258,7 @@ function containsSensitiveText(value: string): boolean {
 
 function isPinActionText(value: string): boolean {
   const destination = pinActionPattern.exec(value)?.[1];
-  return destination !== undefined && /(?:^|\s)dashboard(?:\s|$)/iu.test(destination);
+  return destination !== undefined && /^(?:the\s+)?dashboard$/iu.test(destination);
 }
 
 function isRecorderHostDescription(step: SetupStep): boolean {

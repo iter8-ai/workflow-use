@@ -396,6 +396,7 @@ test("rejects raw credential URL segments before URL normalization", () => {
   for (const url of [
     "https://portal.example.test/password/2468/../../reports",
     "https://portal.example.test\\password\\2468\\..\\..\\reports",
+    "https://portal.example.test/pin/1234/to/access/dashboard",
   ]) {
     const draft = baseDraft();
     draft.url = url;
@@ -469,6 +470,9 @@ test("allows PIN action phrases without allowing PIN values", () => {
     "PIN 1234 to continue",
     "PIN DEMO1234 to continue",
     "PIN ABCD1 to continue",
+    "PIN 1234 to access dashboard",
+    "PIN DEMO1234 to continue on dashboard",
+    "PIN ABCD1 to unlock the dashboard",
     "PIN a1b2",
     "the PIN is ABCD",
   ]) {
