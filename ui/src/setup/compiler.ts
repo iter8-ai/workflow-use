@@ -75,7 +75,7 @@ const pinIntentPattern = /\b(?:enter|provide|type|use|submit|verify) (?:(?:the|y
 const pinAssignmentPattern = /\bpin\s*[:=]\s*\S+/iu;
 const pinCodePattern = /\b[Pp][Ii][Nn]\s*(?:\p{N}{4,12}|(?=[A-Z0-9]{4,8}(?![A-Z0-9]))(?=[A-Z0-9]*\d)[A-Z0-9]+)\s*$/u;
 const pinLeadingCodePattern = /(?:^|\s)pin\s+(?=[\p{L}\p{N}]{4,12}(?:\s|$))(?=[\p{L}\p{N}]*\p{N})[\p{L}\p{N}]{4,12}(?=\s|$)/iu;
-const pinActionPattern = /\bpin\s+.+?\s+(?:to|onto|on)\s+(.+)$/iu;
+const pinActionPattern = /^(?:(?:please|then)\s+)?pin\s+(.+?)\s+(?:to|onto|on)\s+(.+)$/iu;
 const maximumPathDecodes = 4;
 const rawReplayPattern = /\b(?:css|xpath|selector)\b|#[a-z][\w-]*(?:\s*[>+~]|\[)|\[[^\]]+\]|(?:^|\s)(?:x|y)\s*[:=]\s*\d+|^\s*\d+(?:px)?\s*,\s*\d+(?:px)?\s*$/i;
 const maximumNameLength = 150;
@@ -129,7 +129,7 @@ function validateDraft(draft: SetupDraft): void {
     requireText(step.id, "Step id");
     requireText(step.description, `Description for step ${step.id}`);
     if (
-      (containsSensitiveText(step.description) && !isRecorderHostDescription(step))
+      (containsSensitiveText(step.description, true) && !isRecorderHostDescription(step))
       || containsSensitiveText(optionalStepText(step.expectedOutcome) ?? "")
     ) {
       throw credentialError();
@@ -247,18 +247,20 @@ function requireMaximumLength(value: string, maximum: number, label: string): vo
   }
 }
 
-function containsSensitiveText(value: string): boolean {
+function containsSensitiveText(value: string, allowPinAction = false): boolean {
   const normalized = normalizeIntentText(value);
   return credentialIntentPatterns.some((pattern) => pattern.test(normalized))
     || pinIntentPattern.test(normalized)
     || pinAssignmentPattern.test(value)
-    || (pinLeadingCodePattern.test(normalized) && !isPinActionText(normalized))
+    || (pinLeadingCodePattern.test(normalized) && (!allowPinAction || !isPinActionText(normalized)))
     || pinCodePattern.test(normalized);
 }
 
 function isPinActionText(value: string): boolean {
-  const destination = pinActionPattern.exec(value)?.[1];
-  return destination !== undefined && /^(?:the\s+)?dashboard$/iu.test(destination);
+  const match = pinActionPattern.exec(value);
+  return match !== null
+    && /\p{L}/u.test(match[1]!)
+    && /^(?:the\s+)?dashboard$/iu.test(match[2]!);
 }
 
 function isRecorderHostDescription(step: SetupStep): boolean {
