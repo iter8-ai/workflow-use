@@ -733,3 +733,71 @@ test("allows arbitrary lettered PIN identifiers only for safe click actions", ()
   };
   assert.throws(() => compileAgent(credential), /credentials.*managed by the host/i);
 });
+
+test("rejects credential terms with appended digits without blocking ordinary suffixes", () => {
+  const sensitive: Array<[string, (draft: SetupDraft, text: string) => void]> = [
+    ["Enter password1234", (draft, text) => { draft.name = text; }],
+    ["Use OTP123456", (draft, text) => { draft.goal = text; }],
+    ["Enter apikey1234", (draft, text) => { draft.steps[0] = { ...draft.steps[0], description: text }; }],
+    ["Enter token1234", (draft, text) => { draft.steps[0] = { ...draft.steps[0], target: text }; }],
+    ["Enter secret1234", (draft, text) => { draft.steps[0] = { ...draft.steps[0], expectedOutcome: text }; }],
+  ];
+
+  for (const [text, mutate] of sensitive) {
+    const draft = baseDraft();
+    mutate(draft, text);
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, text);
+  }
+
+  for (const text of ["Open the passwordless report", "Review tokenization results"]) {
+    const draft = baseDraft();
+    draft.steps[0] = { ...draft.steps[0], description: text };
+    assert.doesNotThrow(() => compileAgent(draft), text);
+  }
+});
+
+test("rejects normalized PIN assignments across prompt-bearing fields", () => {
+  const mutations: Array<(draft: SetupDraft, text: string) => void> = [
+    (draft, text) => { draft.goal = text; },
+    (draft, text) => { draft.steps[0] = { ...draft.steps[0], description: text }; },
+    (draft, text) => { draft.steps[0] = { ...draft.steps[0], target: text }; },
+  ];
+
+  for (const text of ["Reset this PIN to ABCD", "PIN：ABCD", "PIN\u200B:ABCD", "PIN\v:ABCD"]) {
+    for (const mutate of mutations) {
+      const draft = baseDraft();
+      mutate(draft, text);
+      assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, text);
+    }
+  }
+});
+
+test("rejects PIN disclosure actions in click descriptions and targets", () => {
+  for (const text of ["Show PIN", "Reveal the PIN"]) {
+    const description = baseDraft();
+    description.steps[0] = { ...description.steps[0], description: text };
+    assert.throws(() => compileAgent(description), /credentials.*managed by the host/i, text);
+
+    const target = baseDraft();
+    target.steps[0] = { ...target.steps[0], target: text };
+    assert.throws(() => compileAgent(target), /credentials.*managed by the host/i, text);
+  }
+});
+
+test("allows map pin actions and complete recorded PIN click labels", () => {
+  for (const goal of ["Drop a pin on the map", "Place a pin on map"]) {
+    const draft = baseDraft();
+    draft.goal = goal;
+    assert.doesNotThrow(() => compileAgent(draft), goal);
+  }
+
+  for (const label of ["Choose PIN REPORT-2024", "Choose PIN REPORT 2024", "Open PIN DOC12345"]) {
+    const draft = baseDraft();
+    draft.steps[0] = {
+      ...draft.steps[0],
+      description: label,
+      target: label,
+    };
+    assert.doesNotThrow(() => compileAgent(draft), label);
+  }
+});

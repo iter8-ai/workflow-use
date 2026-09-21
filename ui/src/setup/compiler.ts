@@ -45,12 +45,12 @@ type CompiledAgent = {
 };
 
 const credentialIntentPatterns = [
-  /\b(?:passwords?|pass words?)\b/i,
+  /\b(?:passwords?|pass words?)(?!\p{L})/iu,
   /\bpasscodes?\b/i,
   /\bpassphrases?\b/i,
-  /\bsecrets?\b/i,
-  /\b(?:api )?tokens?\b/i,
-  /\bapi ?keys?\b/i,
+  /\bsecrets?(?!\p{L})/iu,
+  /\b(?:api )?tokens?(?!\p{L})/iu,
+  /\bapi ?keys?(?!\p{L})/iu,
   /\bcredentials?\b/i,
   /\bauth\b/i,
   /\bauthenticat(?:e|es|ed|ing|ion|or|ors)\b/i,
@@ -59,7 +59,7 @@ const credentialIntentPatterns = [
   /\b(?:log(?:ged|ging)?\s*(?:in|into|on)|logins?|logons?)\b/i,
   /\b(?:sign(?:ed|ing)?\s*(?:in|into|on)|signins?|signons?)\b/i,
   /\b(?:one ?time) ?(?:passwords?|passcodes?|codes?)\b/i,
-  /\b(?:one time )?(?:otp|totp)\b/i,
+  /\b(?:one time )?(?:otp|totp)(?!\p{L})/iu,
   /\b(?:mfa|m f a|2fa|2 fa|2 f a)\b/i,
   /\bverification codes?\b/i,
   /\brecovery codes?\b/i,
@@ -71,14 +71,14 @@ const credentialIntentPatterns = [
   /\bcard numbers?\b/i,
   /\buser ?names?\b/i,
 ];
-const pinIntentPattern = /\b(?:enter|provide|type|use|submit|verify) (?:(?:the|your) )?pin\b|\b(?:a|account|my|your|our) pin\b|\bpin (?:code|number|verification)\b|\bpersonal identification number\b|\b(?:my )?pin\s*(?:is|:)\s*\S+\b/i;
-const pinActionIntentPattern = /\b(?:reset|set|change|update|copy|send|choose|insert|paste(?: in)?|fill(?: in)?) (?:the )?pin\b/i;
+const pinIntentPattern = /\b(?:enter|provide|type|use|submit|verify) (?:(?:a|the|your) )?pin\b|\b(?:account|my|your|our) pin\b|\bpin (?:code|number|verification)\b|\bpersonal identification number\b|\b(?:my )?pin\s*(?:is|:)\s*\S+\b/i;
+const pinActionIntentPattern = /\b(?:reset|set|change|update|copy|send|show|reveal|choose|insert|paste(?: in)?|fill(?: in)?) (?:(?:a|the|this|that|my|your|our) )?pin\b/i;
 const pinDirectAssignmentPattern = /\bpin\s*[:=]\s*\S+/iu;
 const pinAssignmentPattern = /\b(?:reset|set|change|update)\s+(?:your\s+)?pin\s+(?:to|as)\s+\S+|\bpin\s+(?:to|as)\s+(?:\p{N}{4,12}|(?=[\p{L}\p{N}]{4,12}\b)(?=[\p{L}\p{N}]*\p{N})[\p{L}\p{N}]{4,12})\b/iu;
 const pinCodePattern = /\b[Pp][Ii][Nn]\s*(?:\p{N}{4,12}|(?=[A-Z0-9]{4,12}(?![A-Z0-9]))(?=[A-Z0-9]*\d)[A-Z0-9]+)\s*$/u;
 const pinLeadingCodePattern = /(?:^|\s)pin\s+(?:\p{N}{4,12}|(?=[\p{L}\p{N}]{4,12}(?:\s|$))(?=[\p{L}\p{N}]*\p{N})[\p{L}\p{N}]{4,12})(?=\s|$)/iu;
 const safePinClickActionPattern = /^(?:(?:click|please|then)\s+)?pin\s+(?:\p{L}{2,}\p{N}{1,4}(?:\s+(?:to|onto|on)\s+(?:the\s+)?dashboard)?|(?:19|20)\p{N}{2}\s+\p{L}+(?:\s+\p{L}+)*\s+(?:to|onto|on)\s+(?:the\s+)?dashboard)$/iu;
-const safePinClickLabelPattern = /^(?:open|click|select|choose)\s+pin\s+\p{L}{2,}\p{N}{1,4}$/iu;
+const safePinClickLabelPattern = /^(?:open|click|select|choose)\s+pin\s+\p{L}{2,}\s?\p{N}{1,5}$/iu;
 const safePinContentPathPattern = /^pin\s+report\p{N}{1,4}$/iu;
 const maximumPathDecodes = 4;
 const rawReplayPattern = /\b(?:css|xpath|selector)\b|#[a-z][\w-]*(?:\s*[>+~]|\[)|\[[^\]]+\]|(?:^|\s)(?:x|y)\s*[:=]\s*\d+|^\s*\d+(?:px)?\s*,\s*\d+(?:px)?\s*$/i;
@@ -253,12 +253,23 @@ function requireMaximumLength(value: string, maximum: number, label: string): vo
 
 function containsSensitiveText(value: string, allowPinCode = false): boolean {
   const normalized = normalizeIntentText(value);
+  const normalizedAssignment = normalizePinAssignmentText(value);
   return credentialIntentPatterns.some((pattern) => pattern.test(normalized))
     || pinIntentPattern.test(normalized)
     || (!allowPinCode && pinActionIntentPattern.test(normalized))
-    || pinDirectAssignmentPattern.test(value)
+    || pinDirectAssignmentPattern.test(normalizedAssignment)
     || pinAssignmentPattern.test(normalized)
     || (!allowPinCode && (pinLeadingCodePattern.test(normalized) || pinCodePattern.test(normalized)));
+}
+
+function normalizePinAssignmentText(value: string): string {
+  return value
+    .normalize("NFKD")
+    .replace(/\p{M}|\p{Cf}/gu, "")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .replace(/[^\p{L}\p{N}:=]+/gu, " ")
+    .trim();
 }
 
 function isSafePinClickText(step: SetupStep, value: string): boolean {
