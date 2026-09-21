@@ -916,3 +916,38 @@ for (const goal of ["Set your PIN", "Choose a PIN", "Choose your PIN"]) {
     assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, goal);
   });
 }
+
+for (const text of ["admin2password1234", "user1apikey1234", "v2otp1234", "team7secret1234"]) {
+  for (const field of ["goal", "description", "target", "expectedOutcome", "url"] as const) {
+    test(`rejects numeric owner credential ${text} in ${field}`, () => {
+      const draft = baseDraft();
+      if (field === "url") draft.url = `https://portal.example.test/${text}`;
+      else if (field === "goal") draft.goal = text;
+      else draft.steps[0] = { ...draft.steps[0], [field]: text };
+      assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
+    });
+  }
+}
+
+for (const text of ["secretary2024", "tokenomics2024", "author2024", "classnotes2024", "secretion2024"]) {
+  for (const field of ["goal", "url"] as const) {
+    test(`allows ordinary numeric word ${text} in ${field}`, () => {
+      const draft = baseDraft();
+      if (field === "url") draft.url = `https://portal.example.test/${text}`;
+      else draft.goal = text;
+      assert.doesNotThrow(() => compileAgent(draft));
+    });
+  }
+}
+
+for (const goal of [
+  "Set a pin at 10 Downing Street, London on the map",
+  "Choose a pin for this map",
+  "Set a pin near 5th Avenue on this map",
+]) {
+  test(`allows complete map placement: ${goal}`, () => {
+    const draft = baseDraft();
+    draft.goal = goal;
+    assert.doesNotThrow(() => compileAgent(draft));
+  });
+}
