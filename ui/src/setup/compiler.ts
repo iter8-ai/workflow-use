@@ -46,30 +46,30 @@ type CompiledAgent = {
 
 const credentialIntentPatterns = [
   /\b(?:passwords?|pass words?)(?!\p{L})/iu,
-  /\bpasscodes?\b/i,
-  /\bpassphrases?\b/i,
+  /\bpasscodes?(?!\p{L})/iu,
+  /\bpassphrases?(?!\p{L})/iu,
   /\bsecrets?(?!\p{L})/iu,
   /\b(?:api )?tokens?(?!\p{L})/iu,
   /\bapi ?keys?(?!\p{L})/iu,
-  /\bcredentials?\b/i,
-  /\bauth\b/i,
-  /\bauthenticat(?:e|es|ed|ing|ion|or|ors)\b/i,
-  /\bauthoriz(?:e|es|ed|ing|ation|ations)\b/i,
-  /\boauth(?:2)?\b/i,
-  /\b(?:log(?:ged|ging)?\s*(?:in|into|on)|logins?|logons?)\b/i,
-  /\b(?:sign(?:ed|ing)?\s*(?:in|into|on)|signins?|signons?)\b/i,
-  /\b(?:one ?time) ?(?:passwords?|passcodes?|codes?)\b/i,
+  /\bcredentials?(?!\p{L})/iu,
+  /\bauth(?!\p{L})/iu,
+  /\bauthenticat(?:e|es|ed|ing|ion|or|ors)(?!\p{L})/iu,
+  /\bauthoriz(?:e|es|ed|ing|ation|ations)(?!\p{L})/iu,
+  /\boauth(?:2)?(?!\p{L})/iu,
+  /\b(?:log(?:ged|ging)?\s*(?:in|into|on)|logins?|logons?)(?!\p{L})/iu,
+  /\b(?:sign(?:ed|ing)?\s*(?:in|into|on)|signins?|signons?)(?!\p{L})/iu,
+  /\b(?:one ?time) ?(?:passwords?|passcodes?|codes?)(?!\p{L})/iu,
   /\b(?:one time )?(?:otp|totp)(?!\p{L})/iu,
-  /\b(?:mfa|m f a|2fa|2 fa|2 f a)\b/i,
-  /\bverification codes?\b/i,
-  /\brecovery codes?\b/i,
-  /\bbackup codes?\b/i,
-  /\b(?:cvv|cvc)\b/i,
-  /\bsocial security(?: number)?\b/i,
-  /\bssn\b/i,
-  /\bcredit cards?\b/i,
-  /\bcard numbers?\b/i,
-  /\buser ?names?\b/i,
+  /\b(?:mfa|m f a|2fa|2 fa|2 f a)(?!\p{L})/iu,
+  /\bverification codes?(?!\p{L})/iu,
+  /\brecovery codes?(?!\p{L})/iu,
+  /\bbackup codes?(?!\p{L})/iu,
+  /\b(?:cvv|cvc)(?!\p{L})/iu,
+  /\bsocial security(?: number)?(?!\p{L})/iu,
+  /\bssn(?!\p{L})/iu,
+  /\bcredit cards?(?!\p{L})/iu,
+  /\bcard numbers?(?!\p{L})/iu,
+  /\buser ?names?(?!\p{L})/iu,
 ];
 const pinIntentPattern = /\b(?:enter|provide|type|use|submit|verify) (?:(?:a|the|your) )?pin\b|\b(?:account|my|your|our) pin\b|\bpin (?:code|number|verification)\b|\bpersonal identification number\b|\b(?:my )?pin\s*(?:is|:)\s*\S+\b/i;
 const pinActionIntentPattern = /\b(?:reset|set|change|update|copy|send|show|reveal|choose|insert|paste(?: in)?|fill(?: in)?) (?:(?:a|the|this|that|my|your|our) )?pin\b/i;
@@ -78,7 +78,8 @@ const pinAssignmentPattern = /\b(?:reset|set|change|update)\s+(?:your\s+)?pin\s+
 const pinCodePattern = /\b[Pp][Ii][Nn]\s*(?:\p{N}{4,12}|(?=[A-Z0-9]{4,12}(?![A-Z0-9]))(?=[A-Z0-9]*\d)[A-Z0-9]+)\s*$/u;
 const pinLeadingCodePattern = /(?:^|\s)pin\s+(?:\p{N}{4,12}|(?=[\p{L}\p{N}]{4,12}(?:\s|$))(?=[\p{L}\p{N}]*\p{N})[\p{L}\p{N}]{4,12})(?=\s|$)/iu;
 const safePinClickActionPattern = /^(?:(?:click|please|then)\s+)?pin\s+(?:\p{L}{2,}\p{N}{1,4}(?:\s+(?:to|onto|on)\s+(?:the\s+)?dashboard)?|(?:19|20)\p{N}{2}\s+\p{L}+(?:\s+\p{L}+)*\s+(?:to|onto|on)\s+(?:the\s+)?dashboard)$/iu;
-const safePinClickLabelPattern = /^(?:open|click|select|choose)\s+pin\s+\p{L}{2,}\s?\p{N}{1,5}$/iu;
+const safePinClickLabelPattern = /^(?:open|click|select|choose)\s+pin\s+(?:report|\p{L}{2,}\s?\p{N}{1,5})$/iu;
+const safeMapPinActionPattern = /^set the pin on the map$/i;
 const safePinContentPathPattern = /^pin\s+report\p{N}{1,4}$/iu;
 const maximumPathDecodes = 4;
 const rawReplayPattern = /\b(?:css|xpath|selector)\b|#[a-z][\w-]*(?:\s*[>+~]|\[)|\[[^\]]+\]|(?:^|\s)(?:x|y)\s*[:=]\s*\d+|^\s*\d+(?:px)?\s*,\s*\d+(?:px)?\s*$/i;
@@ -256,7 +257,7 @@ function containsSensitiveText(value: string, allowPinCode = false): boolean {
   const normalizedAssignment = normalizePinAssignmentText(value);
   return credentialIntentPatterns.some((pattern) => pattern.test(normalized))
     || pinIntentPattern.test(normalized)
-    || (!allowPinCode && pinActionIntentPattern.test(normalized))
+    || (!allowPinCode && !safeMapPinActionPattern.test(normalized) && pinActionIntentPattern.test(normalized))
     || pinDirectAssignmentPattern.test(normalizedAssignment)
     || pinAssignmentPattern.test(normalized)
     || (!allowPinCode && (pinLeadingCodePattern.test(normalized) || pinCodePattern.test(normalized)));
