@@ -322,6 +322,14 @@ test("rejects PIN credential values", () => {
   }
 });
 
+test("rejects 4-12 character alphanumeric PIN values", () => {
+  for (const text of ["PIN A1B2", "PIN AB1234567890"]) {
+    const draft = baseDraft();
+    draft.steps[0] = { ...draft.steps[0], description: text };
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, text);
+  }
+});
+
 test("allows a valid literal percent after path decoding", () => {
   const draft = baseDraft();
   draft.url = "https://portal.example.test/reports/100%25";
@@ -548,6 +556,25 @@ test("rejects PIN assignment phrases", () => {
   }
 });
 
+test("rejects normalized PIN assignment phrases", () => {
+  for (const goal of ["Set PIN\v to 1234", "Set PIN-to-1234", "Set PIN-to-London"]) {
+    const draft = baseDraft();
+    draft.goal = goal;
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, goal);
+  }
+
+  const path = baseDraft();
+  path.url = "https://portal.example.test/pin/to/1234";
+  assert.throws(() => compileAgent(path), /credentials.*managed by the host/i);
+});
+
+test("allows setting a map pin to a place", () => {
+  const draft = baseDraft();
+  draft.goal = "Set the pin to London";
+
+  assert.doesNotThrow(() => compileAgent(draft));
+});
+
 test("allows recorded clicks that pin report identifiers", () => {
   for (const identifier of ["report2024", "DOC1234"]) {
     const draft = baseDraft();
@@ -559,6 +586,17 @@ test("allows recorded clicks that pin report identifiers", () => {
 
     assert.doesNotThrow(() => compileAgent(draft), identifier);
   }
+});
+
+test("rejects credential-shaped PIN click targets", () => {
+  const draft = baseDraft();
+  draft.steps[0] = {
+    ...draft.steps[0],
+    description: "Click the dashboard shortcut",
+    target: "PIN A1B2 to dashboard",
+  };
+
+  assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
 });
 
 test("allows PIN report identifiers in labels and URL paths", () => {

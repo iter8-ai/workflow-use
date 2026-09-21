@@ -72,10 +72,11 @@ const credentialIntentPatterns = [
   /\buser ?names?\b/i,
 ];
 const pinIntentPattern = /\b(?:enter|provide|type|use|submit|verify) (?:(?:the|your) )?pin\b|\b(?:a|account|my|your|our) pin\b|\bpin (?:code|number|verification)\b|\bpersonal identification number\b|\b(?:my )?pin\s*(?:is|:)\s*\S+\b/i;
-const pinAssignmentPattern = /\bpin\s*[:=]\s*\S+|\b(?:reset|set|change|update)\s+(?:(?:the|your)\s+)?pin\s+(?:to|as)\s+\S+|\bpin\s+(?:to|as)\s+(?:\p{N}{4,12}|(?=[\p{L}\p{N}]{4,8}\b)(?=[\p{L}\p{N}]*\p{N})[\p{L}\p{N}]{4,8})\b/iu;
-const pinCodePattern = /\b[Pp][Ii][Nn]\s*(?:\p{N}{4,12}|(?=[A-Z0-9]{4,8}(?![A-Z0-9]))(?=[A-Z0-9]*\d)[A-Z0-9]+)\s*$/u;
-const pinLeadingCodePattern = /(?:^|\s)pin\s+(?:\p{N}{4,12}|(?=[\p{L}\p{N}]{4,8}(?:\s|$))(?=[\p{L}\p{N}]*\p{N})[\p{L}\p{N}]{4,8})(?=\s|$)/iu;
-const pinActionPattern = /^(?:(?:please|then)\s+)?(?:click\s+)?pin\s+(.+?)\s+(?:to|onto|on)\s+(.+)$/iu;
+const pinDirectAssignmentPattern = /\bpin\s*[:=]\s*\S+/iu;
+const pinAssignmentPattern = /\b(?:reset|set|change|update)\s+(?:your\s+)?pin\s+(?:to|as)\s+\S+|\b(?:reset|set|change|update)\s+the\s+pin\s+(?:to|as)\s+(?:\p{N}{4,12}|(?=[\p{L}\p{N}]{4,12}\b)(?=[\p{L}\p{N}]*\p{N})[\p{L}\p{N}]{4,12})\b|\bpin\s+(?:to|as)\s+(?:\p{N}{4,12}|(?=[\p{L}\p{N}]{4,12}\b)(?=[\p{L}\p{N}]*\p{N})[\p{L}\p{N}]{4,12})\b/iu;
+const pinCodePattern = /\b[Pp][Ii][Nn]\s*(?:\p{N}{4,12}|(?=[A-Z0-9]{4,12}(?![A-Z0-9]))(?=[A-Z0-9]*\d)[A-Z0-9]+)\s*$/u;
+const pinLeadingCodePattern = /(?:^|\s)pin\s+(?:\p{N}{4,12}|(?=[\p{L}\p{N}]{4,12}(?:\s|$))(?=[\p{L}\p{N}]*\p{N})[\p{L}\p{N}]{4,12})(?=\s|$)/iu;
+const pinContentIdentifierPattern = /(?:^|\s)pin\s+(?:(?:\p{N}+\s+)?(?:reports?|invoices?|docs?|tasks?|files?|notes?)\p{N}*|fy\p{N}+)(?=\s|$)/iu;
 const maximumPathDecodes = 4;
 const rawReplayPattern = /\b(?:css|xpath|selector)\b|#[a-z][\w-]*(?:\s*[>+~]|\[)|\[[^\]]+\]|(?:^|\s)(?:x|y)\s*[:=]\s*\d+|^\s*\d+(?:px)?\s*,\s*\d+(?:px)?\s*$/i;
 const maximumNameLength = 150;
@@ -129,7 +130,7 @@ function validateDraft(draft: SetupDraft): void {
     requireText(step.id, "Step id");
     requireText(step.description, `Description for step ${step.id}`);
     if (
-      (containsSensitiveText(step.description, step.type === "click") && !isRecorderHostDescription(step))
+      (containsSensitiveText(step.description) && !isRecorderHostDescription(step))
       || containsSensitiveText(optionalStepText(step.expectedOutcome) ?? "")
     ) {
       throw credentialError();
@@ -158,7 +159,7 @@ function validateStep(step: SetupStep): void {
   } else if (url !== undefined) {
     validateUrl(url, `URL for step ${step.id}`);
   }
-  if (target !== undefined && containsSensitiveText(target, step.type === "click")) {
+  if (target !== undefined && containsSensitiveText(target)) {
     throw credentialError();
   }
   if (value !== undefined && isMaskedValue(value)) {
@@ -247,20 +248,14 @@ function requireMaximumLength(value: string, maximum: number, label: string): vo
   }
 }
 
-function containsSensitiveText(value: string, allowPinAction = false): boolean {
+function containsSensitiveText(value: string): boolean {
   const normalized = normalizeIntentText(value);
   return credentialIntentPatterns.some((pattern) => pattern.test(normalized))
     || pinIntentPattern.test(normalized)
-    || pinAssignmentPattern.test(value)
-    || (pinLeadingCodePattern.test(normalized) && (!allowPinAction || !isPinActionText(normalized)))
-    || pinCodePattern.test(normalized);
-}
-
-function isPinActionText(value: string): boolean {
-  const match = pinActionPattern.exec(value);
-  return match !== null
-    && /\p{L}/u.test(match[1]!)
-    && /^(?:the\s+)?dashboard$/iu.test(match[2]!);
+    || pinDirectAssignmentPattern.test(value)
+    || pinAssignmentPattern.test(normalized)
+    || ((pinLeadingCodePattern.test(normalized) || pinCodePattern.test(normalized))
+      && !pinContentIdentifierPattern.test(normalized));
 }
 
 function isRecorderHostDescription(step: SetupStep): boolean {
