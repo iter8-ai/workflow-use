@@ -608,3 +608,74 @@ test("allows PIN report identifiers in labels and URL paths", () => {
   url.url = "https://portal.example.test/pin/report2024";
   assert.doesNotThrow(() => compileAgent(url));
 });
+
+test("does not let a content identifier hide a separate PIN code", () => {
+  const mutations: Array<(draft: SetupDraft) => void> = [
+    (draft) => {
+      draft.steps[0] = {
+        ...draft.steps[0],
+        description: "Pin report2024 to dashboard; PIN 1234 accepted",
+      };
+    },
+    (draft) => {
+      draft.steps[0] = { ...draft.steps[0], target: "PIN 1234 report to dashboard" };
+    },
+    (draft) => { draft.url = "https://portal.example.test/pin/1234/report"; },
+    (draft) => { draft.url = "https://portal.example.test/pin/%2531%2532%2533%2534/report"; },
+  ];
+
+  for (const mutate of mutations) {
+    const draft = baseDraft();
+    mutate(draft);
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
+  }
+});
+
+test("rejects uppercase PIN assignments after a determiner", () => {
+  for (const goal of ["Reset the PIN to ABCD", "Change the PIN to DEMO"]) {
+    const draft = baseDraft();
+    draft.goal = goal;
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, goal);
+  }
+
+  const path = baseDraft();
+  path.url = "https://portal.example.test/reset/the/pin/to/ABCD";
+  assert.throws(() => compileAgent(path), /credentials.*managed by the host/i);
+
+  const mapPin = baseDraft();
+  mapPin.goal = "Set the pin to London";
+  assert.doesNotThrow(() => compileAgent(mapPin));
+});
+
+test("allows arbitrary lettered PIN identifiers only for safe click actions", () => {
+  for (const identifier of ["CHART1234", "WIDGET7"]) {
+    const draft = baseDraft();
+    draft.steps[0] = {
+      ...draft.steps[0],
+      description: `Pin ${identifier} to dashboard`,
+      target: `Pin ${identifier} to dashboard`,
+    };
+    assert.doesNotThrow(() => compileAgent(draft), identifier);
+  }
+
+  const goal = baseDraft();
+  goal.goal = "Pin CHART1234 to dashboard";
+  assert.throws(() => compileAgent(goal), /credentials.*managed by the host/i);
+
+  const navigation = baseDraft();
+  navigation.steps[0] = {
+    ...navigation.steps[0],
+    type: "navigation",
+    description: "Pin CHART1234 to dashboard",
+    target: "Pin CHART1234 to dashboard",
+  };
+  assert.throws(() => compileAgent(navigation), /credentials.*managed by the host/i);
+
+  const credential = baseDraft();
+  credential.steps[0] = {
+    ...credential.steps[0],
+    description: "Pin A1B2 to dashboard",
+    target: "Pin A1B2 to dashboard",
+  };
+  assert.throws(() => compileAgent(credential), /credentials.*managed by the host/i);
+});

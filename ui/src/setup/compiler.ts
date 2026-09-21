@@ -73,10 +73,13 @@ const credentialIntentPatterns = [
 ];
 const pinIntentPattern = /\b(?:enter|provide|type|use|submit|verify) (?:(?:the|your) )?pin\b|\b(?:a|account|my|your|our) pin\b|\bpin (?:code|number|verification)\b|\bpersonal identification number\b|\b(?:my )?pin\s*(?:is|:)\s*\S+\b/i;
 const pinDirectAssignmentPattern = /\bpin\s*[:=]\s*\S+/iu;
-const pinAssignmentPattern = /\b(?:reset|set|change|update)\s+(?:your\s+)?pin\s+(?:to|as)\s+\S+|\b(?:reset|set|change|update)\s+the\s+pin\s+(?:to|as)\s+(?:\p{N}{4,12}|(?=[\p{L}\p{N}]{4,12}\b)(?=[\p{L}\p{N}]*\p{N})[\p{L}\p{N}]{4,12})\b|\bpin\s+(?:to|as)\s+(?:\p{N}{4,12}|(?=[\p{L}\p{N}]{4,12}\b)(?=[\p{L}\p{N}]*\p{N})[\p{L}\p{N}]{4,12})\b/iu;
+const pinAssignmentPattern = /\b(?:reset|set|change|update)\s+(?:your\s+)?pin\s+(?:to|as)\s+\S+|\bpin\s+(?:to|as)\s+(?:\p{N}{4,12}|(?=[\p{L}\p{N}]{4,12}\b)(?=[\p{L}\p{N}]*\p{N})[\p{L}\p{N}]{4,12})\b/iu;
+const pinDeterminedAssignmentPattern = /\b(reset|set|change|update)\s+the\s+pin\s+(?:to|as)\s+([\p{L}\p{N}]{4,12})\b/iu;
 const pinCodePattern = /\b[Pp][Ii][Nn]\s*(?:\p{N}{4,12}|(?=[A-Z0-9]{4,12}(?![A-Z0-9]))(?=[A-Z0-9]*\d)[A-Z0-9]+)\s*$/u;
 const pinLeadingCodePattern = /(?:^|\s)pin\s+(?:\p{N}{4,12}|(?=[\p{L}\p{N}]{4,12}(?:\s|$))(?=[\p{L}\p{N}]*\p{N})[\p{L}\p{N}]{4,12})(?=\s|$)/iu;
-const pinContentIdentifierPattern = /(?:^|\s)pin\s+(?:(?:\p{N}+\s+)?(?:reports?|invoices?|docs?|tasks?|files?|notes?)\p{N}*|fy\p{N}+)(?=\s|$)/iu;
+const safePinClickActionPattern = /^(?:(?:click|please|then)\s+)?pin\s+(?:\p{L}{2,}\p{N}{1,4}(?:\s+(?:to|onto|on)\s+(?:the\s+)?dashboard)?|(?:19|20)\p{N}{2}\s+\p{L}+(?:\s+\p{L}+)*\s+(?:to|onto|on)\s+(?:the\s+)?dashboard)$/iu;
+const safePinClickLabelPattern = /^(?:open|click|select|choose)\s+pin\s+\p{L}{2,}\p{N}{1,4}$/iu;
+const safePinContentPathPattern = /^pin\s+\p{L}{2,}\p{N}{1,4}$/iu;
 const maximumPathDecodes = 4;
 const rawReplayPattern = /\b(?:css|xpath|selector)\b|#[a-z][\w-]*(?:\s*[>+~]|\[)|\[[^\]]+\]|(?:^|\s)(?:x|y)\s*[:=]\s*\d+|^\s*\d+(?:px)?\s*,\s*\d+(?:px)?\s*$/i;
 const maximumNameLength = 150;
@@ -130,7 +133,7 @@ function validateDraft(draft: SetupDraft): void {
     requireText(step.id, "Step id");
     requireText(step.description, `Description for step ${step.id}`);
     if (
-      (containsSensitiveText(step.description) && !isRecorderHostDescription(step))
+      (containsSensitiveText(step.description, isSafePinClickText(step, step.description)) && !isRecorderHostDescription(step))
       || containsSensitiveText(optionalStepText(step.expectedOutcome) ?? "")
     ) {
       throw credentialError();
@@ -159,7 +162,7 @@ function validateStep(step: SetupStep): void {
   } else if (url !== undefined) {
     validateUrl(url, `URL for step ${step.id}`);
   }
-  if (target !== undefined && containsSensitiveText(target)) {
+  if (target !== undefined && containsSensitiveText(target, isSafePinClickText(step, target))) {
     throw credentialError();
   }
   if (value !== undefined && isMaskedValue(value)) {
@@ -229,8 +232,8 @@ function validateUrl(value: string, label: string): void {
     throw new Error(`${label} must not include query parameters or a fragment.`);
   }
   if (
-    containsSensitiveText(decodedPathname(rawPathname(value)))
-    || containsSensitiveText(decodedPathname(url.pathname))
+    containsSensitivePath(rawPathname(value))
+    || containsSensitivePath(url.pathname)
   ) {
     throw credentialError();
   }
@@ -248,14 +251,39 @@ function requireMaximumLength(value: string, maximum: number, label: string): vo
   }
 }
 
-function containsSensitiveText(value: string): boolean {
+function containsSensitiveText(value: string, allowPinCode = false): boolean {
   const normalized = normalizeIntentText(value);
   return credentialIntentPatterns.some((pattern) => pattern.test(normalized))
     || pinIntentPattern.test(normalized)
     || pinDirectAssignmentPattern.test(value)
     || pinAssignmentPattern.test(normalized)
-    || ((pinLeadingCodePattern.test(normalized) || pinCodePattern.test(normalized))
-      && !pinContentIdentifierPattern.test(normalized));
+    || containsDeterminedPinAssignment(normalized)
+    || (!allowPinCode && (pinLeadingCodePattern.test(normalized) || pinCodePattern.test(normalized)));
+}
+
+function containsDeterminedPinAssignment(value: string): boolean {
+  const match = pinDeterminedAssignmentPattern.exec(value);
+  if (match === null) {
+    return false;
+  }
+  const verb = match[1]!.toLowerCase();
+  const assignedValue = match[2]!;
+  return verb !== "set"
+    || /\p{N}/u.test(assignedValue)
+    || assignedValue === assignedValue.toLocaleUpperCase();
+}
+
+function isSafePinClickText(step: SetupStep, value: string): boolean {
+  if (step.type !== "click") {
+    return false;
+  }
+  const normalized = normalizeIntentText(value);
+  return safePinClickActionPattern.test(normalized) || safePinClickLabelPattern.test(normalized);
+}
+
+function containsSensitivePath(value: string): boolean {
+  const decoded = decodedPathname(value);
+  return containsSensitiveText(decoded, safePinContentPathPattern.test(normalizeIntentText(decoded)));
 }
 
 function isRecorderHostDescription(step: SetupStep): boolean {
