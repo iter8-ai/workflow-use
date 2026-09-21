@@ -121,7 +121,7 @@ test("escapes braces in non-entry literals", () => {
 
 test("rejects URL credentials, raw replay targets, and host limits", () => {
   const urlCredentials = baseDraft();
-  urlCredentials.url = "https://person:secret@example.test/reports";
+  urlCredentials.url = "https://user:password@example.test/public";
 
   const rawSelector = baseDraft();
   rawSelector.steps[0] = { ...rawSelector.steps[0], target: "#reports > button" };
@@ -168,3 +168,841 @@ test("rejects direct and fallback navigation URLs with queries or fragments", ()
     assert.throws(() => compileAgent(draft), /must not include query parameters or a fragment/i);
   }
 });
+
+test("allows benign text and paths containing credential-like substrings", () => {
+  const mutations: Array<(draft: SetupDraft) => void> = [
+    (draft) => { draft.goal = "Assign invoices to the project."; },
+    (draft) => { draft.steps[0] = { ...draft.steps[0], description: "Open the product catalog index" }; },
+    (draft) => { draft.steps[0] = { ...draft.steps[0], expectedOutcome: "The design integration page is visible" }; },
+    (draft) => { draft.steps[0] = { ...draft.steps[0], target: "Download authors report" }; },
+    (draft) => { draft.url = "https://portal.example.test/author/reports"; },
+  ];
+
+  for (const mutate of mutations) {
+    const draft = baseDraft();
+    mutate(draft);
+    assert.doesNotThrow(() => compileAgent(draft));
+  }
+});
+
+test("rejects standalone credential and sign-in intent", () => {
+  const mutations: Array<(draft: SetupDraft) => void> = [
+    (draft) => { draft.name = "Credential report"; },
+    (draft) => { draft.goal = "Use the secret to download the report."; },
+    (draft) => { draft.goal = "Complete MFA verification."; },
+    (draft) => { draft.steps[0] = { ...draft.steps[0], description: "Enter password" }; },
+    (draft) => { draft.steps[0] = { ...draft.steps[0], description: "Enter your PIN" }; },
+    (draft) => { draft.steps[0] = { ...draft.steps[0], expectedOutcome: "Token accepted" }; },
+    (draft) => { draft.steps[0] = { ...draft.steps[0], target: "Sign in" }; },
+    (draft) => { draft.steps[0] = { ...draft.steps[0], target: "Sign-in" }; },
+    (draft) => { draft.url = "https://portal.example.test/login"; },
+    (draft) => { draft.url = "https://portal.example.test/sign-in"; },
+    (draft) => { draft.url = "https://portal.example.test/log-in"; },
+  ];
+
+  for (const mutate of mutations) {
+    const draft = baseDraft();
+    mutate(draft);
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
+  }
+});
+
+test("rejects normalized and encoded credential intent", () => {
+  const mutations: Array<(draft: SetupDraft) => void> = [
+    (draft) => { draft.steps[0] = { ...draft.steps[0], target: "Sign‑in" }; },
+    (draft) => { draft.steps[0] = { ...draft.steps[0], target: "Log in" }; },
+    (draft) => { draft.goal = "Authenticate before downloading the report."; },
+    (draft) => { draft.steps[0] = { ...draft.steps[0], expectedOutcome: "Authenticated" }; },
+    (draft) => { draft.url = "https://portal.example.test/sign%2Din"; },
+    (draft) => { draft.url = "https://portal.example.test/%6cogin"; },
+    (draft) => { draft.url = "https://portal.example.test/%zz"; },
+  ];
+
+  for (const mutate of mutations) {
+    const draft = baseDraft();
+    mutate(draft);
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
+  }
+});
+
+test("allows PIN as an ordinary verb but rejects credential PIN phrases", () => {
+  const benign = baseDraft();
+  benign.steps[0] = { ...benign.steps[0], description: "Pin the report to the dashboard" };
+  assert.doesNotThrow(() => compileAgent(benign));
+
+  for (const text of ["Enter PIN", "Provide your PIN", "PIN verification"]) {
+    const draft = baseDraft();
+    draft.steps[0] = { ...draft.steps[0], description: text };
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
+  }
+});
+
+test("rejects authorization variants and repeated encoded credential paths", () => {
+  const mutations: Array<(draft: SetupDraft) => void> = [
+    (draft) => { draft.goal = "Authorize access to the report."; },
+    (draft) => { draft.steps[0] = { ...draft.steps[0], expectedOutcome: "Authorized" }; },
+    (draft) => { draft.steps[0] = { ...draft.steps[0], description: "Log into the portal" }; },
+    (draft) => { draft.steps[0] = { ...draft.steps[0], description: "Sign on to continue" }; },
+    (draft) => { draft.url = "https://portal.example.test/%256cogin"; },
+    (draft) => { draft.url = "https://portal.example.test/%25%36%63ogin"; },
+  ];
+
+  for (const mutate of mutations) {
+    const draft = baseDraft();
+    mutate(draft);
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
+  }
+});
+
+test("rejects credential PIN values after compatible normalization", () => {
+  for (const text of ["My PIN is 1234", "PIN: 1234", "PIN: ABCD", "My PIN is abcd", "Enter PİN"]) {
+    const draft = baseDraft();
+    draft.steps[0] = { ...draft.steps[0], description: text };
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
+  }
+});
+
+test("rejects credential terms separated by Unicode format characters and punctuation", () => {
+  for (const text of ["pass\u200Bword", "sign\u200Bin", "pass-word", "pass word"]) {
+    const draft = baseDraft();
+    draft.steps[0] = { ...draft.steps[0], description: text };
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
+  }
+});
+
+test("rejects normalized credential token and phrase variants", () => {
+  const texts = [
+    "Download saved passwords",
+    "Use API tokens",
+    "Review credentials",
+    "Authenticate to continue",
+    "Authorize access",
+    "Logging in to the portal",
+    "signing in to the portal",
+    "password_reset",
+    "resetPassword",
+    "Complete MFA verification",
+    "Complete M.F.A. verification",
+    "Complete 2FA verification",
+    "Complete 2-FA verification",
+    "Enter the verification code",
+    "Sign-in to continue",
+    "pass\u200Bword",
+  ];
+
+  for (const text of texts) {
+    const draft = baseDraft();
+    draft.steps[0] = { ...draft.steps[0], description: text };
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, text);
+  }
+
+  const oauth = baseDraft();
+  oauth.url = "https://portal.example.test/oauth/callback";
+  assert.throws(() => compileAgent(oauth), /credentials.*managed by the host/i);
+});
+
+test("rejects PIN credential values", () => {
+  for (const text of [
+    "PIN 1234",
+    "PIN-1234",
+    "PIN=1234",
+    "PIN = 1234",
+    "Pin 1234",
+    "Pin-1234",
+    "Pin=1234",
+    "Pin = 1234",
+    "pin 1234",
+    "pin-1234",
+    "pin=1234",
+    "pin = 1234",
+  ]) {
+    const draft = baseDraft();
+    draft.steps[0] = { ...draft.steps[0], description: text };
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
+  }
+});
+
+test("rejects 4-12 character alphanumeric PIN values", () => {
+  for (const text of ["PIN A1B2", "PIN AB1234567890"]) {
+    const draft = baseDraft();
+    draft.steps[0] = { ...draft.steps[0], description: text };
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, text);
+  }
+});
+
+test("allows a valid literal percent after path decoding", () => {
+  const draft = baseDraft();
+  draft.url = "https://portal.example.test/reports/100%25";
+  assert.doesNotThrow(() => compileAgent(draft));
+});
+
+test("rejects grammatical authentication and sign-in variants", () => {
+  for (const text of ["Authenticating with the bank", "Logged in to the portal", "Signed in to the portal", "Loginto the portal", "Signinto the portal", "Logon to the portal", "Signon to the portal", "Review previous logins", "Review previous signins"]) {
+    const draft = baseDraft();
+    draft.steps[0] = { ...draft.steps[0], description: text };
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, text);
+  }
+});
+
+test("allows ordinary one-time work but rejects one-time credential phrases", () => {
+  const benign = baseDraft();
+  benign.steps[0] = { ...benign.steps[0], description: "Create a one time export" };
+  assert.doesNotThrow(() => compileAgent(benign));
+
+  for (const text of ["Enter the one-time password", "Enter the one-time passcode", "Enter the one-time code"]) {
+    const draft = baseDraft();
+    draft.steps[0] = { ...draft.steps[0], description: text };
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
+  }
+});
+
+test("rejects compact credential names in text and URL paths", () => {
+  for (const text of [
+    "Enter apikey",
+    "Enter apikeys",
+    "Enter API keys",
+    "Enter username",
+    "Enter usernames",
+    "Enter onetime code",
+    "Enter onetime-code",
+    "Enter onetimecode",
+  ]) {
+    const draft = baseDraft();
+    draft.steps[0] = { ...draft.steps[0], description: text };
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, text);
+  }
+
+  for (const path of ["apikey", "api-keys", "username", "usernames", "onetime-code", "onetime%20code", "onetimecode"]) {
+    const draft = baseDraft();
+    draft.url = `https://portal.example.test/${path}`;
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, path);
+  }
+});
+
+test("rejects punctuation-separated credential intent in text and URL paths", () => {
+  for (const text of [
+    "Sign/in to continue",
+    "Log\\in",
+    "Enter user:name",
+    "Enter api+key",
+    "Enter pass/word",
+    "Enter the one:time code 2468",
+  ]) {
+    const draft = baseDraft();
+    draft.steps[0] = { ...draft.steps[0], description: text };
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, text);
+  }
+
+  for (const path of ["sign/in", "log%5Cin", "user%3Aname", "api%2Bkey", "pass/word", "one%3Atime%20code"]) {
+    const draft = baseDraft();
+    draft.url = `https://portal.example.test/${path}`;
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, path);
+  }
+});
+
+test("rejects raw credential URL segments before URL normalization", () => {
+  for (const url of [
+    "https://portal.example.test/password/2468/../../reports",
+    "https://portal.example.test\\password\\2468\\..\\..\\reports",
+    "https://portal.example.test/pin/1234/to/access/dashboard",
+    "https://portal.example.test/pin/1234/to/dashboard",
+    "https://portal.example.test/PIN/DEMO1234/onto/the/dashboard",
+  ]) {
+    const draft = baseDraft();
+    draft.url = url;
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, url);
+  }
+});
+
+test("allows PIN action phrases without allowing PIN values", () => {
+  for (const text of [
+    "Pin invoice to dashboard",
+    "Pin dashboard",
+    "Pin to dashboard",
+    "pin invoice to dashboard",
+    "pin dashboard",
+    "pin to dashboard",
+    "pin file",
+    "pin task",
+    "pin note",
+    "pin abcd",
+    "Pin report2024 to dashboard",
+    "Pin invoice1234 to dashboard",
+    "Pin 2024 report to dashboard",
+    "PIN REPORT2024 TO DASHBOARD",
+    "PIN 2024 REPORT TO DASHBOARD",
+    "PIN TASK1 TO DASHBOARD",
+    "Please pin report2024 to dashboard",
+    "Then pin invoice1234 to dashboard",
+    "Pin DOC1234 to dashboard",
+    "Please pin FY24 to dashboard",
+    "Pin report2024 onto dashboard",
+    "Pin report2024 on dashboard",
+    "PIN THIS REPORT",
+    "PIN TASK",
+    "PIN NOTE",
+    "PIN FILE",
+    "PIN ABCD",
+    "Pin 2 reports to the dashboard",
+    "Pin 3 files for review",
+  ]) {
+    const draft = baseDraft();
+    draft.steps[0] = { ...draft.steps[0], description: text };
+    assert.doesNotThrow(() => compileAgent(draft), text);
+  }
+
+  for (const text of [
+    "PIN 1234",
+    "PIN A1B2",
+    "PIN=abcdef",
+    "Pin 1234",
+    "Enter PIN ABCD",
+    "Enter the PIN number 2468",
+    "Enter personal identification number 2468",
+    "Enter authenticator code 123456",
+    "Enter my PIN",
+    "Paste your PIN",
+    "Fill in your PIN",
+    "Enter a PIN of 1234",
+    "Enter the account PIN",
+    "PIN1234",
+    "PIN ١٢٣٤",
+    "PIN\u200B1234",
+    "Enter verification codes 123456",
+    "Enter recovery code DEMO1234",
+    "Enter backup code DEMO1234",
+    "Enter passphrase DEMO1234",
+    "PIN 1234 accepted",
+    "Pin 1234 accepted",
+    "pin 1234 accepted",
+    "PIN A1B2 temporary",
+    "Pin A1B2 temporary",
+    "PIN 1234 to continue",
+    "PIN DEMO1234 to continue",
+    "PIN ABCD1 to continue",
+    "PIN 1234 to access dashboard",
+    "PIN DEMO1234 to continue on dashboard",
+    "PIN ABCD1 to unlock the dashboard",
+    "PIN 1234 to dashboard",
+    "Copy PIN 1234 to dashboard",
+    "Send PIN ABCD1 to the dashboard",
+    "Paste PIN DEMO1234 onto dashboard",
+    "PIN a1b2",
+    "the PIN is ABCD",
+  ]) {
+    const draft = baseDraft();
+    draft.steps[0] = { ...draft.steps[0], description: text };
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, text);
+  }
+
+  const pinGoal = baseDraft();
+  pinGoal.goal = "Use PIN 1234 for access";
+  assert.throws(() => compileAgent(pinGoal), /credentials.*managed by the host/i);
+
+  const pinOutcome = baseDraft();
+  pinOutcome.steps[0] = { ...pinOutcome.steps[0], expectedOutcome: "PIN 1234 accepted" };
+  assert.throws(() => compileAgent(pinOutcome), /credentials.*managed by the host/i);
+});
+
+test("allows benign PIN report phrases and an API-key hostname", () => {
+  const label = baseDraft();
+  label.steps[0] = { ...label.steps[0], description: "Open the PIN REPORT" };
+  assert.doesNotThrow(() => compileAgent(label));
+
+  const ordinaryAction = baseDraft();
+  ordinaryAction.steps[0] = { ...ordinaryAction.steps[0], description: "Pin this report" };
+  assert.doesNotThrow(() => compileAgent(ordinaryAction));
+
+  const url = baseDraft();
+  url.url = "https://api.key.example/public-report";
+  assert.doesNotThrow(() => compileAgent(url));
+
+  const recordedHost = baseDraft();
+  recordedHost.steps[0] = {
+    ...recordedHost.steps[0],
+    type: "navigation",
+    description: "Open api.key.example",
+    url: "https://api.key.example/reports",
+  };
+  assert.doesNotThrow(() => compileAgent(recordedHost));
+
+  const unrelatedHostText = baseDraft();
+  unrelatedHostText.steps[0] = { ...unrelatedHostText.steps[0], description: "Open api.key.example" };
+  assert.throws(() => compileAgent(unrelatedHostText), /credentials.*managed by the host/i);
+
+  const recordedCredentialPath = baseDraft();
+  recordedCredentialPath.steps[0] = { ...recordedCredentialPath.steps[0], description: "Open api.key.example/password" };
+  assert.throws(() => compileAgent(recordedCredentialPath), /credentials.*managed by the host/i);
+
+  for (const description of ["Enter api.key", "Enter pass.word", "Enter user.name", "Enter one.time code 123456"]) {
+    const draft = baseDraft();
+    draft.steps[0] = { ...draft.steps[0], description };
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, description);
+  }
+});
+
+test("rejects PIN assignment phrases", () => {
+  for (const goal of [
+    "Reset PIN to 1234",
+    "Set PIN as 1234",
+    "Change PIN to 1234",
+    "Update PIN as 1234",
+    "PIN to 1234",
+    "PIN as A1B2",
+  ]) {
+    const draft = baseDraft();
+    draft.goal = goal;
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, goal);
+  }
+});
+
+test("rejects PIN action intent across goals, descriptions, and targets", () => {
+  const mutations: Array<(draft: SetupDraft, text: string) => void> = [
+    (draft, text) => { draft.goal = text; },
+    (draft, text) => { draft.steps[0] = { ...draft.steps[0], description: text }; },
+    (draft, text) => { draft.steps[0] = { ...draft.steps[0], target: text }; },
+  ];
+
+  for (const action of ["Reset", "Set", "Change", "Update", "Copy", "Send", "Choose", "Paste", "Fill in", "Insert"]) {
+    for (const determiner of ["", "the "]) {
+      const text = `${action} ${determiner}PIN`;
+      for (const mutate of mutations) {
+        const draft = baseDraft();
+        mutate(draft, text);
+        assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, text);
+      }
+    }
+  }
+});
+
+test("rejects normalized PIN assignment phrases", () => {
+  for (const goal of ["Set PIN\v to 1234", "Set PIN-to-1234", "Set PIN-to-London"]) {
+    const draft = baseDraft();
+    draft.goal = goal;
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, goal);
+  }
+
+  const path = baseDraft();
+  path.url = "https://portal.example.test/pin/to/1234";
+  assert.throws(() => compileAgent(path), /credentials.*managed by the host/i);
+});
+
+test("allows setting a map pin to a place", () => {
+  const draft = baseDraft();
+  draft.goal = "Set the map pin to London";
+
+  assert.doesNotThrow(() => compileAgent(draft));
+});
+
+test("rejects alphabetic PIN assignments across goals, descriptions, and targets", () => {
+  const mutations: Array<(draft: SetupDraft, text: string) => void> = [
+    (draft, text) => { draft.goal = text; },
+    (draft, text) => { draft.steps[0] = { ...draft.steps[0], description: text }; },
+    (draft, text) => { draft.steps[0] = { ...draft.steps[0], target: text }; },
+  ];
+
+  for (const value of ["abcd", "Abcd"]) {
+    for (const prefix of ["", "Set the map pin to London, then "]) {
+      const text = `${prefix}set the PIN to ${value}`;
+      for (const mutate of mutations) {
+        const draft = baseDraft();
+        mutate(draft, text);
+        assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, text);
+      }
+    }
+  }
+});
+
+test("allows content PIN identifiers only in explicit click and path contexts", () => {
+  const click = baseDraft();
+  click.steps[0] = {
+    ...click.steps[0],
+    description: "Choose PIN REPORT2024",
+    target: "Choose PIN REPORT2024",
+  };
+  assert.doesNotThrow(() => compileAgent(click));
+
+  for (const identifier of ["DEMO1234", "OTP1234", "CODE1234"]) {
+    const draft = baseDraft();
+    draft.url = `https://portal.example.test/pin/${identifier}`;
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, identifier);
+  }
+});
+
+test("allows recorded clicks that pin report identifiers", () => {
+  for (const identifier of ["report2024", "DOC1234"]) {
+    const draft = baseDraft();
+    draft.steps[0] = {
+      ...draft.steps[0],
+      description: `Click Pin ${identifier} to dashboard`,
+      target: `Pin ${identifier} to dashboard`,
+    };
+
+    assert.doesNotThrow(() => compileAgent(draft), identifier);
+  }
+});
+
+test("rejects credential-shaped PIN click targets", () => {
+  const draft = baseDraft();
+  draft.steps[0] = {
+    ...draft.steps[0],
+    description: "Click the dashboard shortcut",
+    target: "PIN A1B2 to dashboard",
+  };
+
+  assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
+});
+
+test("allows PIN report identifiers in labels and URL paths", () => {
+  const label = baseDraft();
+  label.steps[0] = { ...label.steps[0], description: "Open PIN REPORT2024" };
+  assert.doesNotThrow(() => compileAgent(label));
+
+  const url = baseDraft();
+  url.url = "https://portal.example.test/pin/report2024";
+  assert.doesNotThrow(() => compileAgent(url));
+});
+
+test("does not let a content identifier hide a separate PIN code", () => {
+  const mutations: Array<(draft: SetupDraft) => void> = [
+    (draft) => {
+      draft.steps[0] = {
+        ...draft.steps[0],
+        description: "Pin report2024 to dashboard; PIN 1234 accepted",
+      };
+    },
+    (draft) => {
+      draft.steps[0] = { ...draft.steps[0], target: "PIN 1234 report to dashboard" };
+    },
+    (draft) => { draft.url = "https://portal.example.test/pin/1234/report"; },
+    (draft) => { draft.url = "https://portal.example.test/pin/%2531%2532%2533%2534/report"; },
+  ];
+
+  for (const mutate of mutations) {
+    const draft = baseDraft();
+    mutate(draft);
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
+  }
+});
+
+test("rejects uppercase PIN assignments after a determiner", () => {
+  for (const goal of ["Reset the PIN to ABCD", "Change the PIN to DEMO"]) {
+    const draft = baseDraft();
+    draft.goal = goal;
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, goal);
+  }
+
+  const path = baseDraft();
+  path.url = "https://portal.example.test/reset/the/pin/to/ABCD";
+  assert.throws(() => compileAgent(path), /credentials.*managed by the host/i);
+
+  const mapPin = baseDraft();
+  mapPin.goal = "Set the map pin to London";
+  assert.doesNotThrow(() => compileAgent(mapPin));
+});
+
+test("allows arbitrary lettered PIN identifiers only for safe click actions", () => {
+  for (const identifier of ["CHART1234", "WIDGET7"]) {
+    const draft = baseDraft();
+    draft.steps[0] = {
+      ...draft.steps[0],
+      description: `Pin ${identifier} to dashboard`,
+      target: `Pin ${identifier} to dashboard`,
+    };
+    assert.doesNotThrow(() => compileAgent(draft), identifier);
+  }
+
+  const goal = baseDraft();
+  goal.goal = "Pin CHART1234 to dashboard";
+  assert.throws(() => compileAgent(goal), /credentials.*managed by the host/i);
+
+  const navigation = baseDraft();
+  navigation.steps[0] = {
+    ...navigation.steps[0],
+    type: "navigation",
+    description: "Pin CHART1234 to dashboard",
+    target: "Pin CHART1234 to dashboard",
+  };
+  assert.throws(() => compileAgent(navigation), /credentials.*managed by the host/i);
+
+  const credential = baseDraft();
+  credential.steps[0] = {
+    ...credential.steps[0],
+    description: "Pin A1B2 to dashboard",
+    target: "Pin A1B2 to dashboard",
+  };
+  assert.throws(() => compileAgent(credential), /credentials.*managed by the host/i);
+});
+
+test("rejects credential terms with appended digits without blocking ordinary suffixes", () => {
+  const sensitive: Array<[string, (draft: SetupDraft, text: string) => void]> = [
+    ["Enter password1234", (draft, text) => { draft.name = text; }],
+    ["Use OTP123456", (draft, text) => { draft.goal = text; }],
+    ["Enter apikey1234", (draft, text) => { draft.steps[0] = { ...draft.steps[0], description: text }; }],
+    ["Enter token1234", (draft, text) => { draft.steps[0] = { ...draft.steps[0], target: text }; }],
+    ["Enter secret1234", (draft, text) => { draft.steps[0] = { ...draft.steps[0], expectedOutcome: text }; }],
+  ];
+
+  for (const [text, mutate] of sensitive) {
+    const draft = baseDraft();
+    mutate(draft, text);
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, text);
+  }
+
+  for (const text of ["Open the passwordless report", "Review tokenization results"]) {
+    const draft = baseDraft();
+    draft.steps[0] = { ...draft.steps[0], description: text };
+    assert.doesNotThrow(() => compileAgent(draft), text);
+  }
+});
+
+test("rejects normalized PIN assignments across prompt-bearing fields", () => {
+  const mutations: Array<(draft: SetupDraft, text: string) => void> = [
+    (draft, text) => { draft.goal = text; },
+    (draft, text) => { draft.steps[0] = { ...draft.steps[0], description: text }; },
+    (draft, text) => { draft.steps[0] = { ...draft.steps[0], target: text }; },
+  ];
+
+  for (const text of ["Reset this PIN to ABCD", "PIN：ABCD", "PIN\u200B:ABCD", "PIN\v:ABCD"]) {
+    for (const mutate of mutations) {
+      const draft = baseDraft();
+      mutate(draft, text);
+      assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, text);
+    }
+  }
+});
+
+test("rejects PIN disclosure actions in click descriptions and targets", () => {
+  for (const text of ["Show PIN", "Reveal the PIN", "Choose your PIN", "Choose PIN PASSCODE1234"]) {
+    const description = baseDraft();
+    description.steps[0] = { ...description.steps[0], description: text };
+    assert.throws(() => compileAgent(description), /credentials.*managed by the host/i, text);
+
+    const target = baseDraft();
+    target.steps[0] = { ...target.steps[0], target: text };
+    assert.throws(() => compileAgent(target), /credentials.*managed by the host/i, text);
+  }
+});
+
+test("allows map pin actions and complete recorded PIN click labels", () => {
+  for (const goal of ["Drop a pin on the map", "Place a pin on map", "Set the PIN on the map"]) {
+    const draft = baseDraft();
+    draft.goal = goal;
+    assert.doesNotThrow(() => compileAgent(draft), goal);
+  }
+
+  for (const label of ["Choose PIN REPORT", "Choose PIN REPORT-2024", "Choose PIN REPORT 2024", "Open PIN DOC12345"]) {
+    const draft = baseDraft();
+    draft.steps[0] = {
+      ...draft.steps[0],
+      description: label,
+      target: label,
+    };
+    assert.doesNotThrow(() => compileAgent(draft), label);
+  }
+});
+
+for (const text of ["mypasswordless1234", "mytokenization1234"]) {
+  test(`allows benign concatenated ${text} in text and URL paths`, () => {
+    const draft = baseDraft();
+    draft.goal = text;
+    draft.url = `https://portal.example.test/${text}`;
+    assert.doesNotThrow(() => compileAgent(draft), text);
+  });
+}
+
+const appendedCredentialCases: Array<[string, (draft: SetupDraft, text: string) => void]> = [
+  ["adminpassword1234", (draft, text) => { draft.goal = text; }],
+  ["oldpassword1234", (draft, text) => { draft.steps[0] = { ...draft.steps[0], description: text }; }],
+  ["siteapikey1234", (draft, text) => { draft.steps[0] = { ...draft.steps[0], target: text }; }],
+  ["bankotp1234", (draft, text) => { draft.steps[0] = { ...draft.steps[0], expectedOutcome: text }; }],
+  ["mytoken1234", (draft, text) => { draft.goal = text; }],
+  ["mysecret1234", (draft, text) => { draft.name = text; }],
+  ["myapikey1234", (draft, text) => { draft.steps[0] = { ...draft.steps[0], description: text }; }],
+  ["accountpassword1234", (draft, text) => { draft.steps[0] = { ...draft.steps[0], target: text }; }],
+  ["mypasswordabc1234", (draft, text) => { draft.steps[0] = { ...draft.steps[0], expectedOutcome: text }; }],
+  ["yourtokenabc1234", (draft, text) => { draft.steps[0] = { ...draft.steps[0], type: "key_press", value: text }; }],
+  ["oursecret1234", (draft, text) => { draft.goal = text; }],
+  ["accountapikey1234", (draft, text) => { draft.goal = text; }],
+  ["mypassphrase1234", (draft, text) => { draft.goal = text; }],
+  ["yourauthenticator1234", (draft, text) => { draft.goal = text; }],
+  ["ourauthentication1234", (draft, text) => { draft.goal = text; }],
+  ["accountauthorization1234", (draft, text) => { draft.goal = text; }],
+  ["myoauth21234", (draft, text) => { draft.goal = text; }],
+  ["yoursignin1234", (draft, text) => { draft.goal = text; }],
+  ["ourmfa1234", (draft, text) => { draft.goal = text; }],
+  ["accountrecoverycode1234", (draft, text) => { draft.goal = text; }],
+  ["myverificationcode1234", (draft, text) => { draft.goal = text; }],
+  ["yourbackupcode1234", (draft, text) => { draft.goal = text; }],
+  ["ourssn1234", (draft, text) => { draft.goal = text; }],
+  ["accountcardnumber1234", (draft, text) => { draft.goal = text; }],
+  ["mypassword1234", (draft, text) => { draft.name = text; }],
+  ["mypasscode1234", (draft, text) => { draft.goal = text; }],
+  ["mycredential1234", (draft, text) => { draft.steps[0] = { ...draft.steps[0], description: text }; }],
+  ["myusername1234", (draft, text) => { draft.steps[0] = { ...draft.steps[0], target: text }; }],
+  ["myotp1234", (draft, text) => { draft.steps[0] = { ...draft.steps[0], expectedOutcome: text }; }],
+  ["mycvv123", (draft, text) => { draft.steps[0] = { ...draft.steps[0], type: "key_press", value: text }; }],
+  ["passcode1234", (draft, text) => { draft.name = text; }],
+  ["passphrase1234", (draft, text) => { draft.goal = text; }],
+  ["authentication1234", (draft, text) => { draft.goal = text; }],
+  ["authenticator1234", (draft, text) => { draft.goal = text; }],
+  ["authorization1234", (draft, text) => { draft.goal = text; }],
+  ["oauth21234", (draft, text) => { draft.goal = text; }],
+  ["signin1234", (draft, text) => { draft.goal = text; }],
+  ["one-time code1234", (draft, text) => { draft.goal = text; }],
+  ["one-time passcode1234", (draft, text) => { draft.goal = text; }],
+  ["mfa1234", (draft, text) => { draft.goal = text; }],
+  ["verification code1234", (draft, text) => { draft.goal = text; }],
+  ["recovery code1234", (draft, text) => { draft.goal = text; }],
+  ["backup code1234", (draft, text) => { draft.goal = text; }],
+  ["social-security number1234", (draft, text) => { draft.goal = text; }],
+  ["ssn1234", (draft, text) => { draft.goal = text; }],
+  ["credit-card1234", (draft, text) => { draft.goal = text; }],
+  ["card-number1234", (draft, text) => { draft.goal = text; }],
+  ["credential1234", (draft, text) => { draft.goal = text; }],
+  ["username1234", (draft, text) => { draft.steps[0] = { ...draft.steps[0], description: text }; }],
+  ["auth1234", (draft, text) => { draft.steps[0] = { ...draft.steps[0], target: text }; }],
+  ["login1234", (draft, text) => { draft.steps[0] = { ...draft.steps[0], expectedOutcome: text }; }],
+  ["cvv123", (draft, text) => { draft.steps[0] = { ...draft.steps[0], type: "key_press", value: text }; }],
+];
+
+for (const [text, mutate] of appendedCredentialCases) {
+  test(`rejects appended credential ${text} in a prompt-bearing field`, () => {
+    const draft = baseDraft();
+    mutate(draft, text);
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, text);
+  });
+
+  test(`rejects appended credential ${text} in a URL path`, () => {
+    const draft = baseDraft();
+    draft.url = `https://portal.example.test/${text}`;
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, text);
+  });
+}
+
+for (const goal of [
+  "Set a pin on the map",
+  "Set this pin on the map",
+  "Choose a pin on the map",
+  "Set a pin at London on the map",
+  "Choose a pin for the map",
+  "Set a pin near London on the map",
+]) {
+  test(`allows ordinary map goal: ${goal}`, () => {
+    const draft = baseDraft();
+    draft.goal = goal;
+    assert.doesNotThrow(() => compileAgent(draft), goal);
+  });
+}
+
+for (const text of ["mysecretsanta2024", "mytokenizer2024", "myusernamegenerator2024"]) {
+  test(`allows benign compound ${text} in a prompt-bearing field`, () => {
+    const draft = baseDraft();
+    draft.goal = text;
+    assert.doesNotThrow(() => compileAgent(draft), text);
+  });
+
+  test(`allows benign compound ${text} in a URL path`, () => {
+    const draft = baseDraft();
+    draft.url = `https://portal.example.test/${text}`;
+    assert.doesNotThrow(() => compileAgent(draft), text);
+  });
+}
+
+for (const goal of ["Set your PIN", "Choose a PIN", "Choose your PIN"]) {
+  test(`rejects sensitive PIN goal: ${goal}`, () => {
+    const draft = baseDraft();
+    draft.goal = goal;
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, goal);
+  });
+}
+
+for (const text of ["admin2password1234", "user1apikey1234", "v2otp1234", "team7secret1234"]) {
+  for (const field of ["goal", "description", "target", "expectedOutcome", "url"] as const) {
+    test(`rejects numeric owner credential ${text} in ${field}`, () => {
+      const draft = baseDraft();
+      if (field === "url") draft.url = `https://portal.example.test/${text}`;
+      else if (field === "goal") draft.goal = text;
+      else draft.steps[0] = { ...draft.steps[0], [field]: text };
+      assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
+    });
+  }
+}
+
+for (const text of ["secretary2024", "tokenomics2024", "author2024", "classnotes2024", "secretion2024"]) {
+  for (const field of ["goal", "url"] as const) {
+    test(`allows ordinary numeric word ${text} in ${field}`, () => {
+      const draft = baseDraft();
+      if (field === "url") draft.url = `https://portal.example.test/${text}`;
+      else draft.goal = text;
+      assert.doesNotThrow(() => compileAgent(draft));
+    });
+  }
+}
+
+for (const goal of [
+  "Set a pin at 10 Downing Street, London on the map",
+  "Choose a pin for this map",
+  "Set a pin near 5th Avenue on this map",
+]) {
+  test(`allows complete map placement: ${goal}`, () => {
+    const draft = baseDraft();
+    draft.goal = goal;
+    assert.doesNotThrow(() => compileAgent(draft));
+  });
+}
+
+for (const [texts, sensitive] of [
+  [["root2password1234", "ops7apikey1234", "service1token1234", "userpassword1234", "teamXsecret1234"], true],
+  [["oldsecretary2024", "banktokenomics2024", "user1author2024", "team7secretary2024"], false],
+] as const) {
+  for (const text of texts) {
+    for (const field of ["name", "goal", "description", "target", "expectedOutcome", "value", "url"] as const) {
+      test(`classifies prefixed token ${text} in ${field}`, () => {
+        const draft = baseDraft();
+        if (field === "url") draft.url = `https://portal.example.test/${text}`;
+        else if (field === "name" || field === "goal") draft[field] = text;
+        else draft.steps[0] = { ...draft.steps[0], [field]: text };
+        if (sensitive) assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
+        else assert.doesNotThrow(() => compileAgent(draft));
+      });
+    }
+  }
+}
+
+for (const [texts, sensitive] of [
+  [["Set your pin at 10 Downing Street on this map", "Choose my pin for the map", "Place our pin near 5th Avenue on that map"], false],
+  [["Enter your pin on the map", "Show my pin on the map", "Set your pin to ABCD on the map", "Place our pin A1B2 on the map", "Choose my pin for the map then reveal PIN", "Place our pin:ABCD on the map", "Place pin near show pin on the map"], true],
+] as const) {
+  for (const text of texts) {
+    for (const field of ["goal", "description", "target"] as const) {
+      test(`classifies full map action ${text} in ${field}`, () => {
+        const draft = baseDraft();
+        if (field === "goal") draft.goal = text;
+        else draft.steps[0] = { ...draft.steps[0], [field]: text };
+        if (sensitive) assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
+        else assert.doesNotThrow(() => compileAgent(draft));
+      });
+    }
+  }
+}
+
+for (const [texts, sensitive] of [
+  [["mymfaabc1234", "myauthorizationabc1234", "root2passwordabc1234", "ops7apikeyprod1234", "service1tokenprod1234", "userpasswordabc1234", "teamXsecretcode1234"], true],
+  [["myauthor2024", "yoursecretary2024", "ourtokenomics2024", "accountsecretion2024"], false],
+  [["Use this map to place a pin", "Place a pin then show the map", "Use this map to choose my pin", "Please set your pin on the map", "On your map, choose my pin near London", "Please place our pin at 10 Downing Street on your map", "For this map please choose a pin near London"], false],
+  [["Place my pin on the map then enter 1234", "Place my pin on the map then reveal ABCD", "Place my pin on the map then enter A1B2", "Please place your pin on the map then reveal it", "On the map, place my pin then enter it", "Please place a pin on the map then show my pin", "On your map enter your pin", "Please set your pin to ABCD on the map", "Place our pin on the map then reveal the pin"], true],
+] as const) {
+  for (const text of texts) {
+    for (const field of ["name", "goal", "description", "target", "expectedOutcome", "value", "url"] as const) {
+      test(`classifies structural intent ${text} in ${field}`, () => {
+        const draft = baseDraft();
+        if (field === "url") draft.url = `https://portal.example.test/${encodeURIComponent(text)}`;
+        else if (field === "name" || field === "goal") draft[field] = text;
+        else draft.steps[0] = { ...draft.steps[0], [field]: text };
+        if (sensitive) assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
+        else assert.doesNotThrow(() => compileAgent(draft));
+      });
+    }
+  }
+}
