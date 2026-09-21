@@ -75,7 +75,7 @@ const pinIntentPattern = /\b(?:enter|provide|type|use|submit|verify) (?:(?:the|y
 const pinAssignmentPattern = /\bpin\s*[:=]\s*\S+/iu;
 const pinCodePattern = /\b[Pp][Ii][Nn]\s*(?:\p{N}{4,12}|(?=[A-Z0-9]{4,8}(?![A-Z0-9]))(?=[A-Z0-9]*\d)[A-Z0-9]+)\s*$/u;
 const pinLeadingCodePattern = /(?:^|\s)pin\s+(?=[\p{L}\p{N}]{4,12}(?:\s|$))(?=[\p{L}\p{N}]*\p{N})[\p{L}\p{N}]{4,12}(?=\s|$)/iu;
-const pinActionPattern = /^pin\s+.+\s+to\s+.+$/iu;
+const pinActionPattern = /\bpin\s+(.+?)\s+(?:to|onto|on)\s+.+$/iu;
 const maximumPathDecodes = 4;
 const rawReplayPattern = /\b(?:css|xpath|selector)\b|#[a-z][\w-]*(?:\s*[>+~]|\[)|\[[^\]]+\]|(?:^|\s)(?:x|y)\s*[:=]\s*\d+|^\s*\d+(?:px)?\s*,\s*\d+(?:px)?\s*$/i;
 const maximumNameLength = 150;
@@ -252,8 +252,13 @@ function containsSensitiveText(value: string): boolean {
   return credentialIntentPatterns.some((pattern) => pattern.test(normalized))
     || pinIntentPattern.test(normalized)
     || pinAssignmentPattern.test(value)
-    || (pinLeadingCodePattern.test(normalized) && !pinActionPattern.test(normalized))
+    || (pinLeadingCodePattern.test(normalized) && !isPinActionText(normalized))
     || pinCodePattern.test(normalized);
+}
+
+function isPinActionText(value: string): boolean {
+  const object = pinActionPattern.exec(value)?.[1];
+  return object !== undefined && (object.match(/\p{L}/gu)?.length ?? 0) >= 4;
 }
 
 function isRecorderHostDescription(step: SetupStep): boolean {
