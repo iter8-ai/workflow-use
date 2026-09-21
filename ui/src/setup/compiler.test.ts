@@ -802,7 +802,22 @@ test("allows map pin actions and complete recorded PIN click labels", () => {
   }
 });
 
+for (const text of ["mypasswordless1234", "mytokenization1234"]) {
+  test(`allows benign concatenated ${text} in text and URL paths`, () => {
+    const draft = baseDraft();
+    draft.goal = text;
+    draft.url = `https://portal.example.test/${text}`;
+    assert.doesNotThrow(() => compileAgent(draft), text);
+  });
+}
+
 const appendedCredentialCases: Array<[string, (draft: SetupDraft, text: string) => void]> = [
+  ["mypassword1234", (draft, text) => { draft.name = text; }],
+  ["mypasscode1234", (draft, text) => { draft.goal = text; }],
+  ["mycredential1234", (draft, text) => { draft.steps[0] = { ...draft.steps[0], description: text }; }],
+  ["myusername1234", (draft, text) => { draft.steps[0] = { ...draft.steps[0], target: text }; }],
+  ["myotp1234", (draft, text) => { draft.steps[0] = { ...draft.steps[0], expectedOutcome: text }; }],
+  ["mycvv123", (draft, text) => { draft.steps[0] = { ...draft.steps[0], type: "key_press", value: text }; }],
   ["passcode1234", (draft, text) => { draft.name = text; }],
   ["passphrase1234", (draft, text) => { draft.goal = text; }],
   ["authentication1234", (draft, text) => { draft.goal = text; }],
