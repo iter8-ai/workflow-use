@@ -450,13 +450,25 @@ test("allows PIN action phrases without allowing PIN values", () => {
     "PIN\u200B1234",
     "Enter verification codes 123456",
     "Enter recovery code DEMO1234",
+    "Enter backup code DEMO1234",
     "Enter passphrase DEMO1234",
+    "PIN 1234 accepted",
+    "PIN A1B2 temporary",
+    "PIN a1b2",
     "the PIN is ABCD",
   ]) {
     const draft = baseDraft();
     draft.steps[0] = { ...draft.steps[0], description: text };
     assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, text);
   }
+
+  const pinGoal = baseDraft();
+  pinGoal.goal = "Use PIN 1234 for access";
+  assert.throws(() => compileAgent(pinGoal), /credentials.*managed by the host/i);
+
+  const pinOutcome = baseDraft();
+  pinOutcome.steps[0] = { ...pinOutcome.steps[0], expectedOutcome: "PIN 1234 accepted" };
+  assert.throws(() => compileAgent(pinOutcome), /credentials.*managed by the host/i);
 });
 
 test("allows benign PIN report phrases and an API-key hostname", () => {

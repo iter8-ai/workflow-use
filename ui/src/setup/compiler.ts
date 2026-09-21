@@ -63,6 +63,7 @@ const credentialIntentPatterns = [
   /\b(?:mfa|m f a|2fa|2 fa|2 f a)\b/i,
   /\bverification codes?\b/i,
   /\brecovery codes?\b/i,
+  /\bbackup codes?\b/i,
   /\b(?:cvv|cvc)\b/i,
   /\bsocial security(?: number)?\b/i,
   /\bssn\b/i,
@@ -73,6 +74,7 @@ const credentialIntentPatterns = [
 const pinIntentPattern = /\b(?:enter|provide|type|use|submit|verify) (?:(?:the|your) )?pin\b|\b(?:a|account|my|your|our) pin\b|\bpin (?:code|number|verification)\b|\bpersonal identification number\b|\b(?:my )?pin\s*(?:is|:)\s*\S+\b/i;
 const pinAssignmentPattern = /\bpin\s*[:=]\s*\S+/iu;
 const pinCodePattern = /\b[Pp][Ii][Nn]\s*(?:\p{N}{4,12}|(?=[A-Z0-9]{4,8}(?![A-Z0-9]))(?=[A-Z0-9]*\d)[A-Z0-9]+)\s*$/u;
+const explicitPinCodePattern = /(?:^|\s)PIN\s+(?=[\p{L}\p{N}]{4,12}(?:\s|$))(?=[\p{L}\p{N}]*\p{N})[\p{L}\p{N}]{4,12}(?=\s|$)/u;
 const maximumPathDecodes = 4;
 const rawReplayPattern = /\b(?:css|xpath|selector)\b|#[a-z][\w-]*(?:\s*[>+~]|\[)|\[[^\]]+\]|(?:^|\s)(?:x|y)\s*[:=]\s*\d+|^\s*\d+(?:px)?\s*,\s*\d+(?:px)?\s*$/i;
 const maximumNameLength = 150;
@@ -249,6 +251,7 @@ function containsSensitiveText(value: string): boolean {
   return credentialIntentPatterns.some((pattern) => pattern.test(normalized))
     || pinIntentPattern.test(normalized)
     || pinAssignmentPattern.test(value)
+    || explicitPinCodePattern.test(normalized)
     || pinCodePattern.test(normalized);
 }
 
