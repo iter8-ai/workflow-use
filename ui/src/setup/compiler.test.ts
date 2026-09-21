@@ -423,6 +423,8 @@ test("allows PIN action phrases without allowing PIN values", () => {
     "PIN TASK1 TO DASHBOARD",
     "Please pin report2024 to dashboard",
     "Then pin invoice1234 to dashboard",
+    "Pin DOC1234 to dashboard",
+    "Please pin FY24 to dashboard",
     "Pin report2024 onto dashboard",
     "Pin report2024 on dashboard",
     "PIN THIS REPORT",
@@ -465,6 +467,8 @@ test("allows PIN action phrases without allowing PIN values", () => {
     "PIN A1B2 temporary",
     "Pin A1B2 temporary",
     "PIN 1234 to continue",
+    "PIN DEMO1234 to continue",
+    "PIN ABCD1 to continue",
     "PIN a1b2",
     "the PIN is ABCD",
   ]) {
