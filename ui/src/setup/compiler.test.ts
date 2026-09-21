@@ -532,3 +532,41 @@ test("allows benign PIN report phrases and an API-key hostname", () => {
     assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, description);
   }
 });
+
+test("rejects PIN assignment phrases", () => {
+  for (const goal of [
+    "Reset PIN to 1234",
+    "Set PIN as 1234",
+    "Change PIN to 1234",
+    "Update PIN as 1234",
+    "PIN to 1234",
+    "PIN as A1B2",
+  ]) {
+    const draft = baseDraft();
+    draft.goal = goal;
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, goal);
+  }
+});
+
+test("allows recorded clicks that pin report identifiers", () => {
+  for (const identifier of ["report2024", "DOC1234"]) {
+    const draft = baseDraft();
+    draft.steps[0] = {
+      ...draft.steps[0],
+      description: `Click Pin ${identifier} to dashboard`,
+      target: `Pin ${identifier} to dashboard`,
+    };
+
+    assert.doesNotThrow(() => compileAgent(draft), identifier);
+  }
+});
+
+test("allows PIN report identifiers in labels and URL paths", () => {
+  const label = baseDraft();
+  label.steps[0] = { ...label.steps[0], description: "Open PIN REPORT2024" };
+  assert.doesNotThrow(() => compileAgent(label));
+
+  const url = baseDraft();
+  url.url = "https://portal.example.test/pin/report2024";
+  assert.doesNotThrow(() => compileAgent(url));
+});

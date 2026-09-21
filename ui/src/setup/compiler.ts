@@ -72,10 +72,10 @@ const credentialIntentPatterns = [
   /\buser ?names?\b/i,
 ];
 const pinIntentPattern = /\b(?:enter|provide|type|use|submit|verify) (?:(?:the|your) )?pin\b|\b(?:a|account|my|your|our) pin\b|\bpin (?:code|number|verification)\b|\bpersonal identification number\b|\b(?:my )?pin\s*(?:is|:)\s*\S+\b/i;
-const pinAssignmentPattern = /\bpin\s*[:=]\s*\S+/iu;
+const pinAssignmentPattern = /\bpin\s*[:=]\s*\S+|\b(?:reset|set|change|update)\s+(?:(?:the|your)\s+)?pin\s+(?:to|as)\s+\S+|\bpin\s+(?:to|as)\s+(?:\p{N}{4,12}|(?=[\p{L}\p{N}]{4,8}\b)(?=[\p{L}\p{N}]*\p{N})[\p{L}\p{N}]{4,8})\b/iu;
 const pinCodePattern = /\b[Pp][Ii][Nn]\s*(?:\p{N}{4,12}|(?=[A-Z0-9]{4,8}(?![A-Z0-9]))(?=[A-Z0-9]*\d)[A-Z0-9]+)\s*$/u;
-const pinLeadingCodePattern = /(?:^|\s)pin\s+(?=[\p{L}\p{N}]{4,12}(?:\s|$))(?=[\p{L}\p{N}]*\p{N})[\p{L}\p{N}]{4,12}(?=\s|$)/iu;
-const pinActionPattern = /^(?:(?:please|then)\s+)?pin\s+(.+?)\s+(?:to|onto|on)\s+(.+)$/iu;
+const pinLeadingCodePattern = /(?:^|\s)pin\s+(?:\p{N}{4,12}|(?=[\p{L}\p{N}]{4,8}(?:\s|$))(?=[\p{L}\p{N}]*\p{N})[\p{L}\p{N}]{4,8})(?=\s|$)/iu;
+const pinActionPattern = /^(?:(?:please|then)\s+)?(?:click\s+)?pin\s+(.+?)\s+(?:to|onto|on)\s+(.+)$/iu;
 const maximumPathDecodes = 4;
 const rawReplayPattern = /\b(?:css|xpath|selector)\b|#[a-z][\w-]*(?:\s*[>+~]|\[)|\[[^\]]+\]|(?:^|\s)(?:x|y)\s*[:=]\s*\d+|^\s*\d+(?:px)?\s*,\s*\d+(?:px)?\s*$/i;
 const maximumNameLength = 150;
@@ -129,7 +129,7 @@ function validateDraft(draft: SetupDraft): void {
     requireText(step.id, "Step id");
     requireText(step.description, `Description for step ${step.id}`);
     if (
-      (containsSensitiveText(step.description, true) && !isRecorderHostDescription(step))
+      (containsSensitiveText(step.description, step.type === "click") && !isRecorderHostDescription(step))
       || containsSensitiveText(optionalStepText(step.expectedOutcome) ?? "")
     ) {
       throw credentialError();
@@ -158,7 +158,7 @@ function validateStep(step: SetupStep): void {
   } else if (url !== undefined) {
     validateUrl(url, `URL for step ${step.id}`);
   }
-  if (target !== undefined && containsSensitiveText(target)) {
+  if (target !== undefined && containsSensitiveText(target, step.type === "click")) {
     throw credentialError();
   }
   if (value !== undefined && isMaskedValue(value)) {
