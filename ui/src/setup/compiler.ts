@@ -46,10 +46,10 @@ type CompiledAgent = {
 
 const credentialStem = String.raw`(?:password(?!less)s?|passcodes?|passphrases?|secret(?!santa)s?|(?:api)?token(?!ization|izer)s?|apikeys?|credentials?|auth|authenticat(?:e|es|ed|ing|ion|or|ors)|authoriz(?:e|es|ed|ing|ation|ations)|oauth2?|log(?:ged|ging)?(?:in|into|on)|logins?|logons?|sign(?:ed|ing)?(?:in|into|on)|signins?|signons?|onetime(?:passwords?|passcodes?|codes?)|(?:onetime)?(?:otp|totp)|mfa|2fa|verificationcodes?|recoverycodes?|backupcodes?|cvv|cvc|socialsecurity(?:number)?|ssn|creditcards?|cardnumbers?|username(?!generator)s?)`;
 const directDigitCredentialPattern = new RegExp(String.raw`\b[\p{L}\p{N}]*${credentialStem}\p{N}+`, "iu");
-const ownedCredentialPattern = new RegExp(String.raw`\b(?:my|your|our|account)${credentialStem}(?=[\p{L}\p{N}]*\p{N})[\p{L}\p{N}]+`, "iu");
+const strongCredentialPattern = /(?:password(?!less)|passcode|passphrase|apikey|credential|username(?!generator)|otp|totp|cvv|cvc)/iu;
+const ownedCredentialPattern = new RegExp(String.raw`^(?:my|your|our|account|admin|root|ops|service|user|team|v)[\p{L}\p{N}]*?(${credentialStem})([\p{L}\p{N}]*)$`, "iu");
 const credentialIntentPatterns = [
   directDigitCredentialPattern,
-  ownedCredentialPattern,
   /\b(?:passwords?|pass words?)(?!\p{L})/iu,
   /\bpasscodes?(?!\p{L})/iu,
   /\bpassphrases?(?!\p{L})/iu,
@@ -85,7 +85,10 @@ const pinCodePattern = /\b[Pp][Ii][Nn]\s*(?:\p{N}{4,12}|(?=[A-Z0-9]{4,12}(?![A-Z
 const pinLeadingCodePattern = /(?:^|\s)pin\s+(?:\p{N}{4,12}|(?=[\p{L}\p{N}]{4,12}(?:\s|$))(?=[\p{L}\p{N}]*\p{N})[\p{L}\p{N}]{4,12})(?=\s|$)/iu;
 const safePinClickActionPattern = /^(?:(?:click|please|then)\s+)?pin\s+(?:\p{L}{2,}\p{N}{1,4}(?:\s+(?:to|onto|on)\s+(?:the\s+)?dashboard)?|(?:19|20)\p{N}{2}\s+\p{L}+(?:\s+\p{L}+)*\s+(?:to|onto|on)\s+(?:the\s+)?dashboard)$/iu;
 const safePinClickLabelPattern = /^(?:open|click|select|choose)\s+pin\s+(?:report|\p{L}{2,}\s?\p{N}{1,5})$/iu;
-const safeMapPinActionPattern = /^(?:set|choose|place|drop) (?:(?:a|the|this|that|my|your|our) )?pin (?:(?:on|onto|for) (?:(?:the|this|that) )?map|(?:at|near) [\p{L}\p{N}]+(?: [\p{L}\p{N}]+)* (?:on|onto) (?:(?:the|this|that) )?map)$/iu;
+const safeMapPinActionPattern = /\b(?:set|choose|place|drop)\b.*\bpin\b/iu;
+const pinDisclosureOrEntryPattern = /\b(?:enter|provide|type|use|submit|verify|copy|send|show|reveal|insert|paste|fill)\s+(?:(?:a|the|this|that|my|your|our)\s+)?pin\b|\bpin\b.*\b(?:enter|provide|type|use|submit|verify|copy|send|show|reveal|insert|paste|fill)\s+(?:it|this|that|the code)\b/iu;
+const pinPostActionObjectPattern = /\b(?:enter|provide|type|use|submit|verify|copy|send|show|reveal|insert|paste|fill)\s+([\p{L}\p{N}]{4,12})\b/giu;
+const pinAssociatedCodePattern = /^(?:[A-Z]{4,12}|(?=[\p{L}\p{N}]*\p{N})[\p{L}\p{N}]{4,12})$/u;
 const safePinContentPathPattern = /^pin\s+report\p{N}{1,4}$/iu;
 const maximumPathDecodes = 4;
 const rawReplayPattern = /\b(?:css|xpath|selector)\b|#[a-z][\w-]*(?:\s*[>+~]|\[)|\[[^\]]+\]|(?:^|\s)(?:x|y)\s*[:=]\s*\d+|^\s*\d+(?:px)?\s*,\s*\d+(?:px)?\s*$/i;
@@ -262,14 +265,35 @@ function containsSensitiveText(value: string, allowPinCode = false): boolean {
   const normalized = normalizeIntentText(value);
   const normalizedAssignment = normalizePinAssignmentText(value);
   const isMapPlacement = safeMapPinActionPattern.test(normalized)
+    && /\bmap\b/i.test(normalized)
+    && !pinDisclosureOrEntryPattern.test(normalized)
+    && !Array.from(normalized.slice(normalized.search(/\bpin\b/i)).matchAll(pinPostActionObjectPattern))
+      .some((match) => pinAssociatedCodePattern.test(match[1]))
     && normalized.match(/\bpin\b/gi)?.length === 1;
-  return credentialIntentPatterns.some((pattern) => pattern.test(normalized))
+  return containsCompactCredential(value)
+    || credentialIntentPatterns.some((pattern) => pattern.test(normalized))
     || pinIntentPattern.test(normalized)
     || (!isMapPlacement && (possessivePinPattern.test(normalized)
       || (!allowPinCode && pinActionIntentPattern.test(normalized))))
     || pinDirectAssignmentPattern.test(normalizedAssignment)
     || pinAssignmentPattern.test(normalized)
     || (!allowPinCode && (pinLeadingCodePattern.test(normalized) || pinCodePattern.test(normalized)));
+}
+
+function containsCompactCredential(value: string): boolean {
+  const tokens = value.normalize("NFKD").replace(/\p{M}|\p{Cf}/gu, "").match(/[\p{L}\p{N}]+/gu) ?? [];
+  return tokens.some((token) => {
+    if (!/\p{N}/u.test(token)) return false;
+    if (strongCredentialPattern.test(token)) return true;
+    const owned = ownedCredentialPattern.exec(token);
+    if (!owned) return false;
+    const [, stem, suffix] = owned;
+    const continuation = suffix.toLowerCase();
+    if (stem.toLowerCase() === "auth") return !/^or(?!iz)/u.test(continuation);
+    if (stem.toLowerCase() === "token") return !/^(?:omics|ization|izer)/u.test(continuation);
+    if (/^secrets?$/iu.test(stem)) return !/^(?:ary|aries|ion|ions|santa)/u.test(continuation);
+    return true;
+  });
 }
 
 function normalizePinAssignmentText(value: string): string {
