@@ -72,9 +72,10 @@ const credentialIntentPatterns = [
   /\buser ?names?\b/i,
 ];
 const pinIntentPattern = /\b(?:enter|provide|type|use|submit|verify) (?:(?:the|your) )?pin\b|\b(?:a|account|my|your|our) pin\b|\bpin (?:code|number|verification)\b|\bpersonal identification number\b|\b(?:my )?pin\s*(?:is|:)\s*\S+\b/i;
+const pinActionIntentPattern = /\b(?:reset|change|update|insert|paste(?: in)?|fill(?: in)?) (?:the )?pin\b/i;
 const pinDirectAssignmentPattern = /\bpin\s*[:=]\s*\S+/iu;
 const pinAssignmentPattern = /\b(?:reset|set|change|update)\s+(?:your\s+)?pin\s+(?:to|as)\s+\S+|\bpin\s+(?:to|as)\s+(?:\p{N}{4,12}|(?=[\p{L}\p{N}]{4,12}\b)(?=[\p{L}\p{N}]*\p{N})[\p{L}\p{N}]{4,12})\b/iu;
-const pinDeterminedAssignmentPattern = /\b(reset|set|change|update)\s+the\s+pin\s+(?:to|as)\s+([\p{L}\p{N}]{4,12})\b/iu;
+const pinDeterminedAssignmentPattern = /\b(reset|set|change|update)\s+the\s+pin\s+(?:to|as)\s+([\p{L}\p{N}]{4,12})\b/giu;
 const pinCodePattern = /\b[Pp][Ii][Nn]\s*(?:\p{N}{4,12}|(?=[A-Z0-9]{4,12}(?![A-Z0-9]))(?=[A-Z0-9]*\d)[A-Z0-9]+)\s*$/u;
 const pinLeadingCodePattern = /(?:^|\s)pin\s+(?:\p{N}{4,12}|(?=[\p{L}\p{N}]{4,12}(?:\s|$))(?=[\p{L}\p{N}]*\p{N})[\p{L}\p{N}]{4,12})(?=\s|$)/iu;
 const safePinClickActionPattern = /^(?:(?:click|please|then)\s+)?pin\s+(?:\p{L}{2,}\p{N}{1,4}(?:\s+(?:to|onto|on)\s+(?:the\s+)?dashboard)?|(?:19|20)\p{N}{2}\s+\p{L}+(?:\s+\p{L}+)*\s+(?:to|onto|on)\s+(?:the\s+)?dashboard)$/iu;
@@ -255,6 +256,7 @@ function containsSensitiveText(value: string, allowPinCode = false): boolean {
   const normalized = normalizeIntentText(value);
   return credentialIntentPatterns.some((pattern) => pattern.test(normalized))
     || pinIntentPattern.test(normalized)
+    || pinActionIntentPattern.test(normalized)
     || pinDirectAssignmentPattern.test(value)
     || pinAssignmentPattern.test(normalized)
     || containsDeterminedPinAssignment(normalized)
@@ -262,15 +264,18 @@ function containsSensitiveText(value: string, allowPinCode = false): boolean {
 }
 
 function containsDeterminedPinAssignment(value: string): boolean {
-  const match = pinDeterminedAssignmentPattern.exec(value);
-  if (match === null) {
-    return false;
+  for (const match of value.matchAll(pinDeterminedAssignmentPattern)) {
+    const verb = match[1]!.toLowerCase();
+    const assignedValue = match[2]!;
+    if (
+      verb !== "set"
+      || /\p{N}/u.test(assignedValue)
+      || assignedValue === assignedValue.toLocaleUpperCase()
+    ) {
+      return true;
+    }
   }
-  const verb = match[1]!.toLowerCase();
-  const assignedValue = match[2]!;
-  return verb !== "set"
-    || /\p{N}/u.test(assignedValue)
-    || assignedValue === assignedValue.toLocaleUpperCase();
+  return false;
 }
 
 function isSafePinClickText(step: SetupStep, value: string): boolean {

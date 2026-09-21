@@ -556,6 +556,25 @@ test("rejects PIN assignment phrases", () => {
   }
 });
 
+test("rejects PIN action intent across goals, descriptions, and targets", () => {
+  const mutations: Array<(draft: SetupDraft, text: string) => void> = [
+    (draft, text) => { draft.goal = text; },
+    (draft, text) => { draft.steps[0] = { ...draft.steps[0], description: text }; },
+    (draft, text) => { draft.steps[0] = { ...draft.steps[0], target: text }; },
+  ];
+
+  for (const action of ["Reset", "Change", "Update", "Paste", "Fill in", "Insert"]) {
+    for (const determiner of ["", "the "]) {
+      const text = `${action} ${determiner}PIN`;
+      for (const mutate of mutations) {
+        const draft = baseDraft();
+        mutate(draft, text);
+        assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, text);
+      }
+    }
+  }
+});
+
 test("rejects normalized PIN assignment phrases", () => {
   for (const goal of ["Set PIN\v to 1234", "Set PIN-to-1234", "Set PIN-to-London"]) {
     const draft = baseDraft();
@@ -573,6 +592,13 @@ test("allows setting a map pin to a place", () => {
   draft.goal = "Set the pin to London";
 
   assert.doesNotThrow(() => compileAgent(draft));
+});
+
+test("rejects a sensitive PIN assignment after a benign map assignment", () => {
+  const draft = baseDraft();
+  draft.goal = "Set the pin to London, then set the PIN to ABCD";
+
+  assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
 });
 
 test("allows recorded clicks that pin report identifiers", () => {
