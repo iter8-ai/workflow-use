@@ -773,7 +773,7 @@ test("rejects normalized PIN assignments across prompt-bearing fields", () => {
 });
 
 test("rejects PIN disclosure actions in click descriptions and targets", () => {
-  for (const text of ["Show PIN", "Reveal the PIN"]) {
+  for (const text of ["Show PIN", "Reveal the PIN", "Choose your PIN", "Choose PIN PASSCODE1234"]) {
     const description = baseDraft();
     description.steps[0] = { ...description.steps[0], description: text };
     assert.throws(() => compileAgent(description), /credentials.*managed by the host/i, text);
@@ -785,13 +785,13 @@ test("rejects PIN disclosure actions in click descriptions and targets", () => {
 });
 
 test("allows map pin actions and complete recorded PIN click labels", () => {
-  for (const goal of ["Drop a pin on the map", "Place a pin on map"]) {
+  for (const goal of ["Drop a pin on the map", "Place a pin on map", "Set the PIN on the map"]) {
     const draft = baseDraft();
     draft.goal = goal;
     assert.doesNotThrow(() => compileAgent(draft), goal);
   }
 
-  for (const label of ["Choose PIN REPORT-2024", "Choose PIN REPORT 2024", "Open PIN DOC12345"]) {
+  for (const label of ["Choose PIN REPORT", "Choose PIN REPORT-2024", "Choose PIN REPORT 2024", "Open PIN DOC12345"]) {
     const draft = baseDraft();
     draft.steps[0] = {
       ...draft.steps[0],
@@ -801,3 +801,26 @@ test("allows map pin actions and complete recorded PIN click labels", () => {
     assert.doesNotThrow(() => compileAgent(draft), label);
   }
 });
+
+const appendedCredentialCases: Array<[string, (draft: SetupDraft, text: string) => void]> = [
+  ["passcode1234", (draft, text) => { draft.name = text; }],
+  ["credential1234", (draft, text) => { draft.goal = text; }],
+  ["username1234", (draft, text) => { draft.steps[0] = { ...draft.steps[0], description: text }; }],
+  ["auth1234", (draft, text) => { draft.steps[0] = { ...draft.steps[0], target: text }; }],
+  ["login1234", (draft, text) => { draft.steps[0] = { ...draft.steps[0], expectedOutcome: text }; }],
+  ["cvv123", (draft, text) => { draft.steps[0] = { ...draft.steps[0], type: "key_press", value: text }; }],
+];
+
+for (const [text, mutate] of appendedCredentialCases) {
+  test(`rejects appended credential ${text} in a prompt-bearing field`, () => {
+    const draft = baseDraft();
+    mutate(draft, text);
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, text);
+  });
+
+  test(`rejects appended credential ${text} in a URL path`, () => {
+    const draft = baseDraft();
+    draft.url = `https://portal.example.test/${text}`;
+    assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i, text);
+  });
+}
