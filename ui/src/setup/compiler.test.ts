@@ -986,3 +986,23 @@ for (const [texts, sensitive] of [
     }
   }
 }
+
+for (const [texts, sensitive] of [
+  [["mymfaabc1234", "myauthorizationabc1234", "root2passwordabc1234", "ops7apikeyprod1234", "service1tokenprod1234", "userpasswordabc1234", "teamXsecretcode1234"], true],
+  [["myauthor2024", "yoursecretary2024", "ourtokenomics2024", "accountsecretion2024"], false],
+  [["Use this map to place a pin", "Place a pin then show the map", "Use this map to choose my pin", "Please set your pin on the map", "On your map, choose my pin near London", "Please place our pin at 10 Downing Street on your map", "For this map please choose a pin near London"], false],
+  [["Place my pin on the map then enter 1234", "Place my pin on the map then reveal ABCD", "Place my pin on the map then enter A1B2", "Please place your pin on the map then reveal it", "On the map, place my pin then enter it", "Please place a pin on the map then show my pin", "On your map enter your pin", "Please set your pin to ABCD on the map", "Place our pin on the map then reveal the pin"], true],
+] as const) {
+  for (const text of texts) {
+    for (const field of ["name", "goal", "description", "target", "expectedOutcome", "value", "url"] as const) {
+      test(`classifies structural intent ${text} in ${field}`, () => {
+        const draft = baseDraft();
+        if (field === "url") draft.url = `https://portal.example.test/${encodeURIComponent(text)}`;
+        else if (field === "name" || field === "goal") draft[field] = text;
+        else draft.steps[0] = { ...draft.steps[0], [field]: text };
+        if (sensitive) assert.throws(() => compileAgent(draft), /credentials.*managed by the host/i);
+        else assert.doesNotThrow(() => compileAgent(draft));
+      });
+    }
+  }
+}
