@@ -45,6 +45,7 @@ type CompiledAgent = {
 };
 
 const credentialIntentPatterns = [
+  /\b(?:my|your|our)(?:password|passcode|credential|username|otp|cvv)\p{N}+(?!\p{L})/iu,
   /\b(?:passwords?|pass words?)(?!\p{L})/iu,
   /\bpasscodes?(?!\p{L})/iu,
   /\bpassphrases?(?!\p{L})/iu,
