@@ -812,6 +812,10 @@ for (const text of ["mypasswordless1234", "mytokenization1234"]) {
 }
 
 const appendedCredentialCases: Array<[string, (draft: SetupDraft, text: string) => void]> = [
+  ["adminpassword1234", (draft, text) => { draft.goal = text; }],
+  ["oldpassword1234", (draft, text) => { draft.steps[0] = { ...draft.steps[0], description: text }; }],
+  ["siteapikey1234", (draft, text) => { draft.steps[0] = { ...draft.steps[0], target: text }; }],
+  ["bankotp1234", (draft, text) => { draft.steps[0] = { ...draft.steps[0], expectedOutcome: text }; }],
   ["mytoken1234", (draft, text) => { draft.goal = text; }],
   ["mysecret1234", (draft, text) => { draft.name = text; }],
   ["myapikey1234", (draft, text) => { draft.steps[0] = { ...draft.steps[0], description: text }; }],
@@ -876,11 +880,32 @@ for (const [text, mutate] of appendedCredentialCases) {
   });
 }
 
-for (const goal of ["Set a pin on the map", "Set this pin on the map", "Choose a pin on the map"]) {
+for (const goal of [
+  "Set a pin on the map",
+  "Set this pin on the map",
+  "Choose a pin on the map",
+  "Set a pin at London on the map",
+  "Choose a pin for the map",
+  "Set a pin near London on the map",
+]) {
   test(`allows ordinary map goal: ${goal}`, () => {
     const draft = baseDraft();
     draft.goal = goal;
     assert.doesNotThrow(() => compileAgent(draft), goal);
+  });
+}
+
+for (const text of ["mysecretsanta2024", "mytokenizer2024", "myusernamegenerator2024"]) {
+  test(`allows benign compound ${text} in a prompt-bearing field`, () => {
+    const draft = baseDraft();
+    draft.goal = text;
+    assert.doesNotThrow(() => compileAgent(draft), text);
+  });
+
+  test(`allows benign compound ${text} in a URL path`, () => {
+    const draft = baseDraft();
+    draft.url = `https://portal.example.test/${text}`;
+    assert.doesNotThrow(() => compileAgent(draft), text);
   });
 }
 
