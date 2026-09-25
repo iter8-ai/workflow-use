@@ -1009,30 +1009,6 @@
   overflow-wrap: anywhere;
 }
 
-.review-step .field-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.review-step textarea {
-  min-height: 60px;
-  font-size: 13px;
-}
-
-.value-source {
-  display: grid;
-  gap: 8px;
-  padding: 12px;
-  border: 1px solid var(--warning-stroke);
-  border-radius: var(--radius);
-  background: var(--warning-fill);
-}
-
-.value-source > p {
-  color: var(--text);
-  font-size: 12px;
-}
 
 .empty-steps {
   padding: 16px;
@@ -1041,31 +1017,123 @@
   color: var(--text-2);
 }
 
-/* Variables table: key | label | type | example | remove, as in VariableRow */
-.variables-table {
-  display: grid;
-  border-top: 1px solid var(--divider);
-}
-
-.variable-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.3fr) 92px minmax(0, 1.2fr) 30px;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--divider);
-}
-
-.variable-head {
-  padding: 6px 0;
-  color: var(--text-2);
-  font-size: 12px;
-}
-
-.variables-add {
+/* Step as one editable sentence; everything else is opt-in. */
+.step-line {
   display: flex;
-  justify-content: center;
-  padding-top: 4px;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.step-description {
+  flex: 1;
+  min-width: 0;
+}
+
+.agent-setup .step-description textarea {
+  min-height: 36px;
+  field-sizing: content;
+  resize: none;
+}
+
+.step-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 16px;
+  margin-top: -6px !important;
+}
+
+.link-button {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--brand);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.link-button:hover:not(:disabled) {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.link-button:focus-visible {
+  border-radius: 2px;
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.value-choice {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--warning-stroke);
+  border-radius: var(--radius);
+  background: var(--warning-fill);
+  animation: stage-fade 180ms var(--ease-out);
+}
+
+.value-choice legend {
+  float: left;
+  width: 100%;
+  padding: 0;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.value-choice legend span {
+  color: var(--text-2);
+  font-weight: 400;
+}
+
+.segmented {
+  display: inline-flex;
+  width: fit-content;
+  border: 1px solid var(--brand-stroke);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.segmented label {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 12px;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color 150ms var(--ease-out), color 150ms var(--ease-out);
+}
+
+.segmented label + label {
+  border-left: 1px solid var(--brand-stroke);
+}
+
+.segmented label.is-selected {
+  background: var(--brand-soft);
+  color: var(--brand-dark);
+  font-weight: 500;
+}
+
+.segmented input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.segmented label:has(input:focus-visible) {
+  outline: 2px solid var(--brand);
+  outline-offset: -2px;
+}
+
+.detail-value {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ---------- Test ---------- */
@@ -1314,17 +1382,8 @@
     display: none;
   }
 
-  .detail-row,
-  .review-step .field-grid {
+  .detail-row {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .variable-head {
-    display: none;
-  }
-
-  .variable-row {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 30px;
   }
 }
 
