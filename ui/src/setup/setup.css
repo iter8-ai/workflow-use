@@ -37,6 +37,8 @@
   --radius-card: 8px;
   --gutter: 24px;
   --ease-out: cubic-bezier(0.25, 1, 0.5, 1);
+  --stage-ms: 220ms;
+  --column: 720px;
   --z-sticky: 10;
   --z-modal: 30;
 }
@@ -91,17 +93,19 @@
 }
 
 .setup-header {
-  display: flex;
+  display: grid;
   min-height: 56px;
   flex: none;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
   gap: 8px 24px;
-  padding: 8px 16px 8px var(--gutter);
+  padding: 8px 12px 8px var(--gutter);
   border-bottom: 1px solid var(--divider);
 }
 
-.setup-header .setup-close {
-  margin-left: auto;
+.setup-header-end {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .setup-progress ol {
@@ -123,6 +127,7 @@
   color: var(--text-2);
   font-weight: 500;
   white-space: nowrap;
+  transition: background-color var(--stage-ms) var(--ease-out), color var(--stage-ms) var(--ease-out);
 }
 
 .progress-marker {
@@ -144,6 +149,14 @@
 .progress-item.complete .progress-marker {
   border-color: transparent;
   color: var(--success-icon);
+  animation: mark-in 320ms var(--ease-out);
+}
+
+@keyframes mark-in {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
 }
 
 .progress-item.current {
@@ -164,11 +177,67 @@
   flex-direction: column;
   overflow-y: auto;
   scrollbar-gutter: stable;
-  padding: 24px var(--gutter) 0;
 }
 
 .setup-content-demonstrate {
-  padding-top: 16px;
+  overflow: hidden;
+  scrollbar-gutter: auto;
+}
+
+.setup-messages {
+  display: grid;
+  width: min(var(--column), 100% - 2 * var(--gutter));
+  flex: none;
+  gap: 8px;
+  margin: 16px auto 0;
+}
+
+.setup-content-demonstrate .setup-messages {
+  width: auto;
+  margin: 8px var(--gutter) 0;
+}
+
+/* Stage transitions: one directional enter per step change.
+   Forward slides in from the right, back from the left. The browser stage only fades,
+   so the live iframe is never transformed. */
+.stage {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.stage-forward {
+  animation: stage-in-forward var(--stage-ms) var(--ease-out);
+}
+
+.stage-back {
+  animation: stage-in-back var(--stage-ms) var(--ease-out);
+}
+
+.setup-content-demonstrate .stage-forward,
+.setup-content-demonstrate .stage-back {
+  animation: stage-fade var(--stage-ms) var(--ease-out);
+}
+
+@keyframes stage-in-forward {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+
+@keyframes stage-in-back {
+  from {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+}
+
+@keyframes stage-fade {
+  from {
+    opacity: 0;
+  }
 }
 
 /* ---------- Panels ---------- */
@@ -178,23 +247,30 @@
   width: 100%;
   flex: 1;
   flex-direction: column;
+}
+
+/* Centred reading column for the form stages */
+.panel-body {
+  display: flex;
+  width: min(var(--column), 100% - 2 * var(--gutter));
+  flex-direction: column;
   gap: 24px;
+  margin: 0 auto;
+  padding: 32px 0 40px;
 }
 
-.setup-panel > :not(.action-bar) {
-  width: min(720px, 100%);
+.setup-done .panel-body {
+  align-items: center;
+  margin: auto;
+  text-align: center;
 }
 
-.setup-panel-compact > :not(.action-bar) {
-  width: min(560px, 100%);
+.setup-done .panel-intro p {
+  margin: 0 auto;
 }
 
 .setup-panel.demonstrate {
-  gap: 16px;
-}
-
-.setup-panel.demonstrate > :not(.action-bar) {
-  width: 100%;
+  min-height: 0;
 }
 
 .panel-intro {
@@ -203,9 +279,13 @@
 }
 
 .panel-intro h2 {
-  font-size: 18px;
+  font-size: 20px;
   font-weight: 500;
   line-height: 1.4;
+}
+
+.agent-setup h2:focus {
+  outline: none;
 }
 
 .panel-intro p {
@@ -522,8 +602,8 @@
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
-  margin: auto calc(var(--gutter) * -1) 0;
-  padding: 12px var(--gutter);
+  margin-top: auto;
+  padding: 12px max(var(--gutter), (100% - var(--column)) / 2);
   border-top: 1px solid var(--divider);
   background: var(--surface);
 }
@@ -538,12 +618,12 @@
 .setup-notice,
 .setup-error {
   display: flex;
-  width: min(720px, 100%);
   flex: none;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin: 0 0 16px;
+  margin: 0;
+  animation: stage-fade 180ms var(--ease-out);
   padding: 6px 8px 6px 16px;
   border-radius: var(--radius);
   font-size: 14px;
@@ -586,51 +666,61 @@
 
 /* ---------- Demonstrate: browser card + side panel ---------- */
 
-.demonstrate-heading {
+/* Browser takes the whole stage; the toolbar carries status and every control. */
+.demo-toolbar {
   display: flex;
+  min-height: 48px;
+  flex: none;
   flex-wrap: wrap;
-  align-items: end;
-  justify-content: space-between;
-  gap: 8px 24px;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 6px var(--gutter);
+  border-bottom: 1px solid var(--divider);
+}
+
+.toolbar-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--divider);
 }
 
 .demonstration-grid {
   display: grid;
   flex: 1;
-  grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
-  gap: 16px;
-  min-height: 320px;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  min-height: 0;
+  transition: grid-template-columns var(--stage-ms) var(--ease-out);
+}
+
+.demonstration-grid.steps-hidden {
+  grid-template-columns: minmax(0, 1fr) 0;
 }
 
 .browser-frame {
   position: relative;
   display: flex;
+  min-width: 0;
   min-height: 0;
   flex-direction: column;
-  border: 1px solid var(--divider);
-  border-radius: var(--radius-card);
-  overflow: hidden;
   background: var(--surface-2);
 }
 
-.browser-toolbar {
-  display: flex;
-  min-height: 44px;
-  flex: none;
-  align-items: center;
-  gap: 12px;
-  padding: 6px 8px 6px 12px;
-  border-bottom: 1px solid var(--divider);
-  background: var(--surface);
+.browser-reload {
+  position: absolute;
+  z-index: 1;
+  right: 12px;
+  bottom: 12px;
+  opacity: 0.85;
 }
 
-.browser-toolbar .button {
-  margin-left: auto;
+.browser-reload:hover,
+.browser-reload:focus-visible {
+  opacity: 1;
 }
 
 .browser-address {
-  flex: 1 1 auto;
   min-width: 0;
+  max-width: 40ch;
   overflow: hidden;
   color: var(--text-2);
   font-size: 12px;
@@ -672,6 +762,10 @@
   background: var(--success-icon);
 }
 
+.recording-state-failed {
+  color: var(--error-text);
+}
+
 @keyframes rec-pulse {
   0% {
     box-shadow: 0 0 0 0 rgb(178 56 66 / 50%);
@@ -701,6 +795,12 @@
   height: 100%;
   border: 0;
   background: var(--surface);
+  opacity: 0;
+  transition: opacity 200ms var(--ease-out);
+}
+
+.browser-viewport iframe.is-loaded {
+  opacity: 1;
 }
 
 .browser-loading,
@@ -721,6 +821,15 @@
   background: var(--surface-2);
 }
 
+.browser-placeholder-failed p {
+  color: var(--error-text);
+}
+
+.browser-placeholder-failed .placeholder-icon {
+  background: var(--error-fill);
+  color: var(--error-text);
+}
+
 .browser-placeholder p,
 .browser-loading p {
   max-width: 44ch;
@@ -739,13 +848,30 @@
 
 .captured-steps {
   display: flex;
+  min-width: 0;
   min-height: 0;
   flex-direction: column;
-  border: 1px solid var(--divider);
-  border-radius: var(--radius-card);
+  border-left: 1px solid var(--divider);
   background: var(--surface);
   overflow-wrap: anywhere;
   overflow-y: auto;
+}
+
+.captured-steps[hidden] {
+  display: none;
+}
+
+.captured-steps ol {
+  flex: 1;
+}
+
+.captured-steps-foot {
+  position: sticky;
+  bottom: 0;
+  margin-top: auto;
+  padding: 10px 16px;
+  border-top: 1px solid var(--divider);
+  background: var(--surface);
 }
 
 .captured-steps h3 {
@@ -811,12 +937,16 @@
 }
 
 .captured-steps-live li:last-child {
-  animation: step-arrive 700ms var(--ease-out);
+  animation: step-arrive 900ms var(--ease-out);
 }
 
 @keyframes step-arrive {
   from {
     background: var(--brand-soft);
+    transform: translateY(4px);
+  }
+  30% {
+    transform: none;
   }
   to {
     background: transparent;
@@ -942,6 +1072,7 @@
 
 .test-result {
   display: grid;
+  animation: stage-fade 200ms var(--ease-out);
   gap: 8px;
   padding: 12px 16px;
   border: 1px solid var(--divider);
@@ -1041,8 +1172,9 @@
 
 .setup-done-mark {
   display: grid;
-  width: 40px;
-  height: 40px;
+  width: 48px;
+  height: 48px;
+  animation: mark-in 360ms var(--ease-out) 80ms both;
   place-items: center;
   border-radius: 50%;
   background: var(--success-fill);
@@ -1126,27 +1258,37 @@
 
 /* ---------- Responsive ---------- */
 
-@media (max-width: 900px) {
+@media (max-width: 1000px) {
   .setup-header {
-    flex-wrap: wrap;
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
   .setup-progress {
-    order: 3;
-    width: 100%;
+    grid-column: 1 / -1;
+    grid-row: 2;
     overflow-x: auto;
   }
 
   .demonstration-grid {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) 240px;
   }
+}
 
-  .browser-frame {
-    min-height: 460px;
+@media (max-width: 760px) {
+  .demonstration-grid,
+  .demonstration-grid.steps-hidden {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(360px, 1fr) auto;
   }
 
   .captured-steps {
-    max-height: 280px;
+    max-height: 220px;
+    border-top: 1px solid var(--divider);
+    border-left: 0;
+  }
+
+  .setup-content-demonstrate {
+    overflow-y: auto;
   }
 }
 
@@ -1188,14 +1330,30 @@
 
 @media (prefers-reduced-motion: reduce) {
   .button,
+  .progress-item,
+  .demonstration-grid,
+  .browser-viewport iframe,
   .agent-setup input,
   .agent-setup textarea,
   .agent-setup select {
     transition: none;
   }
 
+  .stage-forward,
+  .stage-back,
+  .setup-content-demonstrate .stage-forward,
+  .setup-content-demonstrate .stage-back,
+  .test-result,
+  .setup-status,
+  .setup-notice,
+  .setup-error {
+    animation: stage-fade 120ms linear;
+  }
+
   .recording-state-active span,
-  .captured-steps-live li:last-child {
+  .captured-steps-live li:last-child,
+  .progress-item.complete .progress-marker,
+  .setup-done-mark {
     animation: none;
   }
 
@@ -1210,6 +1368,3 @@
   font-weight: 500;
 }
 
-.setup-status-actions {
-  margin-bottom: 16px;
-}
