@@ -259,10 +259,11 @@ export default function AgentSetup() {
       setError(urlError);
       return;
     }
-    if (name.trim() === "" || goal.trim() === "") {
-      setError("Add an agent name and goal before starting the demonstration.");
+    if (goal.trim() === "") {
+      setError("Describe what the agent should do before starting the demonstration.");
       return;
     }
+    if (name.trim() === "") setName(defaultAgentName(goal));
     setBusy(true);
     try {
       const next = await bridge.request("startRecording", { url, privateLogin: privateLogin && privateLoginAllowed }, {
@@ -334,28 +335,24 @@ export default function AgentSetup() {
     invalidateTest();
   }
 
-  function addInput(): void {
-    setInputs((current) => [...current, { name: "", label: "", type: "text", example: "" }]);
-    invalidateTest();
+  // A form step either uses the same value every run, or a value that changes each run.
+  // "Changes each run" creates the reusable input for the user: its name comes from the
+  // recorded field, its type from the example, so the only thing to type is the example.
+  function setStepValueMode(step: SetupStep, mode: "fixed" | "varies"): void {
+    if (mode === "fixed") {
+      const boundName = step.inputName;
+      setInputs((current) => current.filter((input) => input.name !== boundName));
+      updateStep(step.id, { value: "", inputName: undefined });
+      return;
+    }
+    const label = (step.target ?? step.description).trim().slice(0, 150) || "Run value";
+    const inputName = uniqueInputName(label, inputs.map((input) => input.name));
+    setInputs((current) => [...current, { name: inputName, label, type: "text", example: "" }]);
+    updateStep(step.id, { value: undefined, inputName });
   }
 
-  function updateInput(index: number, updates: Partial<SetupInput>): void {
-    setInputs((current) => current.map((input, currentIndex) => currentIndex === index ? { ...input, ...updates } : input));
-    if (updates.name !== undefined) {
-      const previousName = inputs[index]?.name;
-      if (previousName !== undefined) {
-        setSteps((current) => current.map((step) => step.inputName === previousName ? { ...step, inputName: updates.name } : step));
-      }
-    }
-    invalidateTest();
-  }
-
-  function removeInput(index: number): void {
-    const removedName = inputs[index]?.name;
-    setInputs((current) => current.filter((_, currentIndex) => currentIndex !== index));
-    if (removedName !== undefined) {
-      setSteps((current) => current.map((step) => step.inputName === removedName ? { ...step, inputName: undefined } : step));
-    }
+  function setStepExample(inputName: string, example: string): void {
+    setInputs((current) => current.map((input) => input.name === inputName ? { ...input, example, type: inferInputType(example) } : input));
     invalidateTest();
   }
 
@@ -523,7 +520,7 @@ export default function AgentSetup() {
         <div className={`stage stage-${direction}`} key={stageKey}>
           {screen === "describe" && <Describe privateLogin={privateLogin} privateLoginAllowed={privateLoginAllowed} onPrivateLogin={setPrivateLogin} name={name} url={url} goal={goal} busy={busy || !connected} onName={(value) => setDraftField(setName, value)} onUrl={(value) => setDraftField(setUrl, value)} onGoal={(value) => setDraftField(setGoal, value)} onContinue={() => void startRecording()} />}
           {screen === "demonstrate" && <Demonstrate privateLogin={privateLogin && privateLoginAllowed} startUrl={url} recording={recording} steps={steps} liveViewUrl={liveViewUrl} busy={busy} onStop={() => void stopRecording()} onReview={continueToReview} onReset={() => void reset()} />}
-          {screen === "review" && <Review name={name} url={url} goal={goal} onName={(value) => setDraftField(setName, value)} onGoal={(value) => setDraftField(setGoal, value)} steps={steps} inputs={inputs} busy={busy} onUpdateStep={updateStep} onRemoveStep={removeStep} onAddInput={addInput} onUpdateInput={updateInput} onRemoveInput={removeInput} onBack={() => setScreen("demonstrate")} onContinue={continueToTest} />}
+          {screen === "review" && <Review name={name} url={url} goal={goal} onName={(value) => setDraftField(setName, value)} onGoal={(value) => setDraftField(setGoal, value)} steps={steps} inputs={inputs} busy={busy} onUpdateStep={updateStep} onRemoveStep={(id) => { const bound = steps.find((step) => step.id === id)?.inputName; if (bound !== undefined) setInputs((current) => current.filter((input) => input.name !== bound)); removeStep(id); }} onValueMode={setStepValueMode} onExample={setStepExample} onBack={() => setScreen("demonstrate")} onContinue={continueToTest} />}
           {screen === "test" && !scheduleSaved && <Test run={testRun} checked={checkedResult} canFinish={canFinish} canSchedule={canSchedule} scheduleAllowed={scheduleAllowed} dailySchedule={dailySchedule} cron={cron} scheduleValid={hasValidSchedule} busy={busy} onRun={() => void runTest()} onCheck={setCheckedResult} onDaily={setDailySchedule} onCron={setCron} onSchedule={() => void schedule()} onFinish={() => void close()} onBack={() => setScreen("review")} />}
           {scheduleSaved && <div className="setup-panel setup-done">
             <div className="panel-body">
@@ -564,9 +561,6 @@ function RemoveIcon(): JSX.Element {
   return <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 11v2h10v-2zm5-9C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2m0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8" /></svg>;
 }
 
-function AddIcon(): JSX.Element {
-  return <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z" /></svg>;
-}
 
 function CredentialNote({ privateLogin }: { privateLogin: boolean }): JSX.Element {
   return <p className="credential-note"><LockIcon /><span>Do not enter logins, passwords, one-time codes, or API keys. {privateLogin ? "Sign-in is handled privately in Reiterate before recording." : "Credential-required tasks cannot yet be taught."}</span></p>;
@@ -577,7 +571,6 @@ function Describe(props: { privateLogin: boolean; privateLoginAllowed: boolean; 
     <div className="panel-body">
       <div className="panel-intro"><h2 tabIndex={-1}>Describe the job</h2><p>Start with the website and the result you want. You will demonstrate the task next.</p></div>
       <div className="field-group">
-        <label className="field-label">Agent name<input disabled={props.busy} aria-label="Agent name" value={props.name} onChange={(event) => props.onName(event.target.value)} placeholder="For example: Neteller transactions" autoComplete="off" /></label>
         <label className="field-label">Website address<input disabled={props.busy} aria-label="Website address" value={props.url} onChange={(event) => props.onUrl(event.target.value)} placeholder="https://example.com" inputMode="url" autoComplete="off" /></label>
         <label className="field-label">What should the agent do?<textarea disabled={props.busy} aria-label="What should the agent do?" value={props.goal} onChange={(event) => props.onGoal(event.target.value)} placeholder="For example: download transactions for the current month, using the date filter." /></label>
         {props.privateLoginAllowed && <div className="field">
@@ -667,63 +660,57 @@ function LiveBrowser({ url }: { url: string | null }): JSX.Element {
   </div>;
 }
 
-function Review(props: { name: string; url: string; goal: string; onName(value: string): void; onGoal(value: string): void; steps: SetupStep[]; inputs: SetupInput[]; busy: boolean; onUpdateStep(id: string, updates: Partial<SetupStep>): void; onRemoveStep(id: string): void; onAddInput(): void; onUpdateInput(index: number, updates: Partial<SetupInput>): void; onRemoveInput(index: number): void; onBack(): void; onContinue(): void }): JSX.Element {
+function Review(props: { name: string; url: string; goal: string; onName(value: string): void; onGoal(value: string): void; steps: SetupStep[]; inputs: SetupInput[]; busy: boolean; onUpdateStep(id: string, updates: Partial<SetupStep>): void; onRemoveStep(id: string): void; onValueMode(step: SetupStep, mode: "fixed" | "varies"): void; onExample(inputName: string, example: string): void; onBack(): void; onContinue(): void }): JSX.Element {
   return <div className="setup-panel">
     <div className="panel-body">
-    <div className="panel-intro"><h2 tabIndex={-1}>Review the draft</h2><p>Make the instructions clear and choose each form value deliberately.</p></div>
-    <section className="setup-section" aria-labelledby="review-details-heading">
-      <div className="section-heading"><h3 id="review-details-heading">Agent details</h3></div>
+    <div className="panel-intro"><h2 tabIndex={-1}>Review the draft</h2><p>Check the steps read the way you mean them. Form values need one decision each.</p></div>
+    <section className="setup-section" aria-label="Agent details">
       <div>
         <label className="detail-row"><span>Agent name</span><input value={props.name} onChange={(event) => props.onName(event.target.value)} disabled={props.busy} autoComplete="off" /></label>
         <label className="detail-row detail-row-top"><span>What should the agent do?</span><textarea value={props.goal} onChange={(event) => props.onGoal(event.target.value)} disabled={props.busy} /></label>
-        <div className="detail-row detail-row-top">
-          <label htmlFor="recorded-start-address">Recorded starting address</label>
-          <div className="field"><input id="recorded-start-address" value={props.url} readOnly /><p className="field-help">Fixed by the demonstration. To change it, go back and start over.</p></div>
-        </div>
+        <div className="detail-row"><span>Starts at</span><span className="detail-value" title={props.url}>{props.url}</span></div>
       </div>
     </section>
     <section className="setup-section" aria-labelledby="review-steps-heading">
-      <div className="section-heading"><div><h3 id="review-steps-heading">Steps</h3><p>The agent follows these in order. Describe what each step is for, not only where to click.</p></div></div>
+      <div className="section-heading"><div><h3 id="review-steps-heading">Steps</h3><p>The agent follows these in order.</p></div></div>
       {props.steps.length === 0 ? <p className="empty-steps" role="status">No steps remain. Go back to the demonstration and start over to capture the task again.</p> : <ol className="review-steps">
-        {props.steps.map((step, index) => <li className="review-step" key={step.id}>
-          <span className="review-step-number" aria-hidden="true">{index + 1}</span>
-          <div className="review-step-body">
-            <div className="item-heading">
-              <h4 className="visually-hidden">Step {index + 1}</h4>
-              {step.type === "navigation" ? <p className="recorded-target">Recorded destination: {step.url ?? step.target ?? step.description}</p> : step.target != null ? <p className="recorded-target">Recorded target: {step.target}</p> : <span />}
-              <button type="button" className="icon-button" onClick={() => props.onRemoveStep(step.id)} disabled={props.busy} aria-label={`Remove step ${index + 1}`} title="Remove step"><RemoveIcon /></button>
-            </div>
-            {step.type === "key_press" && step.value != null && <p className="recorded-target">Recorded key: {step.value}</p>}
-            <div className="field-grid">
-              <label className="field-label">Description<textarea aria-label={`Step ${index + 1} description`} value={step.description} onChange={(event) => props.onUpdateStep(step.id, { description: event.target.value })} disabled={props.busy} /></label>
-              <label className="field-label">Expected outcome<textarea aria-label={`Step ${index + 1} expected outcome`} value={step.expectedOutcome ?? ""} onChange={(event) => props.onUpdateStep(step.id, { expectedOutcome: event.target.value || undefined })} disabled={props.busy} placeholder="Optional. For example: the reports list is visible." /></label>
-            </div>
-            {(step.type === "input" || step.type === "select_change") && <div className="value-source dense">
-              <p>Recorded form values are discarded. Choose a fixed value or reusable input.</p>
-              <label className="field-label">Value source<select aria-label={`Step ${index + 1} value source`} value={step.inputName ?? (step.value !== undefined && step.value !== null ? "__literal" : "")} onChange={(event) => event.target.value === "__literal" ? props.onUpdateStep(step.id, { value: "", inputName: undefined }) : event.target.value === "" ? props.onUpdateStep(step.id, { value: undefined, inputName: undefined }) : props.onUpdateStep(step.id, { value: undefined, inputName: event.target.value })} disabled={props.busy}><option value="">Choose a value</option><option value="__literal">Fixed value</option>{props.inputs.filter((input) => input.name !== "").map((input, inputIndex) => <option value={input.name} key={`${input.name}-${inputIndex}`}>{input.label || input.name}</option>)}</select></label>
-              {step.inputName === undefined && step.value !== undefined && step.value !== null && <label className="field-label">Fixed value<input aria-label={`Step ${index + 1} fixed value`} value={step.value} onChange={(event) => props.onUpdateStep(step.id, { value: event.target.value })} disabled={props.busy} autoComplete="off" /></label>}
-            </div>}
-          </div>
-        </li>)}
+        {props.steps.map((step, index) => <ReviewStep key={step.id} step={step} index={index} input={props.inputs.find((input) => input.name === step.inputName)} busy={props.busy} onUpdate={(updates) => props.onUpdateStep(step.id, updates)} onRemove={() => props.onRemoveStep(step.id)} onValueMode={(mode) => props.onValueMode(step, mode)} onExample={props.onExample} />)}
       </ol>}
-    </section>
-    <section className="setup-section" aria-labelledby="reusable-inputs-heading">
-      <div className="section-heading"><div><h3 id="reusable-inputs-heading">Reusable inputs</h3><p>Values that change between runs, such as a month or account. Examples are used for the test and any schedule.</p></div></div>
-      {props.inputs.length > 0 && <div className="variables-table dense" role="group" aria-label="Reusable inputs">
-        <div className="variable-row variable-head" aria-hidden="true"><span>Label</span><span>Name</span><span>Type</span><span>Example</span><span /></div>
-        {props.inputs.map((input, index) => <div className="variable-row" key={index}>
-          <input aria-label={`Input ${index + 1} label`} value={input.label} onChange={(event) => props.onUpdateInput(index, { label: event.target.value })} disabled={props.busy} placeholder="Statement month" autoComplete="off" />
-          <input aria-label={`Input ${index + 1} name`} value={input.name} onChange={(event) => props.onUpdateInput(index, { name: event.target.value })} disabled={props.busy} placeholder="statement_month" autoComplete="off" spellCheck={false} />
-          <select aria-label={`Input ${index + 1} type`} value={input.type} onChange={(event) => props.onUpdateInput(index, { type: event.target.value as SetupInput["type"] })} disabled={props.busy}><option value="text">Text</option><option value="date">Date</option><option value="number">Number</option></select>
-          <input aria-label={`Input ${index + 1} example`} type={input.type} value={input.example} onChange={(event) => props.onUpdateInput(index, { example: event.target.value })} disabled={props.busy} autoComplete="off" placeholder="Example" />
-          <button type="button" className="icon-button" onClick={() => props.onRemoveInput(index)} disabled={props.busy} aria-label={`Remove input ${index + 1}`} title="Remove input"><RemoveIcon /></button>
-        </div>)}
-      </div>}
-      <div className={props.inputs.length > 0 ? "variables-add" : ""}><button type="button" className="button button-primary button-small" onClick={props.onAddInput} disabled={props.busy}><AddIcon />Add reusable input</button></div>
     </section>
     </div>
     <div className="action-bar"><button className="button button-quiet" type="button" onClick={props.onBack} disabled={props.busy}>Back to demonstration</button><span className="actions-spacer" /><button className="button button-primary" type="button" onClick={props.onContinue} disabled={props.busy || props.steps.length === 0}>Continue to test</button></div>
   </div>;
+}
+
+function ReviewStep({ step, index, input, busy, onUpdate, onRemove, onValueMode, onExample }: { step: SetupStep; index: number; input: SetupInput | undefined; busy: boolean; onUpdate(updates: Partial<SetupStep>): void; onRemove(): void; onValueMode(mode: "fixed" | "varies"): void; onExample(inputName: string, example: string): void }): JSX.Element {
+  const [checkOpen, setCheckOpen] = useState((step.expectedOutcome ?? "") !== "");
+  const isForm = step.type === "input" || step.type === "select_change";
+  const mode = step.inputName !== undefined ? "varies" : step.value !== undefined && step.value !== null ? "fixed" : null;
+  const where = step.type === "navigation" ? step.url ?? step.target : step.target;
+  return <li className="review-step">
+    <span className="review-step-number" aria-hidden="true">{index + 1}</span>
+    <div className="review-step-body">
+      <div className="step-line">
+        <label className="step-description"><span className="visually-hidden">Step {index + 1} description</span><textarea rows={1} aria-label={`Step ${index + 1} description`} value={step.description} onChange={(event) => onUpdate({ description: event.target.value })} disabled={busy} /></label>
+        <button type="button" className="icon-button" onClick={onRemove} disabled={busy} aria-label={`Remove step ${index + 1}`} title="Remove step"><RemoveIcon /></button>
+      </div>
+      <p className="step-meta">
+        {where != null && <span className="recorded-target">{step.type === "navigation" ? "Opens" : "On"} {where}</span>}
+        {step.type === "key_press" && step.value != null && <span className="recorded-target">Key {step.value}</span>}
+        {!checkOpen && <button type="button" className="link-button" onClick={() => setCheckOpen(true)} disabled={busy}>Add a check</button>}
+      </p>
+      {checkOpen && <label className="field-label">Then check that<input aria-label={`Step ${index + 1} expected outcome`} value={step.expectedOutcome ?? ""} onChange={(event) => onUpdate({ expectedOutcome: event.target.value || undefined })} disabled={busy} placeholder="For example: the reports list is visible" autoComplete="off" autoFocus={(step.expectedOutcome ?? "") === ""} /></label>}
+      {isForm && <fieldset className="value-choice dense" disabled={busy}>
+        <legend>What goes in {step.target ?? "this field"}? <span>The recorded value was discarded.</span></legend>
+        <div className="segmented" role="radiogroup" aria-label={`Step ${index + 1} value source`}>
+          <label className={mode === "fixed" ? "is-selected" : ""}><input type="radio" name={`value-${step.id}`} checked={mode === "fixed"} onChange={() => onValueMode("fixed")} />Same every run</label>
+          <label className={mode === "varies" ? "is-selected" : ""}><input type="radio" name={`value-${step.id}`} checked={mode === "varies"} onChange={() => onValueMode("varies")} />Changes each run</label>
+        </div>
+        {mode === "fixed" && <label className="field-label">Value<input aria-label={`Step ${index + 1} fixed value`} value={step.value ?? ""} onChange={(event) => onUpdate({ value: event.target.value })} autoComplete="off" /></label>}
+        {mode === "varies" && input !== undefined && <label className="field-label">Value for the test run<input aria-label={`Step ${index + 1} example`} value={input.example} onChange={(event) => onExample(input.name, event.target.value)} autoComplete="off" placeholder="For example: 2026-08-01" /><span className="field-help">You choose the value each time the agent runs.{input.example !== "" && ` Read as ${input.type === "date" ? "a date" : input.type === "number" ? "a number" : "text"}.`}</span></label>}
+      </fieldset>}
+    </div>
+  </li>;
 }
 
 function Test(props: { run: RunState | null; checked: boolean; canFinish: boolean; canSchedule: boolean; scheduleAllowed: boolean; dailySchedule: boolean; cron: string; scheduleValid: boolean; busy: boolean; onRun(): void; onCheck(value: boolean): void; onDaily(value: boolean): void; onCron(value: string): void; onSchedule(): void; onFinish(): void; onBack(): void }): JSX.Element {
@@ -772,6 +759,28 @@ function Test(props: { run: RunState | null; checked: boolean; canFinish: boolea
       {props.scheduleAllowed && props.dailySchedule && <button className="button button-primary" type="button" onClick={props.onSchedule} disabled={!props.canSchedule}>Schedule agent</button>}
     </div>
   </div>;
+}
+
+function defaultAgentName(goal: string): string {
+  const firstSentence = goal.trim().split(/(?<=[.!?])\s|\n/)[0] ?? "";
+  const clean = firstSentence.replace(/[.!?]+$/, "");
+  if (clean.length <= 60) return clean;
+  return `${clean.slice(0, 60).replace(/\s+\S*$/, "")}…`;
+}
+
+function uniqueInputName(label: string, taken: string[]): string {
+  const base = label.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 48) || "value";
+  const safe = /^[a-z]/.test(base) ? base : `value_${base}`;
+  let candidate = safe;
+  for (let suffix = 2; taken.includes(candidate); suffix += 1) candidate = `${safe}_${suffix}`;
+  return candidate;
+}
+
+function inferInputType(example: string): SetupInput["type"] {
+  const value = example.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value))) return "date";
+  if (/^-?\d+(\.\d+)?$/.test(value)) return "number";
+  return "text";
 }
 
 function displayAddress(value: string): string {

@@ -16,7 +16,6 @@ test("waits for host sign-in without exposing a browser or recording secrets", a
   await page.clock.install();
   await page.goto(`${baseUrl}/host?scenario=private-login`);
   const setup = page.frameLocator("iframe");
-  await setup.getByLabel("Agent name").fill("Reports");
   await setup.getByLabel("Website address").fill("https://portal.example.test");
   await setup.getByLabel("What should the agent do?").fill("Download report");
   await setup.getByLabel("This website requires sign-in").check();
@@ -38,7 +37,6 @@ test("waits for host sign-in without exposing a browser or recording secrets", a
 test("locks the website and sign-in choice while a browser is opening", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=slow-start`);
   const setup = page.frameLocator("iframe");
-  await setup.getByLabel("Agent name").fill("Reports");
   await setup.getByLabel("Website address").fill("https://portal.example.test");
   await setup.getByLabel("What should the agent do?").fill("Download report");
   await setup.getByRole("button", { name: "Continue to demonstration" }).click();
@@ -54,7 +52,6 @@ test("takes a user through demonstration, review, testing, and result confirmati
   await expect(setup.getByText("Do not enter logins, passwords, one-time codes, or API keys.")).toBeVisible();
   await expect(setup.getByRole("link", { name: "Source code" })).toHaveAttribute("href", "https://github.com/iter8-ai/workflow-use");
   await expect(setup.getByRole("link", { name: "AGPL-3.0 license" })).toHaveAttribute("href", "https://github.com/iter8-ai/workflow-use/blob/main/LICENSE");
-  await setup.getByLabel("Agent name").fill("Download monthly statement");
   await setup.getByLabel("Website address").fill("https://portal.example.test/reports");
   await setup.getByLabel("What should the agent do?").fill("Download the selected monthly statement.");
   await setup.getByRole("button", { name: "Continue to demonstration" }).click();
@@ -120,12 +117,12 @@ test("confirms before closing work that has not been saved", async ({ page }) =>
   await page.goto(`${baseUrl}/host?scenario=success`);
   const setup = page.frameLocator("iframe");
 
-  await setup.getByLabel("Agent name").fill("Draft report agent");
+  await setup.getByLabel("What should the agent do?").fill("Draft report agent");
   await setup.getByRole("button", { name: "Close setup" }).click();
   await expect(setup.getByRole("heading", { name: "Leave setup?" })).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.__closeRequests)).toEqual([]);
   await setup.getByRole("button", { name: "Keep editing" }).click();
-  await expect(setup.getByLabel("Agent name")).toHaveValue("Draft report agent");
+  await expect(setup.getByLabel("What should the agent do?")).toHaveValue("Draft report agent");
   await setup.getByRole("button", { name: "Close setup" }).click();
   await setup.getByRole("dialog").getByRole("button", { name: "Close setup" }).click();
 
@@ -135,7 +132,6 @@ test("confirms before closing work that has not been saved", async ({ page }) =>
 test("starts another demonstration after a stopped recording", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=success`);
   const setup = page.frameLocator("iframe");
-  await setup.getByLabel("Agent name").fill("Reports");
   await setup.getByLabel("Website address").fill("https://portal.example.test/reports");
   await setup.getByLabel("What should the agent do?").fill("Get the report.");
   await setup.getByRole("button", { name: "Continue to demonstration" }).click();
@@ -172,11 +168,21 @@ test("invalidates a completed test when reviewed instructions change", async ({ 
   await expect(setup.getByRole("button", { name: "Schedule agent" })).toHaveCount(0);
 });
 
+test("names the agent from its goal when the name is left blank", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=success`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByLabel("Website address").fill("https://portal.example.test/reports");
+  await setup.getByLabel("What should the agent do?").fill("Download the monthly statement. Use the date filter for last month.");
+  await setup.getByRole("button", { name: "Continue to demonstration" }).click();
+  await setup.getByRole("button", { name: "Finish demonstration" }).click();
+  await setup.getByRole("button", { name: "Continue to review" }).click();
+  await expect(setup.getByLabel("Agent name")).toHaveValue("Download the monthly statement");
+});
+
 test("does not start or save an agent when the setup URL has a credential query", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=success`);
   const setup = page.frameLocator("iframe");
 
-  await setup.getByLabel("Agent name").fill("Download monthly statement");
   await setup.getByLabel("Website address").fill("https://portal.example.test/reports?token=synthetic-token");
   await setup.getByLabel("What should the agent do?").fill("Download the selected monthly statement.");
   await setup.getByRole("button", { name: "Continue to demonstration" }).click();
@@ -192,12 +198,8 @@ test("binds a discarded recorded value to a reusable input and tests with its ex
 
   await describeAndDemonstrate(setup);
   await expect(setup.getByText("recorded-private-value", { exact: true })).toHaveCount(0);
-  await setup.getByRole("button", { name: "Add reusable input" }).click();
-  await setup.getByLabel("Input 1 name").fill("month_number");
-  await setup.getByLabel("Input 1 label").fill("Statement month");
-  await setup.getByLabel("Input 1 type").selectOption("number");
-  await setup.getByLabel("Input 1 example").fill("9");
-  await setup.getByLabel("Step 2 value source").selectOption("month_number");
+  await setup.getByRole("radiogroup", { name: "Step 2 value source" }).getByText("Changes each run").click();
+  await setup.getByLabel("Step 2 example").fill("9");
   await setup.getByRole("button", { name: "Continue to test" }).click();
   await setup.getByRole("button", { name: "Run test" }).click();
 
@@ -209,8 +211,9 @@ test("binds a discarded recorded value to a reusable input and tests with its ex
   await setup.getByRole("button", { name: "Open agent" }).click();
 
   const savedAgent = page.getByRole("region", { name: "Saved agent" });
-  await expect(savedAgent.getByRole("heading", { name: "Download monthly statement" })).toBeVisible();
+  await expect(savedAgent.getByRole("heading", { name: "Download the monthly statement" })).toBeVisible();
   await expect(savedAgent).toContainText("Statement month: 9");
+  await expect.poll(() => page.evaluate(() => window.__savedAgents.at(-1).draft.inputs)).toEqual([{ name: "statement_month", label: "Statement month", type: "number", example: "9" }]);
   await expect(savedAgent).toContainText("Runs daily at 09:00 UTC");
 });
 
@@ -237,7 +240,7 @@ test("ignores a response posted by the setup iframe instead of its host", async 
     );
   }, readyId);
   await expect(setup.getByText("Connecting to Reiterate")).toBeVisible();
-  await expect(setup.getByLabel("Agent name")).toBeVisible();
+  await expect(setup.getByLabel("What should the agent do?")).toBeVisible();
 });
 
 test("uses new request IDs after the setup iframe reloads", async ({ page }) => {
@@ -266,7 +269,6 @@ test("captures the controlled setup states for visual review", async ({ page }) 
   await expect(setup.getByRole("heading", { name: "Set up your agent" })).toBeVisible();
   await page.screenshot({ path: "e2e-artifacts/describe.png" });
 
-  await setup.getByLabel("Agent name").fill("Download monthly statement");
   await setup.getByLabel("Website address").fill("https://portal.example.test/reports");
   await setup.getByLabel("What should the agent do?").fill("Download the selected monthly statement.");
   await setup.getByRole("button", { name: "Continue to demonstration" }).click();
@@ -315,11 +317,10 @@ test("edits the job without discarding recorded instructions", async ({ page }) 
   await setup.getByRole("button", { name: "Run test" }).click();
   await setup.getByLabel("I checked the result").check();
   await setup.getByRole("button", { name: "Back to review" }).click();
-  await expect(setup.getByLabel("Recorded starting address")).toHaveValue("https://portal.example.test/reports");
-  await expect(setup.getByLabel("Recorded starting address")).toHaveAttribute("readonly", "");
+  await expect(setup.getByText("https://portal.example.test/reports", { exact: true })).toBeVisible();
   await setup.getByLabel("Agent name").fill("Annual report");
   await setup.getByLabel("What should the agent do?").fill("Download the annual report.");
-  await expect(setup.getByText("Recorded target: Reports", { exact: true })).toBeVisible();
+  await expect(setup.getByText("On Reports", { exact: true })).toBeVisible();
   await setup.getByLabel("Step 1 description").fill("Open the annual reports section");
   await setup.getByRole("button", { name: "Continue to test" }).click();
   await expect(setup.getByRole("button", { name: "Finish setup" })).toHaveCount(0);
@@ -348,7 +349,7 @@ for (const scenario of ["expired", "blocked", "empty"]) {
     await expect(setup.getByRole("alert")).toBeVisible();
     await expect(setup.getByRole("button", { name: "Continue to review" })).toBeDisabled();
     await setup.getByRole("button", { name: "Start over" }).click();
-    await expect(setup.getByLabel("Agent name")).toHaveValue("Download monthly statement");
+    await expect(setup.getByLabel("What should the agent do?")).toHaveValue("Download the monthly statement.");
     await setup.getByRole("button", { name: "Continue to demonstration" }).click();
     await setup.getByRole("button", { name: "Finish demonstration" }).click();
     await setup.getByRole("button", { name: "Continue to review" }).click();
@@ -460,20 +461,18 @@ test("shows recorded navigation destinations while editing their purpose", async
   await page.goto(`${baseUrl}/host?scenario=navigation`);
   const setup = page.frameLocator("iframe");
   await describeAndDemonstrate(setup);
-  await expect(setup.getByText("Recorded destination: https://portal.example.test/reports", { exact: true })).toBeVisible();
+  await expect(setup.getByText("Opens https://portal.example.test/reports", { exact: true })).toBeVisible();
   await setup.getByLabel("Step 1 description").fill("Find the annual report");
-  await expect(setup.getByText("Recorded destination: https://portal.example.test/reports", { exact: true })).toBeVisible();
+  await expect(setup.getByText("Opens https://portal.example.test/reports", { exact: true })).toBeVisible();
 });
 
 async function describe(setup: FrameLocator): Promise<void> {
-  await setup.getByLabel("Agent name").fill("Download monthly statement");
   await setup.getByLabel("Website address").fill("https://portal.example.test/reports");
   await setup.getByLabel("What should the agent do?").fill("Download the monthly statement.");
   await setup.getByRole("button", { name: "Continue to demonstration" }).click();
 }
 
 async function describeAndDemonstrate(setup: FrameLocator): Promise<void> {
-  await setup.getByLabel("Agent name").fill("Download monthly statement");
   await setup.getByLabel("Website address").fill("https://portal.example.test/reports");
   await setup.getByLabel("What should the agent do?").fill("Download the monthly statement.");
   await setup.getByRole("button", { name: "Continue to demonstration" }).click();
@@ -482,7 +481,6 @@ async function describeAndDemonstrate(setup: FrameLocator): Promise<void> {
 }
 
 async function completeToTest(setup: FrameLocator): Promise<void> {
-  await setup.getByLabel("Agent name").fill("Download monthly statement");
   await setup.getByLabel("Website address").fill("https://portal.example.test/reports");
   await setup.getByLabel("What should the agent do?").fill("Download the selected monthly statement.");
   await setup.getByRole("button", { name: "Continue to demonstration" }).click();
