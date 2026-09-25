@@ -468,6 +468,24 @@ export default function AgentSetup() {
     void close();
   }
 
+  const currentIndex = scheduleSaved ? screens.length : screens.findIndex((item) => item.id === screen);
+  const stageKey = scheduleSaved ? "done" : screen;
+  const contentRef = useRef<HTMLElement>(null);
+  const [shownIndex, setShownIndex] = useState(currentIndex);
+  const [direction, setDirection] = useState<"forward" | "back" | "none">("none");
+  if (shownIndex !== currentIndex) {
+    setShownIndex(currentIndex);
+    setDirection(currentIndex > shownIndex ? "forward" : "back");
+  }
+
+  useEffect(() => {
+    if (direction === "none") return;
+    const content = contentRef.current;
+    if (content === null) return;
+    content.scrollTop = 0;
+    content.querySelector<HTMLElement>(".stage h2")?.focus({ preventScroll: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once per stage change
+  }, [stageKey]);
   if (bridge === undefined) {
     return <main className="setup-unavailable"><p>Connecting to Reiterate</p></main>;
   }
@@ -476,7 +494,6 @@ export default function AgentSetup() {
     return <main className="setup-unavailable"><h1>Open agent setup from Reiterate</h1><p>This page needs the Reiterate host to securely create and test an agent.</p></main>;
   }
 
-  const currentIndex = scheduleSaved ? screens.length : screens.findIndex((item) => item.id === screen);
 
   return (
     <main className="agent-setup">
@@ -487,29 +504,35 @@ export default function AgentSetup() {
             {screens.map((item, index) => {
               const state = index === currentIndex ? "current" : index < currentIndex ? "complete" : "upcoming";
               return <li className={`progress-item ${state}`} key={item.id} aria-current={state === "current" ? "step" : undefined}>
-                <span className="progress-marker" aria-hidden="true">{state === "complete" ? <CheckCircleIcon size={20} /> : index + 1}</span>
+                <span className="progress-marker" aria-hidden="true" key={state}>{state === "complete" ? <CheckCircleIcon size={20} /> : index + 1}</span>
                 <span className="progress-label">{item.label}{state === "complete" && <span className="visually-hidden"> (done)</span>}</span>
               </li>;
             })}
           </ol>
         </nav>
-        <button className="button button-text setup-close" type="button" ref={closeButtonRef} onClick={requestClose} disabled={busy}>Close setup</button>
+        <div className="setup-header-end"><button className="button button-text setup-close" type="button" ref={closeButtonRef} onClick={requestClose} disabled={busy}>Close setup</button></div>
       </header>
-      <section className={`setup-content${screen === "demonstrate" && !scheduleSaved ? " setup-content-demonstrate" : ""}`} aria-busy={busy}>
-        {connecting && <p className="setup-status" role="status"><span className="spinner" aria-hidden="true" /><span>Connecting to Reiterate</span></p>}
-        {!connecting && !connected && <div className="setup-actions setup-status-actions"><button className="button button-quiet" type="button" onClick={() => setConnectionAttempt((current) => current + 1)}>Retry connection</button></div>}
-        {(recordingError !== null || testStatusError !== null) && <div className="setup-error" role="alert"><span>{recordingError !== null ? "Could not refresh the demonstration." : "Could not refresh the test result."} {recordingError ?? testStatusError} Retrying automatically.</span><button className="button button-text button-small" type="button" onClick={() => setPollAttempt((current) => current + 1)}>Retry status</button></div>}
-        {error !== null && <div className="setup-error" role="alert"><span>{error}</span><button type="button" className="button button-text button-small" onClick={() => setError(null)}>Dismiss</button></div>}
-        {notice !== null && <p className="setup-notice" role="status">{notice}</p>}
-        {screen === "describe" && <Describe privateLogin={privateLogin} privateLoginAllowed={privateLoginAllowed} onPrivateLogin={setPrivateLogin} name={name} url={url} goal={goal} busy={busy || !connected} onName={(value) => setDraftField(setName, value)} onUrl={(value) => setDraftField(setUrl, value)} onGoal={(value) => setDraftField(setGoal, value)} onContinue={() => void startRecording()} />}
-        {screen === "demonstrate" && <Demonstrate privateLogin={privateLogin && privateLoginAllowed} startUrl={url} recording={recording} steps={steps} liveViewUrl={liveViewUrl} busy={busy} onStop={() => void stopRecording()} onReview={continueToReview} onReset={() => void reset()} />}
-        {screen === "review" && <Review name={name} url={url} goal={goal} onName={(value) => setDraftField(setName, value)} onGoal={(value) => setDraftField(setGoal, value)} steps={steps} inputs={inputs} busy={busy} onUpdateStep={updateStep} onRemoveStep={removeStep} onAddInput={addInput} onUpdateInput={updateInput} onRemoveInput={removeInput} onBack={() => setScreen("demonstrate")} onContinue={continueToTest} />}
-        {screen === "test" && !scheduleSaved && <Test run={testRun} checked={checkedResult} canFinish={canFinish} canSchedule={canSchedule} scheduleAllowed={scheduleAllowed} dailySchedule={dailySchedule} cron={cron} scheduleValid={hasValidSchedule} busy={busy} onRun={() => void runTest()} onCheck={setCheckedResult} onDaily={setDailySchedule} onCron={setCron} onSchedule={() => void schedule()} onFinish={() => void close()} onBack={() => setScreen("review")} />}
-        {scheduleSaved && <div className="setup-panel setup-panel-compact setup-done">
-          <span className="setup-done-mark" aria-hidden="true"><CheckIcon size={22} /></span>
-          <div className="panel-intro"><h2>Your agent is ready</h2><p>The daily schedule is saved. It will repeat the tested workflow at {scheduleTimeLabel(cron)} UTC.</p></div>
-          <div className="action-bar"><span className="actions-spacer" /><button className="button button-primary" type="button" onClick={() => void close()} disabled={busy}>Open agent</button></div>
+      <section ref={contentRef} className={`setup-content setup-content-${stageKey}`} aria-busy={busy}>
+        {(connecting || (!connecting && !connected) || recordingError !== null || testStatusError !== null || error !== null || notice !== null) && <div className="setup-messages">
+          {connecting && <p className="setup-status" role="status"><span className="spinner" aria-hidden="true" /><span>Connecting to Reiterate</span></p>}
+          {!connecting && !connected && <div className="setup-actions"><button className="button button-quiet" type="button" onClick={() => setConnectionAttempt((current) => current + 1)}>Retry connection</button></div>}
+          {(recordingError !== null || testStatusError !== null) && <div className="setup-error" role="alert"><span>{recordingError !== null ? "Could not refresh the demonstration." : "Could not refresh the test result."} {recordingError ?? testStatusError} Retrying automatically.</span><button className="button button-text button-small" type="button" onClick={() => setPollAttempt((current) => current + 1)}>Retry status</button></div>}
+          {error !== null && <div className="setup-error" role="alert"><span>{error}</span><button type="button" className="button button-text button-small" onClick={() => setError(null)}>Dismiss</button></div>}
+          {notice !== null && <p className="setup-notice" role="status">{notice}</p>}
         </div>}
+        <div className={`stage stage-${direction}`} key={stageKey}>
+          {screen === "describe" && <Describe privateLogin={privateLogin} privateLoginAllowed={privateLoginAllowed} onPrivateLogin={setPrivateLogin} name={name} url={url} goal={goal} busy={busy || !connected} onName={(value) => setDraftField(setName, value)} onUrl={(value) => setDraftField(setUrl, value)} onGoal={(value) => setDraftField(setGoal, value)} onContinue={() => void startRecording()} />}
+          {screen === "demonstrate" && <Demonstrate privateLogin={privateLogin && privateLoginAllowed} startUrl={url} recording={recording} steps={steps} liveViewUrl={liveViewUrl} busy={busy} onStop={() => void stopRecording()} onReview={continueToReview} onReset={() => void reset()} />}
+          {screen === "review" && <Review name={name} url={url} goal={goal} onName={(value) => setDraftField(setName, value)} onGoal={(value) => setDraftField(setGoal, value)} steps={steps} inputs={inputs} busy={busy} onUpdateStep={updateStep} onRemoveStep={removeStep} onAddInput={addInput} onUpdateInput={updateInput} onRemoveInput={removeInput} onBack={() => setScreen("demonstrate")} onContinue={continueToTest} />}
+          {screen === "test" && !scheduleSaved && <Test run={testRun} checked={checkedResult} canFinish={canFinish} canSchedule={canSchedule} scheduleAllowed={scheduleAllowed} dailySchedule={dailySchedule} cron={cron} scheduleValid={hasValidSchedule} busy={busy} onRun={() => void runTest()} onCheck={setCheckedResult} onDaily={setDailySchedule} onCron={setCron} onSchedule={() => void schedule()} onFinish={() => void close()} onBack={() => setScreen("review")} />}
+          {scheduleSaved && <div className="setup-panel setup-done">
+            <div className="panel-body">
+              <span className="setup-done-mark" aria-hidden="true"><CheckIcon size={24} /></span>
+              <div className="panel-intro"><h2 tabIndex={-1}>Your agent is ready</h2><p>The daily schedule is saved. It will repeat the tested workflow at {scheduleTimeLabel(cron)} UTC.</p></div>
+              <button className="button button-primary" type="button" onClick={() => void close()} disabled={busy}>Open agent</button>
+            </div>
+          </div>}
+        </div>
       </section>
       {confirmClose && <div className="close-confirmation" role="dialog" aria-modal="true" aria-labelledby="close-setup-title" aria-describedby="close-setup-description"><div className="close-confirmation-card" ref={closeDialogRef}><h2 id="close-setup-title">Leave setup?</h2><p id="close-setup-description">Changes in this setup have not been saved. Any agent you saved by running a test remains available.</p><div className="setup-actions"><button className="button button-text" type="button" onClick={() => setConfirmClose(false)} disabled={busy}>Keep editing</button><button className="button button-primary" type="button" onClick={() => void close()} disabled={busy}>Close setup</button></div></div></div>}
     </main>
@@ -546,33 +569,32 @@ function AddIcon(): JSX.Element {
 }
 
 function CredentialNote({ privateLogin }: { privateLogin: boolean }): JSX.Element {
-  return <p className="credential-note"><LockIcon /><span>Do not enter logins, passwords, one-time codes, or API keys. {privateLogin ? "Sign-in and reusable credentials are handled privately in Reiterate before recording." : "Credential-required tasks cannot yet be taught."}</span></p>;
+  return <p className="credential-note"><LockIcon /><span>Do not enter logins, passwords, one-time codes, or API keys. {privateLogin ? "Sign-in is handled privately in Reiterate before recording." : "Credential-required tasks cannot yet be taught."}</span></p>;
 }
 
 function Describe(props: { privateLogin: boolean; privateLoginAllowed: boolean; onPrivateLogin(value: boolean): void; name: string; url: string; goal: string; busy: boolean; onName(value: string): void; onUrl(value: string): void; onGoal(value: string): void; onContinue(): void }): JSX.Element {
-  return <div className="setup-panel setup-panel-compact">
-    <div className="panel-intro"><h2>Describe the job</h2><p>Start with the website and the result you want. You will demonstrate the task next.</p></div>
-    <section className="setup-section" aria-labelledby="agent-details-heading">
-      <div className="section-heading"><h3 id="agent-details-heading">Agent details</h3></div>
+  return <div className="setup-panel">
+    <div className="panel-body">
+      <div className="panel-intro"><h2 tabIndex={-1}>Describe the job</h2><p>Start with the website and the result you want. You will demonstrate the task next.</p></div>
       <div className="field-group">
         <label className="field-label">Agent name<input disabled={props.busy} aria-label="Agent name" value={props.name} onChange={(event) => props.onName(event.target.value)} placeholder="For example: Neteller transactions" autoComplete="off" /></label>
         <label className="field-label">Website address<input disabled={props.busy} aria-label="Website address" value={props.url} onChange={(event) => props.onUrl(event.target.value)} placeholder="https://example.com" inputMode="url" autoComplete="off" /></label>
         <label className="field-label">What should the agent do?<textarea disabled={props.busy} aria-label="What should the agent do?" value={props.goal} onChange={(event) => props.onGoal(event.target.value)} placeholder="For example: download transactions for the current month, using the date filter." /></label>
+        {props.privateLoginAllowed && <div className="field">
+          <label className="check"><input type="checkbox" disabled={props.busy} checked={props.privateLogin} onChange={event => props.onPrivateLogin(event.target.checked)} />This website requires sign-in</label>
+          <p className="check-help">You sign in privately in Reiterate first. Credentials are never passed to the agent.</p>
+        </div>}
       </div>
-    </section>
-    <section className="setup-section" aria-labelledby="credentials-heading">
-      <div className="section-heading"><div><h3 id="credentials-heading">Credentials</h3><p>Credentials are never passed to the agent and are stored securely.</p></div></div>
-      {props.privateLoginAllowed && <div className="field">
-        <label className="check"><input type="checkbox" disabled={props.busy} checked={props.privateLogin} onChange={event => props.onPrivateLogin(event.target.checked)} />This website requires sign-in</label>
-        <p className="check-help">You sign in privately in Reiterate first. The demonstration starts after that.</p>
-      </div>}
       <CredentialNote privateLogin={props.privateLogin} />
-    </section>
+    </div>
     <div className="action-bar"><p className="setup-footer">Public project: <a href="https://github.com/iter8-ai/workflow-use" target="_blank" rel="noreferrer">Source code</a><a href="https://github.com/iter8-ai/workflow-use/blob/main/LICENSE" target="_blank" rel="noreferrer">AGPL-3.0 license</a></p><span className="actions-spacer" /><button className="button button-primary" type="button" onClick={props.onContinue} disabled={props.busy}>Continue to demonstration</button></div>
   </div>;
 }
 
 function Demonstrate(props: { privateLogin: boolean; startUrl: string; recording: Recording | null; steps: SetupStep[]; liveViewUrl: string | null; busy: boolean; onStop(): void; onReview(): void; onReset(): void }): JSX.Element {
+  const [stepsOpen, setStepsOpen] = useState(true);
+  const listRef = useRef<HTMLElement>(null);
+  const previousCount = useRef(props.steps.length);
   const isRecording = props.recording?.status === "recording";
   const pendingLogin = props.recording?.status === "awaiting_login" || props.recording?.status === "verifying_login";
   const expired = props.recording?.status === "expired";
@@ -580,39 +602,50 @@ function Demonstrate(props: { privateLogin: boolean; startUrl: string; recording
   const stopped = props.recording?.status === "stopped";
   const empty = stopped && props.steps.length === 0;
   const canReview = stopped && !blocked && !empty;
+  const failed = expired || blocked || empty;
   const state = pendingLogin ? "Waiting for private sign-in" : expired ? "Demonstration expired" : blocked ? "Demonstration blocked" : isRecording ? "Recording in progress" : "Demonstration finished";
-  const stateClass = isRecording && !blocked ? "recording-state-active" : canReview ? "recording-state-done" : "";
+  const stateClass = isRecording && !blocked ? "recording-state-active" : canReview ? "recording-state-done" : failed ? "recording-state-failed" : "";
   const showBrowser = isRecording && !blocked;
-  const status = <div className={`recording-state ${stateClass}`} role="status"><span aria-hidden="true" />{state}</div>;
-  const address = <span className="browser-address" title={props.startUrl}>{displayAddress(props.startUrl)}</span>;
+  const failure = blocked ? `Cannot continue: ${props.recording?.blockedReason ?? ""} Start over to record a supported task.` : expired ? "Recording expired. Start a new demonstration." : empty ? "No usable steps were recorded. Start over and demonstrate the task before finishing." : null;
+
+  // Follow new steps while recording, unless the user has scrolled up to read earlier ones.
+  useEffect(() => {
+    const list = listRef.current;
+    const grew = previousCount.current > 0 && props.steps.length > previousCount.current;
+    previousCount.current = props.steps.length;
+    if (!isRecording || !grew || list === null) return;
+    const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 96;
+    if (nearBottom) list.scrollTo({ top: list.scrollHeight, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+  }, [props.steps.length, isRecording]);
+
   return <div className="setup-panel demonstrate">
-    <div className="demonstrate-heading">
-      <div className="panel-intro"><h2>Demonstrate the task</h2><p>Show each step you want the agent to follow. You can review and edit the steps afterwards.</p></div>
-      <CredentialNote privateLogin={props.privateLogin} />
+    <h2 className="visually-hidden" tabIndex={-1}>Demonstrate the task</h2>
+    <div className="demo-toolbar">
+      <div className={`recording-state ${stateClass}`} role="status"><span aria-hidden="true" />{state}</div>
+      <span className="browser-address" title={props.startUrl}>{displayAddress(props.startUrl)}</span>
+      <span className="actions-spacer" />
+      <button className="button button-text button-small steps-toggle" type="button" aria-expanded={stepsOpen} aria-controls="captured-steps" onClick={() => setStepsOpen((open) => !open)}>{stepsOpen ? "Hide steps" : `Show steps (${props.steps.length})`}</button>
+      <span className="toolbar-divider" aria-hidden="true" />
+      <button className="button button-quiet button-small" type="button" onClick={props.onReset} disabled={props.busy}>Start over</button>
+      {isRecording && !blocked ? <button className="button button-primary button-small" type="button" onClick={props.onStop} disabled={props.busy}>Finish demonstration</button> : <button className="button button-primary button-small" type="button" onClick={props.onReview} disabled={props.busy || !canReview}>Continue to review</button>}
     </div>
-    {blocked && <div className="setup-error" role="alert">Cannot continue: {props.recording?.blockedReason} Start over to record a supported task.</div>}
-    {expired && <div className="setup-error" role="alert">Recording expired. Start a new demonstration.</div>}
-    {empty && !blocked && <div className="setup-error" role="alert">No usable steps were recorded. Start over and demonstrate the task before finishing.</div>}
-    <div className="demonstration-grid">
+    <div className={`demonstration-grid${stepsOpen ? "" : " steps-hidden"}`}>
       <div className="browser-frame">
-        {showBrowser ? <LiveBrowser key={props.recording?.id} url={props.liveViewUrl} status={status} address={address} /> : <>
-          <div className="browser-toolbar">{status}{address}</div>
-          <div className="browser-placeholder">
-            <span className="placeholder-icon" aria-hidden="true">{pendingLogin ? <LockIcon size={20} /> : canReview ? <CheckIcon size={20} /> : <DangerousIcon />}</span>
-            <p>{pendingLogin ? "Complete private sign-in in Reiterate. Recording is off while you sign in and verify the fresh session." : canReview ? "Demonstration finished. Review the recorded steps to continue." : "This demonstration cannot be used. Start over to try again."}</p>
-          </div>
-        </>}
+        {showBrowser ? <LiveBrowser key={props.recording?.id} url={props.liveViewUrl} /> : <div className={`browser-placeholder${failure !== null ? " browser-placeholder-failed" : ""}`}>
+          <span className="placeholder-icon" aria-hidden="true">{pendingLogin ? <LockIcon size={20} /> : canReview ? <CheckIcon size={20} /> : <DangerousIcon />}</span>
+          {failure !== null ? <p role="alert">{failure}</p> : <p>{pendingLogin ? "Complete private sign-in in Reiterate. Recording is off while you sign in and verify the fresh session." : "Demonstration finished. Review the recorded steps to continue."}</p>}
+        </div>}
       </div>
-      <aside className={`captured-steps${isRecording ? " captured-steps-live" : ""}`} aria-label="Captured demonstration steps" tabIndex={0}>
+      <aside id="captured-steps" ref={listRef} className={`captured-steps${isRecording ? " captured-steps-live" : ""}`} aria-label="Captured demonstration steps" tabIndex={0} hidden={!stepsOpen}>
         <h3>Recorded steps <span className="step-count" aria-label={`${props.steps.length} steps`}>{props.steps.length}</span></h3>
         {props.steps.length === 0 ? <p>{isRecording ? "Actions will appear here while you demonstrate." : pendingLogin ? "Recording starts after you sign in." : "No steps were recorded."}</p> : <ol>{props.steps.map((step) => <li key={step.id}>{step.description}</li>)}</ol>}
+        <div className="captured-steps-foot"><CredentialNote privateLogin={props.privateLogin} /></div>
       </aside>
     </div>
-    <div className="action-bar"><button className="button button-quiet" type="button" onClick={props.onReset} disabled={props.busy}>Start over</button><span className="actions-spacer" />{isRecording && !blocked ? <button className="button button-primary" type="button" onClick={props.onStop} disabled={props.busy}>Finish demonstration</button> : <button className="button button-primary" type="button" onClick={props.onReview} disabled={props.busy || !canReview}>Continue to review</button>}</div>
   </div>;
 }
 
-function LiveBrowser({ url, status, address }: { url: string | null; status: JSX.Element; address: JSX.Element }): JSX.Element {
+function LiveBrowser({ url }: { url: string | null }): JSX.Element {
   const [attempt, setAttempt] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const [slow, setSlow] = useState(false);
@@ -623,20 +656,21 @@ function LiveBrowser({ url, status, address }: { url: string | null; status: JSX
     return () => window.clearTimeout(timeout);
   }, [url, attempt]);
   return <div className="live-browser">
-    <div className="browser-toolbar">{status}{address}{url !== null && <button className="button button-text button-small" type="button" onClick={() => setAttempt((current) => current + 1)}>Reload browser</button>}</div>
+    {url !== null && <button className="button button-quiet button-small browser-reload" type="button" onClick={() => setAttempt((current) => current + 1)}>Reload browser</button>}
     <div className="browser-viewport">
       {(!loaded || url === null) && <div className="browser-loading" role="status">
         {!slow && <span className="spinner" aria-hidden="true" />}
         <p>{slow ? url === null ? "The virtual browser is unavailable. Start over to open a new session." : "The browser frame is taking longer than expected. Reload the browser, or start over if the session is unavailable." : "Opening the virtual browser. This can take a few seconds."}</p>
       </div>}
-      {url !== null && <iframe key={attempt} title="Virtual browser" src={url} onLoad={() => setLoaded(true)} onError={() => { setLoaded(false); setSlow(true); }} />}
+      {url !== null && <iframe className={loaded ? "is-loaded" : undefined} key={attempt} title="Virtual browser" src={url} onLoad={() => setLoaded(true)} onError={() => { setLoaded(false); setSlow(true); }} />}
     </div>
   </div>;
 }
 
 function Review(props: { name: string; url: string; goal: string; onName(value: string): void; onGoal(value: string): void; steps: SetupStep[]; inputs: SetupInput[]; busy: boolean; onUpdateStep(id: string, updates: Partial<SetupStep>): void; onRemoveStep(id: string): void; onAddInput(): void; onUpdateInput(index: number, updates: Partial<SetupInput>): void; onRemoveInput(index: number): void; onBack(): void; onContinue(): void }): JSX.Element {
   return <div className="setup-panel">
-    <div className="panel-intro"><h2>Review the draft</h2><p>Make the instructions clear and choose each form value deliberately.</p></div>
+    <div className="panel-body">
+    <div className="panel-intro"><h2 tabIndex={-1}>Review the draft</h2><p>Make the instructions clear and choose each form value deliberately.</p></div>
     <section className="setup-section" aria-labelledby="review-details-heading">
       <div className="section-heading"><h3 id="review-details-heading">Agent details</h3></div>
       <div>
@@ -687,6 +721,7 @@ function Review(props: { name: string; url: string; goal: string; onName(value: 
       </div>}
       <div className={props.inputs.length > 0 ? "variables-add" : ""}><button type="button" className="button button-primary button-small" onClick={props.onAddInput} disabled={props.busy}><AddIcon />Add reusable input</button></div>
     </section>
+    </div>
     <div className="action-bar"><button className="button button-quiet" type="button" onClick={props.onBack} disabled={props.busy}>Back to demonstration</button><span className="actions-spacer" /><button className="button button-primary" type="button" onClick={props.onContinue} disabled={props.busy || props.steps.length === 0}>Continue to test</button></div>
   </div>;
 }
@@ -707,10 +742,10 @@ function Test(props: { run: RunState | null; checked: boolean; canFinish: boolea
   }
   const resultClass = testSucceeded ? " test-result-succeeded" : testFailed ? " test-result-failed" : "";
   return <div className="setup-panel">
-    <div className="panel-intro"><h2>Test a fresh run</h2><p>Reiterate runs the saved draft in a new browser session. Check the output, then finish setup or choose a daily schedule.</p></div>
-    <section className="setup-section" aria-labelledby="test-result-heading">
-      <div className="section-heading"><h3 id="test-result-heading">Test result</h3></div>
-      <div className={`test-result${resultClass}`} aria-live="polite">
+    <div className="panel-body">
+    <div className="panel-intro"><h2 tabIndex={-1}>Test a fresh run</h2><p>Reiterate runs the saved draft in a new browser session. Check the output, then finish setup or choose a daily schedule.</p></div>
+    <section className="setup-section" aria-label="Test result">
+      <div className={`test-result${resultClass}`} aria-live="polite" key={props.run?.status ?? "idle"}>
         {props.run === null && <><p className="test-result-heading">Not tested yet</p><p>Run a test after each change.</p></>}
         {testRunning && <p className="test-result-heading"><span className="spinner" aria-hidden="true" />Test is running.</p>}
         {testSucceeded && <>
@@ -728,6 +763,7 @@ function Test(props: { run: RunState | null; checked: boolean; canFinish: boolea
         <label className="detail-row dense"><span>Time of day (UTC)</span><span className="field"><input type="time" aria-label="Time of day (UTC)" value={dailyTime} onChange={(event) => changeTime(event.target.value)} />{!props.scheduleValid && <span className="field-hint">Choose a time for the daily run.</span>}</span></label>
       </div>}
     </section>}
+    </div>
     <div className="action-bar">
       <button className="button button-quiet" type="button" onClick={props.onBack} disabled={props.busy || testRunning}>Back to review</button>
       <span className="actions-spacer" />
