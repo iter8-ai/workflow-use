@@ -476,40 +476,87 @@ export default function AgentSetup() {
     return <main className="setup-unavailable"><h1>Open agent setup from Reiterate</h1><p>This page needs the Reiterate host to securely create and test an agent.</p></main>;
   }
 
+  const currentIndex = scheduleSaved ? screens.length : screens.findIndex((item) => item.id === screen);
+
   return (
     <main className="agent-setup">
       <header className="setup-header">
-        <div><p className="setup-product">Reiterate</p><h1>Set up your agent</h1></div>
-        <button className="button button-quiet" type="button" ref={closeButtonRef} onClick={requestClose} disabled={busy}>Close setup</button>
+        <h1>Set up your agent</h1>
+        <nav aria-label="Agent setup progress" className="setup-progress">
+          <ol>
+            {screens.map((item, index) => {
+              const state = index === currentIndex ? "current" : index < currentIndex ? "complete" : "upcoming";
+              return <li className={`progress-item ${state}`} key={item.id} aria-current={state === "current" ? "step" : undefined}>
+                <span className="progress-marker" aria-hidden="true">{state === "complete" ? <CheckIcon size={12} /> : index + 1}</span>
+                <span className="progress-label">{item.label}{state === "complete" && <span className="visually-hidden"> (done)</span>}</span>
+              </li>;
+            })}
+          </ol>
+        </nav>
+        <button className="button button-quiet setup-close" type="button" ref={closeButtonRef} onClick={requestClose} disabled={busy}>Close setup</button>
       </header>
       <div className="setup-shell">
-        <nav aria-label="Agent setup progress" className="setup-progress">
-          {screens.map((item, index) => <div className={screen === item.id ? "progress-item current" : screens.findIndex((screenItem) => screenItem.id === screen) > index ? "progress-item complete" : "progress-item"} key={item.id}><span>{index + 1}</span>{item.label}</div>)}
-        </nav>
-        <section className={`setup-content${screen === "demonstrate" ? " setup-content-demonstrate" : ""}`} aria-busy={busy}>
-          {connecting && <p className="setup-status" role="status">Connecting to Reiterate</p>}
-          {!connecting && !connected && <button className="button button-quiet" type="button" onClick={() => setConnectionAttempt((current) => current + 1)}>Retry connection</button>}
-          {(recordingError !== null || testStatusError !== null) && <div className="setup-error" role="alert"><span>{recordingError !== null ? "Could not refresh the demonstration." : "Could not refresh the test result."} {recordingError ?? testStatusError} Retrying automatically.</span><button className="button button-quiet" type="button" onClick={() => setPollAttempt((current) => current + 1)}>Retry status</button></div>}
-          {error !== null && <div className="setup-error" role="alert"><span>{error}</span><button type="button" className="button button-quiet" onClick={() => setError(null)}>Dismiss</button></div>}
+        <section className={`setup-content${screen === "demonstrate" && !scheduleSaved ? " setup-content-demonstrate" : ""}`} aria-busy={busy}>
+          {connecting && <p className="setup-status" role="status"><span className="spinner" aria-hidden="true" /><span className="status-text">Connecting to Reiterate</span></p>}
+          {!connecting && !connected && <div className="setup-actions"><button className="button button-quiet" type="button" onClick={() => setConnectionAttempt((current) => current + 1)}>Retry connection</button></div>}
+          {(recordingError !== null || testStatusError !== null) && <div className="setup-error" role="alert"><span>{recordingError !== null ? "Could not refresh the demonstration." : "Could not refresh the test result."} {recordingError ?? testStatusError} Retrying automatically.</span><button className="button button-quiet button-small" type="button" onClick={() => setPollAttempt((current) => current + 1)}>Retry status</button></div>}
+          {error !== null && <div className="setup-error" role="alert"><span>{error}</span><button type="button" className="button button-quiet button-small" onClick={() => setError(null)}>Dismiss</button></div>}
           {notice !== null && <p className="setup-notice" role="status">{notice}</p>}
           {screen === "describe" && <Describe privateLogin={privateLogin} privateLoginAllowed={privateLoginAllowed} onPrivateLogin={setPrivateLogin} name={name} url={url} goal={goal} busy={busy || !connected} onName={(value) => setDraftField(setName, value)} onUrl={(value) => setDraftField(setUrl, value)} onGoal={(value) => setDraftField(setGoal, value)} onContinue={() => void startRecording()} />}
-          {screen === "demonstrate" && <Demonstrate privateLogin={privateLogin && privateLoginAllowed} recording={recording} steps={steps} liveViewUrl={liveViewUrl} busy={busy} onStop={() => void stopRecording()} onReview={continueToReview} onReset={() => void reset()} />}
+          {screen === "demonstrate" && <Demonstrate privateLogin={privateLogin && privateLoginAllowed} startUrl={url} recording={recording} steps={steps} liveViewUrl={liveViewUrl} busy={busy} onStop={() => void stopRecording()} onReview={continueToReview} onReset={() => void reset()} />}
           {screen === "review" && <Review name={name} url={url} goal={goal} onName={(value) => setDraftField(setName, value)} onGoal={(value) => setDraftField(setGoal, value)} steps={steps} inputs={inputs} busy={busy} onUpdateStep={updateStep} onRemoveStep={removeStep} onAddInput={addInput} onUpdateInput={updateInput} onRemoveInput={removeInput} onBack={() => setScreen("demonstrate")} onContinue={continueToTest} />}
           {screen === "test" && !scheduleSaved && <Test run={testRun} checked={checkedResult} canFinish={canFinish} canSchedule={canSchedule} scheduleAllowed={scheduleAllowed} dailySchedule={dailySchedule} cron={cron} scheduleValid={hasValidSchedule} busy={busy} onRun={() => void runTest()} onCheck={setCheckedResult} onDaily={setDailySchedule} onCron={setCron} onSchedule={() => void schedule()} onFinish={() => void close()} onBack={() => setScreen("review")} />}
-          {scheduleSaved && <div className="setup-panel"><h2>Your agent is ready</h2><p>The daily schedule is saved. It will repeat the tested workflow.</p><div className="setup-actions"><button className="button button-primary" type="button" onClick={() => void close()} disabled={busy}>Open agent</button></div></div>}
+          {scheduleSaved && <div className="setup-panel setup-panel-compact setup-done">
+            <span className="setup-done-mark" aria-hidden="true"><CheckIcon size={22} /></span>
+            <div className="panel-intro"><h2>Your agent is ready</h2><p>The daily schedule is saved. It will repeat the tested workflow at {scheduleTimeLabel(cron)} UTC.</p></div>
+            <div className="setup-actions"><button className="button button-primary" type="button" onClick={() => void close()} disabled={busy}>Open agent</button></div>
+          </div>}
         </section>
       </div>
-      {confirmClose && <div className="close-confirmation" role="dialog" aria-modal="true" aria-labelledby="close-setup-title"><div className="close-confirmation-card" ref={closeDialogRef}><h2 id="close-setup-title">Leave setup?</h2><p>Changes in this setup have not been saved. Any agent you saved by running a test remains available.</p><div className="setup-actions"><button className="button button-quiet" type="button" onClick={() => setConfirmClose(false)} disabled={busy}>Keep editing</button><button className="button button-danger" type="button" onClick={() => void close()} disabled={busy}>Close setup</button></div></div></div>}
-      <footer className="setup-footer">Public project: <a href="https://github.com/iter8-ai/workflow-use" target="_blank" rel="noreferrer">Source code</a><span aria-hidden="true">·</span><a href="https://github.com/iter8-ai/workflow-use/blob/main/LICENSE" target="_blank" rel="noreferrer">AGPL-3.0 license</a></footer>
+      {confirmClose && <div className="close-confirmation" role="dialog" aria-modal="true" aria-labelledby="close-setup-title" aria-describedby="close-setup-description"><div className="close-confirmation-card" ref={closeDialogRef}><h2 id="close-setup-title">Leave setup?</h2><p id="close-setup-description">Changes in this setup have not been saved. Any agent you saved by running a test remains available.</p><div className="setup-actions"><button className="button button-quiet" type="button" onClick={() => setConfirmClose(false)} disabled={busy}>Keep editing</button><button className="button button-danger" type="button" onClick={() => void close()} disabled={busy}>Close setup</button></div></div></div>}
+      <footer className="setup-footer"><span>Public project</span><a href="https://github.com/iter8-ai/workflow-use" target="_blank" rel="noreferrer">Source code</a><a href="https://github.com/iter8-ai/workflow-use/blob/main/LICENSE" target="_blank" rel="noreferrer">AGPL-3.0 license</a></footer>
     </main>
   );
 }
 
-function Describe(props: { privateLogin: boolean; privateLoginAllowed: boolean; onPrivateLogin(value: boolean): void; name: string; url: string; goal: string; busy: boolean; onName(value: string): void; onUrl(value: string): void; onGoal(value: string): void; onContinue(): void }): JSX.Element {
-  return <div className="setup-panel setup-panel-compact"><div><h2>Describe the job</h2><p>Start with the website and the result you want. You will demonstrate the task next.</p></div><p className="credential-warning">Do not enter logins, passwords, one-time codes, or API keys. {props.privateLogin ? "Sign-in and reusable credentials are handled privately in Reiterate before recording." : "Credential-required tasks cannot yet be taught."}</p>{props.privateLoginAllowed && <label className="result-check"><input type="checkbox" disabled={props.busy} checked={props.privateLogin} onChange={event => props.onPrivateLogin(event.target.checked)} />This website requires sign-in</label>}<label>Agent name<input disabled={props.busy} aria-label="Agent name" value={props.name} onChange={(event) => props.onName(event.target.value)} autoComplete="off" /></label><label>Website address<input disabled={props.busy} aria-label="Website address" value={props.url} onChange={(event) => props.onUrl(event.target.value)} placeholder="https://example.com" inputMode="url" autoComplete="off" /></label><label>What should the agent do?<textarea disabled={props.busy} aria-label="What should the agent do?" value={props.goal} onChange={(event) => props.onGoal(event.target.value)} placeholder="For example: download the latest public annual report." /></label><div className="setup-actions"><button className="button button-primary" type="button" onClick={props.onContinue} disabled={props.busy}>Continue to demonstration</button></div></div>;
+function CheckIcon({ size = 16 }: { size?: number }): JSX.Element {
+  return <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>;
 }
 
-function Demonstrate(props: { privateLogin: boolean; recording: Recording | null; steps: SetupStep[]; liveViewUrl: string | null; busy: boolean; onStop(): void; onReview(): void; onReset(): void }): JSX.Element {
+function AlertIcon(): JSX.Element {
+  return <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="6.25" stroke="currentColor" strokeWidth="1.5" /><path d="M8 4.75v3.75" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" /><circle cx="8" cy="11" r="1" fill="currentColor" /></svg>;
+}
+
+function LockIcon(): JSX.Element {
+  return <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.5" /><path d="M5.5 7V5a2.5 2.5 0 015 0v2" stroke="currentColor" strokeWidth="1.5" /></svg>;
+}
+
+function FileIcon(): JSX.Element {
+  return <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 1.75h5.25L12.5 5v9.25H4z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" /><path d="M9 2v3.5h3.5" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" /></svg>;
+}
+
+function CredentialNote({ privateLogin }: { privateLogin: boolean }): JSX.Element {
+  return <p className="credential-note"><LockIcon /><span>Do not enter logins, passwords, one-time codes, or API keys. {privateLogin ? "Sign-in and reusable credentials are handled privately in Reiterate before recording." : "Credential-required tasks cannot yet be taught."}</span></p>;
+}
+
+function Describe(props: { privateLogin: boolean; privateLoginAllowed: boolean; onPrivateLogin(value: boolean): void; name: string; url: string; goal: string; busy: boolean; onName(value: string): void; onUrl(value: string): void; onGoal(value: string): void; onContinue(): void }): JSX.Element {
+  return <div className="setup-panel setup-panel-compact">
+    <div className="panel-intro"><h2>Describe the job</h2><p>Start with the website and the result you want. You will demonstrate the task next.</p></div>
+    <div className="field-group">
+      <label className="field-label">Agent name<input disabled={props.busy} aria-label="Agent name" value={props.name} onChange={(event) => props.onName(event.target.value)} placeholder="For example: Monthly statement download" autoComplete="off" /></label>
+      <label className="field-label">Website address<input disabled={props.busy} aria-label="Website address" value={props.url} onChange={(event) => props.onUrl(event.target.value)} placeholder="https://example.com" inputMode="url" autoComplete="off" /></label>
+      {props.privateLoginAllowed && <div className="field">
+        <label className="check"><input type="checkbox" disabled={props.busy} checked={props.privateLogin} onChange={event => props.onPrivateLogin(event.target.checked)} />This website requires sign-in</label>
+        <p className="check-help">You sign in privately in Reiterate first. The demonstration starts after that.</p>
+      </div>}
+      <label className="field-label">What should the agent do?<textarea disabled={props.busy} aria-label="What should the agent do?" value={props.goal} onChange={(event) => props.onGoal(event.target.value)} placeholder="For example: download the latest public annual report." /></label>
+    </div>
+    <CredentialNote privateLogin={props.privateLogin} />
+    <div className="setup-actions"><button className="button button-primary" type="button" onClick={props.onContinue} disabled={props.busy}>Continue to demonstration</button></div>
+  </div>;
+}
+
+function Demonstrate(props: { privateLogin: boolean; startUrl: string; recording: Recording | null; steps: SetupStep[]; liveViewUrl: string | null; busy: boolean; onStop(): void; onReview(): void; onReset(): void }): JSX.Element {
   const isRecording = props.recording?.status === "recording";
   const pendingLogin = props.recording?.status === "awaiting_login" || props.recording?.status === "verifying_login";
   const expired = props.recording?.status === "expired";
@@ -518,26 +565,38 @@ function Demonstrate(props: { privateLogin: boolean; recording: Recording | null
   const empty = stopped && props.steps.length === 0;
   const canReview = stopped && !blocked && !empty;
   const state = pendingLogin ? "Waiting for private sign-in" : expired ? "Demonstration expired" : blocked ? "Demonstration blocked" : isRecording ? "Recording in progress" : "Demonstration finished";
+  const stateClass = isRecording && !blocked ? "recording-state-active" : canReview ? "recording-state-done" : "";
   const showBrowser = isRecording && !blocked;
+  const status = <div className={`recording-state ${stateClass}`} role="status"><span aria-hidden="true" />{state}</div>;
+  const address = <span className="browser-address" title={props.startUrl}>{displayAddress(props.startUrl)}</span>;
   return <div className="setup-panel demonstrate">
-    <div><h2>Demonstrate the task</h2><p>Show each step you want the agent to follow. You can review and edit the steps afterwards.</p></div>
-    <p className="credential-warning">Do not enter logins, passwords, one-time codes, or API keys. {props.privateLogin ? "Sign-in and reusable credentials are handled privately in Reiterate before recording." : "Credential-required tasks cannot yet be taught."}</p>
+    <div className="demonstrate-heading">
+      <div className="panel-intro"><h2>Demonstrate the task</h2><p>Show each step you want the agent to follow. You can review and edit the steps afterwards.</p></div>
+      <CredentialNote privateLogin={props.privateLogin} />
+    </div>
     {blocked && <div className="setup-error" role="alert">Cannot continue: {props.recording?.blockedReason} Start over to record a supported task.</div>}
     {expired && <div className="setup-error" role="alert">Recording expired. Start a new demonstration.</div>}
     {empty && !blocked && <div className="setup-error" role="alert">No usable steps were recorded. Start over and demonstrate the task before finishing.</div>}
-    <div className={`recording-state ${isRecording && !blocked ? "recording-state-active" : ""}`} role="status"><span aria-hidden="true" />{state}</div>
     <div className="demonstration-grid">
-      <div className="browser-frame">{showBrowser ? <LiveBrowser key={props.recording?.id} url={props.liveViewUrl} /> : <p>{pendingLogin ? "Complete private sign-in in Reiterate. Recording is off while you sign in and verify the fresh session." : canReview ? "Demonstration finished. Review the recorded steps to continue." : "This demonstration cannot be used. Start over to try again."}</p>}</div>
-      <aside className="captured-steps" aria-label="Captured demonstration steps" tabIndex={0}>
-        <h3>Recorded steps ({props.steps.length})</h3>
-        {props.steps.length === 0 ? <p>{isRecording ? "Actions will appear here while you demonstrate." : "No steps were recorded."}</p> : <ol>{props.steps.map((step) => <li key={step.id}>{step.description}</li>)}</ol>}
+      <div className="browser-frame">
+        {showBrowser ? <LiveBrowser key={props.recording?.id} url={props.liveViewUrl} status={status} address={address} /> : <>
+          <div className="browser-toolbar">{status}{address}</div>
+          <div className="browser-placeholder">
+            <span className="placeholder-icon" aria-hidden="true">{pendingLogin ? <LockIcon /> : canReview ? <CheckIcon /> : <AlertIcon />}</span>
+            <p>{pendingLogin ? "Complete private sign-in in Reiterate. Recording is off while you sign in and verify the fresh session." : canReview ? "Demonstration finished. Review the recorded steps to continue." : "This demonstration cannot be used. Start over to try again."}</p>
+          </div>
+        </>}
+      </div>
+      <aside className={`captured-steps${isRecording ? " captured-steps-live" : ""}`} aria-label="Captured demonstration steps" tabIndex={0}>
+        <h3>Recorded steps <span className="step-count" aria-label={`${props.steps.length} steps`}>{props.steps.length}</span></h3>
+        {props.steps.length === 0 ? <p>{isRecording ? "Actions will appear here while you demonstrate." : pendingLogin ? "Recording starts after you sign in." : "No steps were recorded."}</p> : <ol>{props.steps.map((step) => <li key={step.id}>{step.description}</li>)}</ol>}
       </aside>
     </div>
-    <div className="setup-actions"><button className="button button-quiet" type="button" onClick={props.onReset} disabled={props.busy}>Start over</button>{isRecording && !blocked ? <button className="button button-primary" type="button" onClick={props.onStop} disabled={props.busy}>Finish demonstration</button> : <button className="button button-primary" type="button" onClick={props.onReview} disabled={props.busy || !canReview}>Continue to review</button>}</div>
+    <div className="setup-actions"><button className="button button-quiet" type="button" onClick={props.onReset} disabled={props.busy}>Start over</button><span className="actions-spacer" />{isRecording && !blocked ? <button className="button button-primary" type="button" onClick={props.onStop} disabled={props.busy}>Finish demonstration</button> : <button className="button button-primary" type="button" onClick={props.onReview} disabled={props.busy || !canReview}>Continue to review</button>}</div>
   </div>;
 }
 
-function LiveBrowser({ url }: { url: string | null }): JSX.Element {
+function LiveBrowser({ url, status, address }: { url: string | null; status: JSX.Element; address: JSX.Element }): JSX.Element {
   const [attempt, setAttempt] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const [slow, setSlow] = useState(false);
@@ -548,9 +607,10 @@ function LiveBrowser({ url }: { url: string | null }): JSX.Element {
     return () => window.clearTimeout(timeout);
   }, [url, attempt]);
   return <div className="live-browser">
-    {url !== null && <div className="browser-toolbar"><button className="button button-quiet" type="button" onClick={() => setAttempt((current) => current + 1)}>Reload browser</button></div>}
+    <div className="browser-toolbar">{status}{address}{url !== null && <button className="button button-quiet button-small" type="button" onClick={() => setAttempt((current) => current + 1)}>Reload browser</button>}</div>
     <div className="browser-viewport">
       {(!loaded || url === null) && <div className="browser-loading" role="status">
+        {!slow && <span className="spinner" aria-hidden="true" />}
         <p>{slow ? url === null ? "The virtual browser is unavailable. Start over to open a new session." : "The browser frame is taking longer than expected. Reload the browser, or start over if the session is unavailable." : "Opening the virtual browser. This can take a few seconds."}</p>
       </div>}
       {url !== null && <iframe key={attempt} title="Virtual browser" src={url} onLoad={() => setLoaded(true)} onError={() => { setLoaded(false); setSlow(true); }} />}
@@ -560,35 +620,53 @@ function LiveBrowser({ url }: { url: string | null }): JSX.Element {
 
 function Review(props: { name: string; url: string; goal: string; onName(value: string): void; onGoal(value: string): void; steps: SetupStep[]; inputs: SetupInput[]; busy: boolean; onUpdateStep(id: string, updates: Partial<SetupStep>): void; onRemoveStep(id: string): void; onAddInput(): void; onUpdateInput(index: number, updates: Partial<SetupInput>): void; onRemoveInput(index: number): void; onBack(): void; onContinue(): void }): JSX.Element {
   return <div className="setup-panel">
-    <div><h2>Review the draft</h2><p>Make the instructions clear and choose each form value deliberately.</p></div>
-    <label>Agent name<input value={props.name} onChange={(event) => props.onName(event.target.value)} disabled={props.busy} autoComplete="off" /></label>
-    <label>What should the agent do?<textarea value={props.goal} onChange={(event) => props.onGoal(event.target.value)} disabled={props.busy} /></label>
-    <label>Recorded starting address<input value={props.url} readOnly /></label>
-    <p>The starting address and recorded targets stay fixed. To change them, go back to the demonstration and start over.</p>
-    <section aria-labelledby="reusable-inputs-heading">
-      <div className="review-step-heading"><div><h3 id="reusable-inputs-heading">Reusable inputs</h3><p>Examples are used for the test and any schedule.</p></div><button type="button" className="button button-quiet" onClick={props.onAddInput} disabled={props.busy}>Add reusable input</button></div>
-      {props.inputs.map((input, index) => <article className="review-step" key={index}>
-        <div className="review-step-heading"><h3>Input {index + 1}</h3><button type="button" className="text-button" onClick={() => props.onRemoveInput(index)} disabled={props.busy}>Remove input</button></div>
-        <label>Name<input aria-label={`Input ${index + 1} name`} value={input.name} onChange={(event) => props.onUpdateInput(index, { name: event.target.value })} disabled={props.busy} autoComplete="off" /></label>
-        <label>Label<input aria-label={`Input ${index + 1} label`} value={input.label} onChange={(event) => props.onUpdateInput(index, { label: event.target.value })} disabled={props.busy} autoComplete="off" /></label>
-        <label>Type<select aria-label={`Input ${index + 1} type`} value={input.type} onChange={(event) => props.onUpdateInput(index, { type: event.target.value as SetupInput["type"] })} disabled={props.busy}><option value="text">Text</option><option value="date">Date</option><option value="number">Number</option></select></label>
-        <label>Example<input aria-label={`Input ${index + 1} example`} type={input.type} value={input.example} onChange={(event) => props.onUpdateInput(index, { example: event.target.value })} disabled={props.busy} autoComplete="off" /></label>
-      </article>)}
+    <div className="panel-intro"><h2>Review the draft</h2><p>Make the instructions clear and choose each form value deliberately.</p></div>
+    <div className="field-group">
+      <label className="field-label">Agent name<input value={props.name} onChange={(event) => props.onName(event.target.value)} disabled={props.busy} autoComplete="off" /></label>
+      <label className="field-label">What should the agent do?<textarea value={props.goal} onChange={(event) => props.onGoal(event.target.value)} disabled={props.busy} /></label>
+      <div className="field">
+        <label className="field-label">Recorded starting address<input value={props.url} readOnly /></label>
+        <p className="field-help">The starting address and recorded targets stay fixed. To change them, go back to the demonstration and start over.</p>
+      </div>
+    </div>
+    <section className="setup-section" aria-labelledby="review-steps-heading">
+      <div className="section-heading"><div><h3 id="review-steps-heading">Steps</h3><p>The agent follows these in order. Describe what each step is for, not only where to click.</p></div></div>
+      {props.steps.length === 0 ? <p className="empty-steps" role="status">No steps remain. Go back to the demonstration and start over to capture the task again.</p> : <ol className="review-steps">
+        {props.steps.map((step, index) => <li className="review-step" key={step.id}>
+          <span className="review-step-number" aria-hidden="true">{index + 1}</span>
+          <div className="review-step-body">
+            <div className="item-heading">
+              <h4 className="visually-hidden">Step {index + 1}</h4>
+              {step.type === "navigation" ? <p className="recorded-target">Recorded destination: {step.url ?? step.target ?? step.description}</p> : step.target != null ? <p className="recorded-target">Recorded target: {step.target}</p> : <span />}
+              <button type="button" className="text-button" onClick={() => props.onRemoveStep(step.id)} disabled={props.busy} aria-label={`Remove step ${index + 1}`}>Remove</button>
+            </div>
+            {step.type === "key_press" && step.value != null && <p className="recorded-target">Recorded key: {step.value}</p>}
+            <label className="field-label">Description<textarea aria-label={`Step ${index + 1} description`} value={step.description} onChange={(event) => props.onUpdateStep(step.id, { description: event.target.value })} disabled={props.busy} /></label>
+            <label className="field-label">Expected outcome<textarea aria-label={`Step ${index + 1} expected outcome`} value={step.expectedOutcome ?? ""} onChange={(event) => props.onUpdateStep(step.id, { expectedOutcome: event.target.value || undefined })} disabled={props.busy} placeholder="Optional. For example: the reports list is visible." /></label>
+            {(step.type === "input" || step.type === "select_change") && <div className="value-source">
+              <p>Recorded form values are discarded. Choose a fixed value or reusable input.</p>
+              <label className="field-label">Value source<select aria-label={`Step ${index + 1} value source`} value={step.inputName ?? (step.value !== undefined && step.value !== null ? "__literal" : "")} onChange={(event) => event.target.value === "__literal" ? props.onUpdateStep(step.id, { value: "", inputName: undefined }) : event.target.value === "" ? props.onUpdateStep(step.id, { value: undefined, inputName: undefined }) : props.onUpdateStep(step.id, { value: undefined, inputName: event.target.value })} disabled={props.busy}><option value="">Choose a value</option><option value="__literal">Fixed value</option>{props.inputs.filter((input) => input.name !== "").map((input, inputIndex) => <option value={input.name} key={`${input.name}-${inputIndex}`}>{input.label || input.name}</option>)}</select></label>
+              {step.inputName === undefined && step.value !== undefined && step.value !== null && <label className="field-label">Fixed value<input aria-label={`Step ${index + 1} fixed value`} value={step.value} onChange={(event) => props.onUpdateStep(step.id, { value: event.target.value })} disabled={props.busy} autoComplete="off" /></label>}
+            </div>}
+          </div>
+        </li>)}
+      </ol>}
     </section>
-    {props.steps.length === 0 && <p role="status">No steps remain. Go back to the demonstration and start over to capture the task again.</p>}
-    {props.steps.map((step, index) => <article className="review-step" key={step.id}>
-      <div className="review-step-heading"><h3>Step {index + 1}</h3><button type="button" className="text-button" onClick={() => props.onRemoveStep(step.id)} disabled={props.busy}>Remove step</button></div>
-      {step.type === "navigation" ? <p className="recorded-target">Recorded destination: {step.url ?? step.target ?? step.description}</p> : step.target != null && <p className="recorded-target">Recorded target: {step.target}</p>}
-      {step.type === "key_press" && step.value != null && <p className="recorded-target">Recorded key: {step.value}</p>}
-      <label>Description<textarea aria-label={`Step ${index + 1} description`} value={step.description} onChange={(event) => props.onUpdateStep(step.id, { description: event.target.value })} disabled={props.busy} /></label>
-      <label>Expected outcome<textarea aria-label={`Step ${index + 1} expected outcome`} value={step.expectedOutcome ?? ""} onChange={(event) => props.onUpdateStep(step.id, { expectedOutcome: event.target.value || undefined })} disabled={props.busy} /></label>
-      {(step.type === "input" || step.type === "select_change") && <>
-        <p className="credential-warning">Recorded form values are discarded. Choose a fixed value or reusable input.</p>
-        <label>Value source<select aria-label={`Step ${index + 1} value source`} value={step.inputName ?? (step.value !== undefined && step.value !== null ? "__literal" : "")} onChange={(event) => event.target.value === "__literal" ? props.onUpdateStep(step.id, { value: "", inputName: undefined }) : event.target.value === "" ? props.onUpdateStep(step.id, { value: undefined, inputName: undefined }) : props.onUpdateStep(step.id, { value: undefined, inputName: event.target.value })} disabled={props.busy}><option value="">Choose a value</option><option value="__literal">Fixed value</option>{props.inputs.filter((input) => input.name !== "").map((input, inputIndex) => <option value={input.name} key={`${input.name}-${inputIndex}`}>{input.label || input.name}</option>)}</select></label>
-        {step.inputName === undefined && step.value !== undefined && step.value !== null && <label>Fixed value<input aria-label={`Step ${index + 1} fixed value`} value={step.value} onChange={(event) => props.onUpdateStep(step.id, { value: event.target.value })} disabled={props.busy} autoComplete="off" /></label>}
-      </>}
-    </article>)}
-    <div className="setup-actions"><button className="button button-quiet" type="button" onClick={props.onBack} disabled={props.busy}>Back to demonstration</button><button className="button button-primary" type="button" onClick={props.onContinue} disabled={props.busy || props.steps.length === 0}>Continue to test</button></div>
+    <section className="setup-section" aria-labelledby="reusable-inputs-heading">
+      <div className="section-heading"><div><h3 id="reusable-inputs-heading">Reusable inputs</h3><p>Values that change between runs, such as a month or account. Examples are used for the test and any schedule.</p></div><button type="button" className="button button-quiet" onClick={props.onAddInput} disabled={props.busy}>Add reusable input</button></div>
+      {props.inputs.length > 0 && <div className="input-list">
+        {props.inputs.map((input, index) => <article className="input-definition" key={index} aria-labelledby={`input-${index}-heading`}>
+          <div className="item-heading"><h4 id={`input-${index}-heading`}>{input.label.trim() !== "" ? input.label : `Input ${index + 1}`}</h4><button type="button" className="text-button" onClick={() => props.onRemoveInput(index)} disabled={props.busy} aria-label={`Remove input ${index + 1}`}>Remove</button></div>
+          <div className="input-grid">
+            <label className="field-label">Label<input aria-label={`Input ${index + 1} label`} value={input.label} onChange={(event) => props.onUpdateInput(index, { label: event.target.value })} disabled={props.busy} placeholder="Statement month" autoComplete="off" /></label>
+            <label className="field-label">Name<input aria-label={`Input ${index + 1} name`} value={input.name} onChange={(event) => props.onUpdateInput(index, { name: event.target.value })} disabled={props.busy} placeholder="statement_month" autoComplete="off" spellCheck={false} /></label>
+            <label className="field-label">Type<select aria-label={`Input ${index + 1} type`} value={input.type} onChange={(event) => props.onUpdateInput(index, { type: event.target.value as SetupInput["type"] })} disabled={props.busy}><option value="text">Text</option><option value="date">Date</option><option value="number">Number</option></select></label>
+            <label className="field-label">Example<input aria-label={`Input ${index + 1} example`} type={input.type} value={input.example} onChange={(event) => props.onUpdateInput(index, { example: event.target.value })} disabled={props.busy} autoComplete="off" /></label>
+          </div>
+        </article>)}
+      </div>}
+    </section>
+    <div className="setup-actions setup-actions-sticky"><button className="button button-quiet" type="button" onClick={props.onBack} disabled={props.busy}>Back to demonstration</button><span className="actions-spacer" /><button className="button button-primary" type="button" onClick={props.onContinue} disabled={props.busy || props.steps.length === 0}>Continue to test</button></div>
   </div>;
 }
 
@@ -606,7 +684,46 @@ function Test(props: { run: RunState | null; checked: boolean; canFinish: boolea
     const [hours, minutes] = value.split(":");
     props.onCron(`${Number(minutes)} ${Number(hours)} * * *`);
   }
-  return <div className="setup-panel"><div><h2>Test a fresh run</h2><p>Reiterate runs the saved draft in a new browser session. Check the output, then finish setup or choose a daily schedule.</p></div><div className="test-result" aria-live="polite">{props.run?.status === "running" && <p>Test is running.</p>}{testSucceeded && <><p>Test completed</p>{props.run?.files.length === 0 && <p>No files were returned. Check the result on the website before confirming. If you expected a download, review the instructions and test again.</p>}{props.run?.files.map((file) => <a key={file.url} href={file.url} target="_blank" rel="noreferrer">{file.name}</a>)}</>}{testFailed && <p role="alert">{props.run?.error ?? "The test failed."}</p>}{props.run === null && <p>Run a test after each change.</p>}</div>{testSucceeded && <label className="result-check"><input aria-label="I checked the result" type="checkbox" checked={props.checked} onChange={(event) => props.onCheck(event.target.checked)} />I checked the result</label>}{props.scheduleAllowed && <div className="schedule-options"><p>Daily runs repeat the tested workflow. You can finish setup without a schedule.</p><label className="result-check"><input aria-label="Schedule daily" type="checkbox" checked={props.dailySchedule} onChange={(event) => props.onDaily(event.target.checked)} />Schedule daily</label>{props.dailySchedule && <label>Time of day (UTC)<input type="time" aria-label="Time of day (UTC)" value={dailyTime} onChange={(event) => changeTime(event.target.value)} />{!props.scheduleValid && <span className="field-hint">Choose a time for the daily run.</span>}</label>}</div>}<div className="setup-actions"><button className="button button-quiet" type="button" onClick={props.onBack} disabled={props.busy || testRunning}>Back to review</button><button className={`button ${testSucceeded ? "button-quiet" : "button-primary"}`} type="button" onClick={props.onRun} disabled={props.busy || testRunning}>Run test</button>{testSucceeded && !props.dailySchedule && <button className="button button-primary" type="button" onClick={props.onFinish} disabled={!props.canFinish}>Finish setup</button>}{props.scheduleAllowed && props.dailySchedule && <button className="button button-primary" type="button" onClick={props.onSchedule} disabled={!props.canSchedule}>Schedule agent</button>}</div></div>;
+  const resultClass = testSucceeded ? " test-result-succeeded" : testFailed ? " test-result-failed" : "";
+  return <div className="setup-panel">
+    <div className="panel-intro"><h2>Test a fresh run</h2><p>Reiterate runs the saved draft in a new browser session. Check the output, then finish setup or choose a daily schedule.</p></div>
+    <div className={`test-result${resultClass}`} aria-live="polite">
+      {props.run === null && <><p className="test-result-heading">Not tested yet</p><p>Run a test after each change.</p></>}
+      {testRunning && <p className="test-result-heading"><span className="spinner" aria-hidden="true" />Test is running.</p>}
+      {testSucceeded && <>
+        <p className="test-result-heading"><CheckIcon />Test completed</p>
+        {props.run?.files.length === 0 ? <p>No files were returned. Check the result on the website before confirming. If you expected a download, review the instructions and test again.</p> : <ul className="test-files">{props.run?.files.map((file) => <li key={file.url}><a href={file.url} target="_blank" rel="noreferrer"><FileIcon />{file.name}</a></li>)}</ul>}
+      </>}
+      {testFailed && <><p className="test-result-heading"><AlertIcon />Test failed</p><p role="alert">{props.run?.error ?? "The test failed."}</p></>}
+    </div>
+    {testSucceeded && <label className="check"><input aria-label="I checked the result" type="checkbox" checked={props.checked} onChange={(event) => props.onCheck(event.target.checked)} />I checked the result</label>}
+    {props.scheduleAllowed && <section className="setup-section" aria-labelledby="schedule-heading">
+      <div className="section-heading"><div><h3 id="schedule-heading">Schedule</h3><p>Daily runs repeat the tested workflow. You can finish setup without a schedule.</p></div></div>
+      <label className="check"><input aria-label="Schedule daily" type="checkbox" checked={props.dailySchedule} onChange={(event) => props.onDaily(event.target.checked)} />Schedule daily</label>
+      {props.dailySchedule && <div className="schedule-time"><label className="field-label">Time of day (UTC)<input type="time" aria-label="Time of day (UTC)" value={dailyTime} onChange={(event) => changeTime(event.target.value)} />{!props.scheduleValid && <span className="field-hint">Choose a time for the daily run.</span>}</label></div>}
+    </section>}
+    <div className="setup-actions">
+      <button className="button button-quiet" type="button" onClick={props.onBack} disabled={props.busy || testRunning}>Back to review</button>
+      <span className="actions-spacer" />
+      <button className={`button ${testSucceeded ? "button-quiet" : "button-primary"}`} type="button" onClick={props.onRun} disabled={props.busy || testRunning}>Run test</button>
+      {testSucceeded && !props.dailySchedule && <button className="button button-primary" type="button" onClick={props.onFinish} disabled={!props.canFinish}>Finish setup</button>}
+      {props.scheduleAllowed && props.dailySchedule && <button className="button button-primary" type="button" onClick={props.onSchedule} disabled={!props.canSchedule}>Schedule agent</button>}
+    </div>
+  </div>;
+}
+
+function displayAddress(value: string): string {
+  try {
+    const parsed = new URL(value);
+    return `${parsed.host}${parsed.pathname === "/" ? "" : parsed.pathname}`;
+  } catch {
+    return value;
+  }
+}
+
+function scheduleTimeLabel(cron: string): string {
+  const [minute, hour] = cron.trim().split(/\s+/);
+  return `${(hour ?? "0").padStart(2, "0")}:${(minute ?? "0").padStart(2, "0")}`;
 }
 
 function startUrlError(value: string): string | null {
