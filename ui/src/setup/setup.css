@@ -915,7 +915,7 @@
   counter-reset: captured;
 }
 
-.captured-steps li {
+.captured-steps ol > li {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr);
   gap: 8px;
@@ -925,18 +925,18 @@
   counter-increment: captured;
 }
 
-.captured-steps li:last-child {
+.captured-steps ol > li:last-child {
   border-bottom: 0;
 }
 
-.captured-steps li::before {
+.captured-steps ol > li::before {
   color: var(--text-2);
   content: counter(captured);
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
 
-.captured-steps-live li:last-child {
+.captured-steps-live ol > li:last-child {
   animation: step-arrive 900ms var(--ease-out);
 }
 
@@ -1134,6 +1134,56 @@
   color: var(--text-2);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.action-hint {
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.action-hint-error {
+  color: var(--red);
+  font-weight: 500;
+}
+
+.value-choice-error {
+  border-color: var(--red);
+  box-shadow: inset 0 0 0 1px var(--red);
+}
+
+.review-step-error .review-step-number {
+  background: var(--error-fill);
+  color: var(--error-text);
+}
+
+.demo-hint {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.steps-empty {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.steps-empty p {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.steps-empty ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 16px;
+  list-style: disc;
 }
 
 /* ---------- Test ---------- */
@@ -1410,7 +1460,7 @@
   }
 
   .recording-state-active span,
-  .captured-steps-live li:last-child,
+  .captured-steps-live ol > li:last-child,
   .progress-item.complete .progress-marker,
   .setup-done-mark {
     animation: none;
