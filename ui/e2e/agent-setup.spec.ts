@@ -320,7 +320,7 @@ test("edits the job without discarding recorded instructions", async ({ page }) 
   await expect(setup.getByText("https://portal.example.test/reports", { exact: true })).toBeVisible();
   await setup.getByLabel("Agent name").fill("Annual report");
   await setup.getByLabel("What should the agent do?").fill("Download the annual report.");
-  await expect(setup.getByText("On Reports", { exact: true })).toBeVisible();
+  await expect(setup.getByText("Clicked Reports", { exact: true })).toBeVisible();
   await setup.getByLabel("Step 1 description").fill("Open the annual reports section");
   await setup.getByRole("button", { name: "Continue to test" }).click();
   await expect(setup.getByRole("button", { name: "Finish setup" })).toHaveCount(0);
@@ -464,6 +464,50 @@ test("shows recorded navigation destinations while editing their purpose", async
   await expect(setup.getByText("Opens https://portal.example.test/reports", { exact: true })).toBeVisible();
   await setup.getByLabel("Step 1 description").fill("Find the annual report");
   await expect(setup.getByText("Opens https://portal.example.test/reports", { exact: true })).toBeVisible();
+});
+
+test("points at the form value that still needs a choice instead of failing with a banner", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=form-entry`);
+  const setup = page.frameLocator("iframe");
+  await describeAndDemonstrate(setup);
+  await expect(setup.getByText("1 form value needs a choice")).toBeVisible();
+  await setup.getByRole("button", { name: "Continue to test" }).click();
+  await expect(setup.getByText("Choose one before testing.")).toBeVisible();
+  await expect(setup.getByRole("heading", { name: "Review the draft" })).toBeVisible();
+  await expect(setup.locator(".setup-error")).toHaveCount(0);
+  await setup.getByRole("radiogroup", { name: "Step 2 value source" }).getByText("Same every run").click();
+  await setup.getByLabel("Step 2 fixed value").fill("August");
+  await expect(setup.getByText("form value needs a choice")).toHaveCount(0);
+  await setup.getByRole("button", { name: "Continue to test" }).click();
+  await expect(setup.getByRole("heading", { name: "Test a fresh run" })).toBeVisible();
+});
+
+test("offers a way back to the steps after a failed test", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=failed`);
+  const setup = page.frameLocator("iframe");
+  await completeToTest(setup);
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await setup.getByRole("button", { name: "Edit steps" }).click();
+  await expect(setup.getByRole("heading", { name: "Review the draft" })).toBeVisible();
+});
+
+test("keeps the credential note consistent with the sign-in choice", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=success`);
+  const setup = page.frameLocator("iframe");
+  await expect(setup.getByText("If the website needs a login, tick sign-in above instead.")).toBeVisible();
+  await setup.getByLabel("This website requires sign-in").check();
+  await expect(setup.getByText("Sign-in is handled privately in Reiterate before recording.")).toBeVisible();
+  await expect(setup.getByText("can't be set up here yet")).toHaveCount(0);
+});
+
+test("explains why setup cannot finish before the result is confirmed", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=success`);
+  const setup = page.frameLocator("iframe");
+  await completeToTest(setup);
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await expect(setup.getByText("Tick “I checked the result” to finish")).toBeVisible();
+  await setup.getByLabel("I checked the result").check();
+  await expect(setup.getByText("Tick “I checked the result” to finish")).toHaveCount(0);
 });
 
 async function describe(setup: FrameLocator): Promise<void> {
