@@ -186,6 +186,8 @@ test("rejects literal sign-in values in instructions but allows sign-in wording"
     "username is jane.doe@example.test",
     "Use API key sk_live_abc123",
     "one-time code 482913",
+    "Log in with password correct-horse-battery-staple",
+    "Enter verification code 482913",
   ]) {
     const draft = baseDraft();
     draft.goal = goal;
@@ -200,6 +202,19 @@ test("rejects literal sign-in values in instructions but allows sign-in wording"
     const draft = baseDraft();
     draft.goal = goal;
     assert.doesNotThrow(() => compileAgent(draft), goal);
+  }
+});
+
+test("rejects credential values in URL paths but allows sign-in paths", () => {
+  for (const url of ["https://portal.example.test/token/abc123", "https://portal.example.test/api-key/sk_live%5Fabc"]) {
+    const draft = baseDraft();
+    draft.url = url;
+    assert.throws(() => compileAgent(draft), /Remove sign-in details/, url);
+  }
+  for (const url of ["https://portal.example.test/login", "https://portal.example.test/reports/2024"]) {
+    const draft = baseDraft();
+    draft.url = url;
+    assert.doesNotThrow(() => compileAgent(draft), url);
   }
 });
 

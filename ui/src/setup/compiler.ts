@@ -52,9 +52,20 @@ export function requiredCredentials(steps: SetupStep[]): CredentialKind[] {
   return credentialKinds.filter((kind) => steps.some((step) => step.type === "credential" && step.value === kind));
 }
 
-// A credential word followed by an assigned value, or directly by a token containing a digit.
-// Sign-in wording ("Enter the password", "Log in") stays allowed.
-const credentialDisclosurePattern = /\b(?:user ?name|password|passcode|passphrase|pin|otp|one[- ]time code|token|api[ -]?key|secret)s?\b\s*(?:(?:[:=]|\bis\b|\bwas\b)\s*["'`]?\S{3,}|["'`]?(?=\S*\d)(?!\$)\S{4,})/iu;
+// A credential word followed by an assigned value, or directly by a token containing a
+// digit or symbol (e.g. "password correct-horse-9", "code 482913"). Sign-in wording
+// ("Enter the password and log in") and $placeholders stay allowed.
+const credentialDisclosurePattern = new RegExp(
+  [
+    String.raw`\b(?:user ?name|password|passcode|passphrase|pin|otp|token|api[ -]?key|secret`,
+    String.raw`|(?:verification|security|access|auth(?:entication)?|one[- ]time|2fa|mfa|sms) code)s?\b\s*`,
+    // An assigned value ("password: x", "username is jane") ...
+    String.raw`(?:(?:[:=]|\bis\b|\bwas\b)\s*\S{3,}`,
+    // ... or a value containing a digit or symbol, excluding $placeholders.
+    String.raw`|(?:(?:of|with)\s+)?(?!\$)(?=[^\s,;)]*?[\d@#%&*+_/\\-])[^\s,;)]{4,})`,
+  ].join(""),
+  "iu",
+);
 const rawReplayPattern = /\b(?:css|xpath|selector)\b|#[a-z][\w-]*(?:\s*[>+~]|\[)|\[[^\]]+\]|(?:^|\s)(?:x|y)\s*[:=]\s*\d+|^\s*\d+(?:px)?\s*,\s*\d+(?:px)?\s*$/i;
 const maximumNameLength = 150;
 const maximumUrlLength = 2_048;
@@ -200,6 +211,13 @@ function validateUrl(value: string, label: string): void {
   if (url.search !== "" || url.hash !== "") {
     throw new Error(`${label} must not include query parameters or a fragment.`);
   }
+  let path = url.pathname;
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    throw new Error(`${label} has an invalid path.`);
+  }
+  rejectCredentialDisclosure(path.replace(/\//g, " "));
 }
 
 function requireText(value: string, label: string): void {
