@@ -163,9 +163,9 @@ test("compiles a demonstrated sign-in into placeholders without values", () => {
 
   assert.deepEqual(requiredCredentials(draft.steps), ["username", "password", "otp"]);
   assert.deepEqual(compiled.parameters, {});
-  assert.match(prompt, /Type exactly \$username into Email\./);
-  assert.match(prompt, /Type exactly \$password into Password\./);
-  assert.match(prompt, /Type exactly \$otp into Code\./);
+  assert.match(prompt, /Enter the saved username in Email: type exactly \$username into Email\./);
+  assert.match(prompt, /type exactly \$password into Password\./);
+  assert.match(prompt, /type exactly \$otp into Code\./);
   assert.match(prompt, /Click Sign in to log in\./);
 });
 

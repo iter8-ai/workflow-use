@@ -171,7 +171,7 @@ function formatInstruction(
   if (step.type === "credential") {
     // The engine replaces the placeholder with the stored value while typing.
     const field = target ?? "the sign-in field";
-    return `Type exactly $${step.value} into ${field}. It is replaced with the saved ${step.value} while typing.`;
+    return `${description}: type exactly $${step.value} into ${field}. It is replaced with the saved ${step.value} while typing.`;
   }
   if (step.type === "input" || step.type === "select_change") {
     return target === undefined ? `Enter ${value} to ${intent}.` : `Set ${target} to ${value} to ${intent}.`;

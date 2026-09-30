@@ -178,7 +178,7 @@ test("asks the host for sign-in details before the first test and never handles 
     { kinds: ["username", "password"], replace: false },
   ]);
   const saved = await page.evaluate(() => window.__savedAgents);
-  expect(JSON.stringify(saved)).toContain("Type exactly $password into Password.");
+  expect(JSON.stringify(saved)).toContain("type exactly $password into Password.");
   expect(saved.every((agent: { config: { parameters: object } }) => Object.keys(agent.config.parameters).length === 0)).toBe(true);
 });
 
@@ -192,7 +192,7 @@ test("turns a demonstrated form field into a saved sign-in field", async ({ page
   await setup.getByRole("button", { name: "Run test" }).click();
   await expect(setup.getByText("Test completed")).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.__credentialRequests)).toEqual([{ kinds: ["password"], replace: false }]);
-  expect(JSON.stringify(await page.evaluate(() => window.__savedAgents))).toContain("Type exactly $password into Statement month.");
+  expect(JSON.stringify(await page.evaluate(() => window.__savedAgents))).toContain("type exactly $password into Statement month.");
 });
 
 test("does not test a sign-in agent when the host has no credential support", async ({ page }) => {

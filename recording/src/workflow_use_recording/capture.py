@@ -28,9 +28,9 @@ CAPTURE_SCRIPT = r"""
       `${labelText(node)} ${node.getAttribute("placeholder") || ""}`).toLowerCase();
     if (/one.?time|otp|passcode|verification.?code|2fa|mfa|authenticator/.test(hint)) return "otp";
     if (input?.type === "password") return "password";
+    if (/api.?key|\bauth\b|credential|jwt|secret|token/.test(hint)) return "password";
     const passwordInForm = Boolean(node.closest("form")?.querySelector('input[type="password"]'));
     if (passwordInForm || /user.?name|login/.test(hint)) return "username";
-    if (/api.?key|\bauth\b|credential|jwt|secret|token/.test(hint)) return "password";
     return null;
   };
   const target = (node) => {
