@@ -66,6 +66,8 @@ const credentialDisclosurePattern = new RegExp(
   ].join(""),
   "iu",
 );
+// A one-time code a few words after its label ("code sent to me 482913").
+const codeNearbyPattern = /\b(?:otp|passcode|(?:verification|security|access|auth(?:entication)?|one[- ]time|2fa|mfa|sms) code)s?\b[^.\n]{0,40}?\b\d{4,8}\b/iu;
 const rawReplayPattern = /\b(?:css|xpath|selector)\b|#[a-z][\w-]*(?:\s*[>+~]|\[)|\[[^\]]+\]|(?:^|\s)(?:x|y)\s*[:=]\s*\d+|^\s*\d+(?:px)?\s*,\s*\d+(?:px)?\s*$/i;
 const maximumNameLength = 150;
 const maximumUrlLength = 2_048;
@@ -241,7 +243,7 @@ function requireMaximumLength(value: string, maximum: number, label: string): vo
 }
 
 function rejectCredentialDisclosure(...texts: Array<string | null | undefined>): void {
-  if (texts.some((text) => text !== null && text !== undefined && credentialDisclosurePattern.test(text))) {
+  if (texts.some((text) => text !== null && text !== undefined && (credentialDisclosurePattern.test(text) || codeNearbyPattern.test(text)))) {
     throw new Error("Remove sign-in details from the instructions. Reiterate asks for them separately and stores them encrypted.");
   }
 }

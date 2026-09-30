@@ -26,8 +26,11 @@ CAPTURE_SCRIPT = r"""
     const input = node instanceof HTMLInputElement ? node : null;
     const hint = (`${input?.type || ""} ${input?.autocomplete || ""} ${input?.name || ""} ${node.id} ` +
       `${labelText(node)} ${node.getAttribute("placeholder") || ""}`).toLowerCase();
-    if (/one.?time|otp|passcode|verification.?code|2fa|mfa|authenticator/.test(hint)) return "otp";
-    if (input?.type === "password") return "password";
+    // Most specific signal first: the input type, then explicit autocomplete and username hints.
+    const oneTime = /one.?time|otp|passcode|verification.?code|2fa|mfa|authenticator/.test(hint);
+    if (input?.type === "password") return /one-time-code/.test(input.autocomplete) ? "otp" : "password";
+    if (/\b(?:username|email)\b/.test(input?.autocomplete || "") || /user.?name/.test(hint)) return "username";
+    if (oneTime) return "otp";
     if (/api.?key|\bauth\b|credential|jwt|secret|token/.test(hint)) return "password";
     const passwordInForm = Boolean(node.closest("form")?.querySelector('input[type="password"]'));
     if (passwordInForm || /user.?name|login/.test(hint)) return "username";

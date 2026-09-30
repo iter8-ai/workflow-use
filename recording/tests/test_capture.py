@@ -130,18 +130,28 @@ async def test_capture_blocks_plain_text_token_and_contenteditable_credentials()
         fixture = (
             '<input aria-label="API token"><div contenteditable aria-label="One-time code"></div>'
             '<form><label for="username">Username</label><input id="username"><input aria-label="Secret key">'
-            '<input type="password"></form>'
+            '<input type="password" aria-label="Passcode">'
+            '<input aria-label="Account" id="auth-username" autocomplete="username"></form>'
         )
         await page.goto("data:text/html," + quote(fixture))
         await page.get_by_label("API token").fill("token-that-must-not-persist")
         await page.get_by_label("One-time code").fill("code-that-must-not-persist")
         await page.get_by_label("Username").fill("username-that-must-not-persist")
         await page.get_by_label("Secret key").fill("secret-that-must-not-persist")
+        await page.get_by_label("Passcode").fill("passcode-that-must-not-persist")
+        await page.get_by_label("Account").fill("account-that-must-not-persist")
         await asyncio.sleep(0.05)
         await browser.close()
 
     kinds = {event["target"]: event["value"] for event in events if event.get("type") == "credential"}
-    assert kinds == {"API token": "password", "One-time code": "otp", "Username": "username", "Secret key": "password"}
+    assert kinds == {
+        "API token": "password",
+        "One-time code": "otp",
+        "Username": "username",
+        "Secret key": "password",
+        "Passcode": "password",
+        "Account": "username",
+    }
     assert all(event.get("type") != "input" for event in events)
     assert all("must-not-persist" not in str(event) for event in events)
 

@@ -189,6 +189,7 @@ test("rejects literal sign-in values in instructions but allows sign-in wording"
     "Log in with password correct-horse-battery-staple",
     "Enter verification code 482913",
     "Enter verification code sent to me: 482913",
+    "Enter verification code sent to me 482913",
   ]) {
     const draft = baseDraft();
     draft.goal = goal;
