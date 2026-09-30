@@ -13,6 +13,8 @@ export type TestRun = {
   status: "running" | "succeeded" | "failed";
   error?: string;
   files?: Array<{ name: string; url: string }>;
+  /** Watch-only view of the running test's browser. */
+  liveViewUrl?: string | null;
 };
 
 type RequestMap = {

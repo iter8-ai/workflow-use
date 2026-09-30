@@ -700,3 +700,22 @@ select {
     transition: none;
   }
 }
+
+.watch-only {
+  position: relative;
+  margin-top: 16px;
+  border: 1px solid #d9dbe7;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.watch-only iframe {
+  pointer-events: none;
+}
+
+/* Catches clicks, wheel, and drags so the test runs undisturbed. */
+.watch-only-shield {
+  position: absolute;
+  inset: 0;
+  cursor: default;
+}
