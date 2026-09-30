@@ -107,7 +107,9 @@ async def test_capture_never_sends_secret_values() -> None:
         await asyncio.sleep(0.05)
         await browser.close()
 
-    assert any(event.get("secret") is True for event in events)
+    assert {"type": "credential", "value": "password", "target": "Password"}.items() <= next(
+        event for event in events if event.get("type") == "credential"
+    ).items()
     assert all("do-not-store-me" not in str(event) for event in events)
 
 
@@ -136,9 +138,9 @@ async def test_capture_blocks_plain_text_token_and_contenteditable_credentials()
         await asyncio.sleep(0.05)
         await browser.close()
 
-    secrets = [event for event in events if event.get("secret") is True]
-    assert len(secrets) == 3
-    assert all(event == {"secret": True} for event in secrets)
+    kinds = {event["target"]: event["value"] for event in events if event.get("type") == "credential"}
+    assert kinds == {"API token": "password", "One-time code": "otp", "Username": "username"}
+    assert all(event.get("type") != "input" for event in events)
     assert all("must-not-persist" not in str(event) for event in events)
 
 

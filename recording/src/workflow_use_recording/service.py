@@ -14,7 +14,8 @@ from .security import safe_public_url
 
 MAX_STEPS = 200
 MAX_FIELD_LENGTH = 2000
-BLOCKED_REASON = "Credentials and one-time codes cannot be taught yet."
+CREDENTIAL_KINDS = frozenset({"username", "password", "otp"})
+STEP_TYPES = frozenset({"navigation", "click", "input", "credential", "select_change", "key_press", "scroll", "agent"})
 CAPTURE_LIMIT_REASON = "The demonstration reached the 200-step capture limit. Start a shorter demonstration."
 logger = logging.getLogger(__name__)
 
@@ -119,16 +120,13 @@ class RecordingService:
                 or datetime.now(UTC) >= recording.expires_at
             ):
                 return
-            if event.get("secret") is True:
-                recording.blocked_reason = BLOCKED_REASON
-                return
             step = _to_step(event)
             if step is None:
                 return
             input_key = _text(event.get("targetKey"), maximum=512) or step.target
-            if step.type == "input" and recording.steps:
+            if step.type in {"input", "credential"} and recording.steps:
                 previous = recording.steps[-1]
-                if previous.type == "input" and recording.last_input_key == input_key:
+                if previous.type == step.type and recording.last_input_key == input_key:
                     recording.steps[-1] = step.model_copy(update={"id": previous.id})
                     return
             if step.type == "navigation" and recording.steps and recording.steps[-1].url == step.url:
@@ -137,7 +135,7 @@ class RecordingService:
                 recording.blocked_reason = CAPTURE_LIMIT_REASON
                 return
             recording.steps.append(step)
-            recording.last_input_key = input_key if step.type == "input" else None
+            recording.last_input_key = input_key if step.type in {"input", "credential"} else None
 
     async def cleanup(self) -> None:
         now = datetime.now(UTC)
@@ -244,10 +242,13 @@ def _text(value: Any, *, maximum: int = MAX_FIELD_LENGTH) -> str | None:
 
 def _to_step(event: dict[str, Any]) -> SetupStep | None:
     event_type = event.get("type")
-    if event_type not in {"navigation", "click", "input", "select_change", "key_press", "scroll", "agent"}:
+    if event_type not in STEP_TYPES:
         return None
     target = _text(event.get("target"), maximum=240)
     value = None if event_type in {"input", "select_change"} else _text(event.get("value"))
+    # A credential step carries only its kind; anything else is dropped.
+    if event_type == "credential" and value not in CREDENTIAL_KINDS:
+        return None
     url = safe_public_url(event.get("url", "")) if event_type == "navigation" else None
     if event_type == "navigation" and url is None:
         return None
@@ -281,6 +282,8 @@ def _description(
         return f"Click {target or 'element'}"
     if event_type == "input":
         return f"Enter {target or 'text'}"
+    if event_type == "credential":
+        return f"Enter the saved {value} in {target or 'the sign-in field'}"
     if event_type == "select_change":
         return f"Choose {value or 'option'} in {target or 'menu'}"
     if event_type == "key_press":

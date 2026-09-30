@@ -33,7 +33,7 @@ docker run --rm -p 8090:8090 \
 
 Captures remain only in process memory. A service restart loses active and stopped recordings. The API reports an unknown recording as unavailable or restarted rather than pretending it can recover it. A failed browser close remains pending and is retried by the running service; Browserbase's 15-minute keep-alive cap is the final cleanup fallback after process loss. The service does not persist Browserbase URLs, screenshots, or arbitrary CDP endpoints.
 
-Never enter passwords, one-time codes, API keys, session tokens, or other secrets in a demonstration. The recorder blocks values from password fields and fields it recognizes as credential-related, but that detection is heuristic and cannot identify every unmarked secret field. Login and credential demonstrations are therefore unsupported in this release. There is no recoverable recording persistence.
+Users may sign in during a demonstration. The capture script never sends field values. Typing into a password field, or a field recognized as a username, one-time code, or token field, becomes a `credential` step whose value is only the kind (`username`, `password`, or `otp`). Other typing becomes an `input` step without its value. Browserbase session recording and logs are disabled. There is no recoverable recording persistence.
 
 `POST /recordings` accepts `{"url":"https://public.example"}`. `GET /recordings/{id}`, `POST /recordings/{id}/stop`, and `DELETE /recordings/{id}` require the same tenant and user that created the recording. Browserbase Live View links appear only while a recording is active and are not logged or persisted.
 
