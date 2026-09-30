@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 from urllib.parse import quote
 
@@ -223,3 +224,30 @@ async def test_capture_records_the_sign_in_button_but_no_field_values() -> None:
     ]
     assert {"type": "click", "target": "Sign in"} in events
     assert all("must-not-persist" not in str(event) for event in events)
+
+
+@pytest.mark.asyncio
+async def test_capture_records_each_multi_select_label_separately() -> None:
+    playwright = pytest.importorskip("playwright.async_api")
+    events: list[dict[str, Any]] = []
+
+    async def record(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    async with playwright.async_playwright() as runtime:
+        browser = await runtime.chromium.launch()
+        context = await browser.new_context()
+        await context.expose_binding("workflowUseRecord", lambda _, event: record(event))
+        await context.add_init_script(CAPTURE_SCRIPT)
+        page = await context.new_page()
+        fixture = (
+            '<select aria-label="Status" multiple><option value="p">Paid, in full</option>'
+            '<option value="o">Overdue</option><option value="d">Draft</option></select>'
+        )
+        await page.goto("data:text/html," + quote(fixture))
+        await page.get_by_label("Status").select_option(["p", "o"])
+        await asyncio.sleep(0.05)
+        await browser.close()
+
+    selects = [event for event in events if event["type"] == "select_change"]
+    assert json.loads(selects[-1]["value"]) == ["Paid, in full", "Overdue"]

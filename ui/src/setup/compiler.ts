@@ -202,7 +202,10 @@ function formatInstruction(
       : `${description}: replace any text in ${field} with exactly ${quoted(step.value ?? "")}.`;
   }
   if (step.type === "select_change") {
-    return `${description}: in ${field}, choose exactly ${quoted(step.value ?? "")}.`;
+    const options = multipleChoices(step.value ?? "");
+    return options === null
+      ? `${description}: in ${field}, choose exactly ${quoted(step.value ?? "")}.`
+      : `${description}: in ${field}, select exactly these options and no others: ${options.map(quoted).join(", ")}.`;
   }
   if (step.type === "key_press") {
     return value === undefined ? `Complete this action: ${description}.` : `Press ${value} to ${intent}.`;
@@ -277,6 +280,17 @@ function looksLikeRawReplay(value: string | null | undefined): boolean {
 
 function escapeLiteral(value: string): string {
   return value.replace(/\{/g, "{{").replace(/\}/g, "}}");
+}
+
+/** Multi-select values are recorded as a JSON array of option labels. */
+function multipleChoices(value: string): string[] | null {
+  if (!value.startsWith("[")) return null;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed) && parsed.every((item) => typeof item === "string") ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 function quoted(value: string): string {

@@ -72,6 +72,13 @@ test("compiles typed text and chosen options as exact values", () => {
   assert.match(prompt, /Choose the month: in Month, choose exactly "September \{\{2026\}\}"\./);
 });
 
+test("compiles a multi-select as separate options", () => {
+  const draft = baseDraft();
+  draft.steps.push({ id: "status", type: "select_change", description: "Choose statuses", target: "Status", value: JSON.stringify(["Paid, in full", "Overdue"]) });
+  const prompt = (compileAgent(draft).stages[0] as { prompt: string }).prompt;
+  assert.match(prompt, /in Status, select exactly these options and no others: "Paid, in full", "Overdue"\./);
+});
+
 test("requires an option for a choice step and rejects declared inputs", () => {
   const selectStep = baseDraft();
   selectStep.steps.push({ id: "select", type: "select_change", description: "Choose month", target: "Month" });
