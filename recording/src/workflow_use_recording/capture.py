@@ -17,14 +17,13 @@ CAPTURE_SCRIPT = r"""
     return semanticText(node.getAttribute("aria-label") || labelled || associated);
   };
   // Sign-in fields become credential steps: the kind is recorded, never the value.
+  // Buttons and checkboxes are clicked, not typed into (e.g. "Sign in", "Remember me").
+  const typedField = (node) => (node instanceof HTMLInputElement &&
+      !["button", "submit", "reset", "checkbox", "radio", "image", "file", "hidden"].includes(node.type)) ||
+    node instanceof HTMLTextAreaElement || (node instanceof HTMLElement && node.isContentEditable);
   const credentialKind = (node) => {
-    if (!(node instanceof HTMLElement)) return null;
+    if (!typedField(node)) return null;
     const input = node instanceof HTMLInputElement ? node : null;
-    // Buttons and checkboxes in a sign-in form are ordinary steps (e.g. "Sign in").
-    const notTyped = ["button", "submit", "reset", "checkbox", "radio", "image", "file", "hidden"];
-    const editable = (input && !notTyped.includes(input.type)) ||
-      node instanceof HTMLTextAreaElement || node.isContentEditable;
-    if (!editable) return null;
     const hint = (`${input?.type || ""} ${input?.autocomplete || ""} ${input?.name || ""} ${node.id} ` +
       `${labelText(node)} ${node.getAttribute("placeholder") || ""}`).toLowerCase();
     if (/one.?time|otp|passcode|verification.?code|2fa|mfa|authenticator/.test(hint)) return "otp";
@@ -64,9 +63,7 @@ CAPTURE_SCRIPT = r"""
   }, true);
   document.addEventListener("input", (event) => {
     const node = event.target;
-    const editable = node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement ||
-      (node instanceof HTMLElement && node.isContentEditable);
-    if (!editable) return;
+    if (!typedField(node)) return;
     const kind = credentialKind(node);
     if (kind) {
       emit({ type: "credential", value: kind, target: target(node), targetKey: targetKey(node) });

@@ -179,6 +179,30 @@ test("rejects unknown credential kinds and masked values", () => {
   assert.throws(() => compileAgent(masked), /hidden value/);
 });
 
+test("rejects literal sign-in values in instructions but allows sign-in wording", () => {
+  for (const goal of [
+    "Log in with password example-secret-123",
+    "Password: hunter2",
+    "username is jane.doe@example.test",
+    "Use API key sk_live_abc123",
+    "one-time code 482913",
+  ]) {
+    const draft = baseDraft();
+    draft.goal = goal;
+    assert.throws(() => compileAgent(draft), /Remove sign-in details/, goal);
+  }
+  for (const goal of [
+    "Log in, then download the monthly statement.",
+    "Enter the password and open Reports.",
+    "Type $password into the Password field.",
+    "Download the token usage report.",
+  ]) {
+    const draft = baseDraft();
+    draft.goal = goal;
+    assert.doesNotThrow(() => compileAgent(draft), goal);
+  }
+});
+
 test("requires no credentials for a public demonstration", () => {
   assert.deepEqual(requiredCredentials(baseDraft().steps), []);
 });

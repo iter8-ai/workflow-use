@@ -192,11 +192,12 @@ async def test_capture_records_the_sign_in_button_but_no_field_values() -> None:
         page = await context.new_page()
         fixture = (
             '<form onsubmit="return false"><input aria-label="Email"><input aria-label="Password" type="password">'
-            '<button type="submit">Sign in</button></form>'
+            '<label><input type="checkbox"> Remember me</label><button type="submit">Sign in</button></form>'
         )
         await page.goto("data:text/html," + quote(fixture))
         await page.get_by_label("Email").fill("user-that-must-not-persist")
         await page.get_by_label("Password").fill("password-that-must-not-persist")
+        await page.get_by_label("Remember me").check()
         await page.get_by_role("button", name="Sign in").click()
         await asyncio.sleep(0.05)
         await browser.close()

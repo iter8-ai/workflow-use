@@ -52,6 +52,9 @@ export function requiredCredentials(steps: SetupStep[]): CredentialKind[] {
   return credentialKinds.filter((kind) => steps.some((step) => step.type === "credential" && step.value === kind));
 }
 
+// A credential word followed by an assigned value, or directly by a token containing a digit.
+// Sign-in wording ("Enter the password", "Log in") stays allowed.
+const credentialDisclosurePattern = /\b(?:user ?name|password|passcode|passphrase|pin|otp|one[- ]time code|token|api[ -]?key|secret)s?\b\s*(?:(?:[:=]|\bis\b|\bwas\b)\s*["'`]?\S{3,}|["'`]?(?=\S*\d)(?!\$)\S{4,})/iu;
 const rawReplayPattern = /\b(?:css|xpath|selector)\b|#[a-z][\w-]*(?:\s*[>+~]|\[)|\[[^\]]+\]|(?:^|\s)(?:x|y)\s*[:=]\s*\d+|^\s*\d+(?:px)?\s*,\s*\d+(?:px)?\s*$/i;
 const maximumNameLength = 150;
 const maximumUrlLength = 2_048;
@@ -84,6 +87,7 @@ function validateDraft(draft: SetupDraft): void {
   requireText(draft.name, "Agent name");
   requireMaximumLength(draft.name, maximumNameLength, "Agent name");
   requireText(draft.goal, "Agent goal");
+  rejectCredentialDisclosure(draft.name, draft.goal);
   validateUrl(draft.url, "Setup URL");
 
   if (draft.steps.length === 0) {
@@ -100,6 +104,7 @@ function validateDraft(draft: SetupDraft): void {
   for (const step of draft.steps) {
     requireText(step.id, "Step id");
     requireText(step.description, `Description for step ${step.id}`);
+    rejectCredentialDisclosure(step.description, step.expectedOutcome, step.target, step.value);
     if (stepIds.has(step.id)) {
       throw new Error(`Step id ${step.id} is duplicated.`);
     }
@@ -206,6 +211,12 @@ function requireText(value: string, label: string): void {
 function requireMaximumLength(value: string, maximum: number, label: string): void {
   if (value.length > maximum) {
     throw new Error(`${label} must be at most ${maximum} characters.`);
+  }
+}
+
+function rejectCredentialDisclosure(...texts: Array<string | null | undefined>): void {
+  if (texts.some((text) => text !== null && text !== undefined && credentialDisclosurePattern.test(text))) {
+    throw new Error("Remove sign-in details from the instructions. Reiterate asks for them separately and stores them encrypted.");
   }
 }
 
