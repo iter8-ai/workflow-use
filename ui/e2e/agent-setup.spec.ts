@@ -22,6 +22,7 @@ test("takes a user through demonstration, review, testing, and result confirmati
   await setup.getByLabel("Agent name").fill("Download monthly statement");
   await setup.getByLabel("Website address").fill("https://portal.example.test/reports");
   await setup.getByLabel("What should the agent do?").fill("Download the selected monthly statement.");
+  await expect(setup.getByText("Changes require a new test.")).toHaveCount(0);
   await setup.getByRole("button", { name: "Continue to demonstration" }).click();
 
   await expect(setup.getByText("Open the reports section")).toBeVisible();
@@ -38,7 +39,7 @@ test("takes a user through demonstration, review, testing, and result confirmati
   await setup.getByLabel("I checked the result").check();
   await expect(setup.getByRole("button", { name: "Schedule agent" })).toHaveCount(0);
   await setup.getByLabel("Schedule daily").check();
-  await setup.getByLabel("Time of day (UTC)").fill("09:30");
+  await setup.getByLabel("Time of day").fill("09:30");
   await expect(setup.getByRole("button", { name: "Schedule agent" })).toBeEnabled();
   await setup.getByRole("button", { name: "Schedule agent" }).click();
   await expect(setup.getByRole("heading", { name: "Your agent is ready" })).toBeVisible();
@@ -120,6 +121,7 @@ test("shows the running test's browser without letting the user interact with it
   await setup.getByRole("button", { name: "Run test" }).click();
 
   await expect(setup.getByText("Test is running.")).toBeVisible();
+  await expect(setup.getByRole("button", { name: "Test running…" })).toBeDisabled();
   const browser = setup.locator('iframe[title="Test browser (view only)"]');
   await expect(browser).toHaveAttribute("src", "https://www.browserbase.com/devtools-fullscreen/inspector.html");
   await expect(browser).toHaveAttribute("inert", "");
@@ -138,7 +140,9 @@ test("keeps scheduling disabled after a failed test", async ({ page }) => {
   await completeToTest(setup);
   await setup.getByRole("button", { name: "Run test" }).click();
 
+  await expect(setup.getByText("Test failed")).toBeVisible();
   await expect(setup.getByText("The website rejected the request.")).toBeVisible();
+  await expect(setup.getByRole("button", { name: "Run test again" })).toBeEnabled();
   await expect(setup.getByRole("button", { name: "Schedule agent" })).toHaveCount(0);
 });
 
@@ -155,6 +159,39 @@ test("invalidates a completed test when reviewed instructions change", async ({ 
 
   await expect(setup.getByText("Changes require a new test.")).toBeVisible();
   await expect(setup.getByRole("button", { name: "Schedule agent" })).toHaveCount(0);
+});
+
+test("assumes https for a website address typed without a scheme", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=success`);
+  const setup = page.frameLocator("iframe");
+
+  await setup.getByLabel("Agent name").fill("Download monthly statement");
+  await setup.getByLabel("Website address").fill("portal.example.test");
+  await setup.getByLabel("What should the agent do?").fill("Download the selected monthly statement.");
+  await setup.getByRole("button", { name: "Continue to demonstration" }).click();
+
+  await expect(setup.getByRole("heading", { name: "Demonstrate the task" })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.__startUrls)).toEqual(["https://portal.example.test"]);
+});
+
+test.describe("in a time zone ahead of UTC", () => {
+  test.use({ timezoneId: "Asia/Kolkata" });
+
+  test("schedules the daily run at the user's local time", async ({ page }) => {
+    await page.goto(`${baseUrl}/host?scenario=success`);
+    const setup = page.frameLocator("iframe");
+
+    await completeToTest(setup);
+    await setup.getByRole("button", { name: "Run test" }).click();
+    await expect(setup.getByText("Test completed")).toBeVisible();
+    await setup.getByLabel("I checked the result").check();
+    await setup.getByLabel("Schedule daily").check();
+    await expect(setup.getByLabel("Time of day")).toHaveValue("09:00");
+    await setup.getByLabel("Time of day").fill("09:30");
+    await expect(setup.getByText("Runs at 04:00 UTC.")).toBeVisible();
+    await setup.getByRole("button", { name: "Schedule agent" }).click();
+    await expect.poll(() => page.evaluate(() => window.__savedSchedule)).toEqual("0 4 * * *");
+  });
 });
 
 test("does not start or save an agent when the setup URL has a credential query", async ({ page }) => {
@@ -346,6 +383,7 @@ function hostPage(url: string): string {
   window.__closeRequests = [];
   window.__savedAgents = [];
   window.__credentialRequests = [];
+  window.__startUrls = [];
   let recordingActive = false;
   const signIn = scenario === "sign-in" || scenario === "sign-in-unsupported";
   const steps = [
@@ -370,7 +408,7 @@ function hostPage(url: string): string {
     if (request.method === "ready") {
       if (scenario === "delayed-ready") setTimeout(() => send({ schedule: true }), 300);
       else send({ schedule: true, credentials: scenario !== "sign-in-unsupported" });
-    } else if (request.method === "requestCredentials") { window.__credentialRequests.push(request.params); send({ saved: request.params.kinds }); } else if (request.method === "startRecording") { if (recordingActive) { fail("Finish the current demonstration first."); return; } recordingActive = true; send({ id: "recording-1", status: "recording", liveViewUrl: "https://live.browserbase.com/session", steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
+    } else if (request.method === "requestCredentials") { window.__credentialRequests.push(request.params); send({ saved: request.params.kinds }); } else if (request.method === "startRecording") { window.__startUrls.push(request.params.url); if (recordingActive) { fail("Finish the current demonstration first."); return; } recordingActive = true; send({ id: "recording-1", status: "recording", liveViewUrl: "https://live.browserbase.com/session", steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
     else if (request.method === "getRecording" || request.method === "stopRecording") send({ id: "recording-1", status: "stopped", liveViewUrl: "https://live.browserbase.com/session", steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null });
     else if (request.method === "cancelRecording") { recordingActive = false; send(undefined); }
     else if (request.method === "saveAgent") { window.__savedAgents.push(request.params); send({ id: "agent-1" }); }
