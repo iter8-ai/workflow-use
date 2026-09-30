@@ -41,7 +41,7 @@ export default function AgentSetup() {
   const [checkedResult, setCheckedResult] = useState(false);
   const [dailySchedule, setDailySchedule] = useState(false);
   const [scheduleSaved, setScheduleSaved] = useState(false);
-  const [cron, setCron] = useState("0 9 * * *");
+  const [cron, setCron] = useState(() => localTimeToUtcCron("09:00"));
   const [scheduleAllowed, setScheduleAllowed] = useState(false);
   const [credentialsAllowed, setCredentialsAllowed] = useState(false);
   const [connecting, setConnecting] = useState(true);
@@ -213,9 +213,10 @@ export default function AgentSetup() {
 
   function invalidateTest(): void {
     setRevision((current) => current + 1);
+    // Nothing to invalidate before the first test; the notice would only confuse on the Describe step.
+    if (testRun !== null) setNotice("Changes require a new test.");
     setTestRun(null);
     setCheckedResult(false);
-    setNotice("Changes require a new test.");
   }
 
   function setDraftField(setter: (value: string) => void, value: string): void {
@@ -229,18 +230,20 @@ export default function AgentSetup() {
     }
     setError(null);
     setNotice(null);
-    const urlError = startUrlError(url);
+    const startUrl = withScheme(url);
+    const urlError = startUrlError(startUrl);
     if (urlError !== null) {
       setError(urlError);
       return;
     }
+    setUrl(startUrl);
     if (name.trim() === "" || goal.trim() === "") {
       setError("Add an agent name and goal before starting the demonstration.");
       return;
     }
     setBusy(true);
     try {
-      const next = await bridge.request("startRecording", { url }, {
+      const next = await bridge.request("startRecording", { url: startUrl }, {
         onLateResult: (result) => {
           if (isRecording(result)) {
             void bridge.request("cancelRecording", { id: result.id }).catch(() => undefined);
@@ -561,22 +564,24 @@ function Review(props: { steps: SetupStep[]; busy: boolean; onUpdateStep(id: str
 function Test(props: { credentials: CredentialKind[]; onChangeCredentials(): void; run: RunState | null; checked: boolean; canFinish: boolean; canSchedule: boolean; scheduleAllowed: boolean; dailySchedule: boolean; cron: string; scheduleValid: boolean; busy: boolean; onRun(): void; onCheck(value: boolean): void; onDaily(value: boolean): void; onCron(value: string): void; onSchedule(): void; onFinish(): void; onBack(): void }): JSX.Element {
   const testFailed = props.run?.status === "failed";
   const testSucceeded = props.run?.status === "succeeded";
-  const [minute, hour] = props.cron.split(" ");
-  const dailyTime = props.scheduleValid ? `${hour.padStart(2, "0")}:${minute.padStart(2, "0")}` : "";
+  const running = props.run?.status === "running";
+  const dailyTime = props.scheduleValid ? utcCronToLocalTime(props.cron) : "";
+  const [utcMinute, utcHour] = props.cron.split(" ");
   function changeTime(value: string): void {
-    if (!/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(value)) {
-      props.onCron("");
-      return;
-    }
-    const [hours, minutes] = value.split(":");
-    props.onCron(`${Number(minutes)} ${Number(hours)} * * *`);
+    props.onCron(/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(value) ? localTimeToUtcCron(value) : "");
   }
-  return <div className="setup-panel"><div><h2>Test a fresh run</h2><p>Reiterate runs the saved draft in a new browser session. Check the output, then finish setup or choose a daily schedule.</p></div>{props.credentials.length > 0 && <p className="setup-notice">This agent signs in with the saved {props.credentials.map(credentialLabel).join(", ")}. Reiterate asks for them before the first test. <button type="button" className="text-button" onClick={props.onChangeCredentials} disabled={props.busy}>Change sign-in details</button></p>}<div className="test-result" aria-live="polite">{props.run?.status === "running" && <p>Test is running.</p>}{props.run?.status === "running" && <WatchOnlyBrowser url={props.run.liveViewUrl} />}{testSucceeded && <><p>Test completed</p>{props.run?.files.map((file) => <a key={file.url} href={file.url} target="_blank" rel="noreferrer">{file.name}</a>)}</>}{testFailed && <p role="alert">{props.run?.error ?? "The test failed."}</p>}{props.run === null && <p>Run a test after each change.</p>}</div>{testSucceeded && <label className="result-check"><input aria-label="I checked the result" type="checkbox" checked={props.checked} onChange={(event) => props.onCheck(event.target.checked)} />I checked the result</label>}{props.scheduleAllowed && <div className="schedule-options"><p>Daily runs repeat the tested workflow. You can finish setup without a schedule.</p><label className="result-check"><input aria-label="Schedule daily" type="checkbox" checked={props.dailySchedule} onChange={(event) => props.onDaily(event.target.checked)} />Schedule daily</label>{props.dailySchedule && <label>Time of day (UTC)<input type="time" aria-label="Time of day (UTC)" value={dailyTime} onChange={(event) => changeTime(event.target.value)} />{!props.scheduleValid && <span className="field-hint">Choose a time for the daily run.</span>}</label>}</div>}<div className="setup-actions"><button className="button button-quiet" type="button" onClick={props.onBack} disabled={props.busy}>Back to review</button><button className={`button ${testSucceeded ? "button-quiet" : "button-primary"}`} type="button" onClick={props.onRun} disabled={props.busy}>Run test</button>{testSucceeded && !props.dailySchedule && <button className="button button-primary" type="button" onClick={props.onFinish} disabled={!props.canFinish}>Finish setup</button>}{props.scheduleAllowed && props.dailySchedule && <button className="button button-primary" type="button" onClick={props.onSchedule} disabled={!props.canSchedule}>Schedule agent</button>}</div></div>;
+  return <div className="setup-panel"><div><h2>Test a fresh run</h2><p>Reiterate runs the saved draft in a new browser session. Check the output, then finish setup or choose a daily schedule.</p></div>{props.credentials.length > 0 && <p className="setup-notice">This agent signs in with the saved {props.credentials.map(credentialLabel).join(", ")}. Reiterate asks for them before the first test. <button type="button" className="text-button" onClick={props.onChangeCredentials} disabled={props.busy}>Change sign-in details</button></p>}<div className={testFailed ? "test-result test-result-failed" : "test-result"} aria-live="polite">{running && <p>Test is running.</p>}{running && <WatchOnlyBrowser url={props.run?.liveViewUrl ?? null} />}{testSucceeded && <><p>Test completed</p>{props.run?.files.map((file) => <a key={file.url} href={file.url} target="_blank" rel="noreferrer">{file.name}</a>)}</>}{testFailed && <div role="alert"><p className="test-result-title">Test failed</p><p>{props.run?.error ?? "The run did not finish."}</p><p>Adjust the steps in Review, then run the test again.</p></div>}{props.run === null && <p>Run a test after each change.</p>}</div>{testSucceeded && <label className="result-check"><input aria-label="I checked the result" type="checkbox" checked={props.checked} onChange={(event) => props.onCheck(event.target.checked)} />I checked the result</label>}{props.scheduleAllowed && <div className="schedule-options"><p>Daily runs repeat the tested workflow. You can finish setup without a schedule.</p><label className="result-check"><input aria-label="Schedule daily" type="checkbox" checked={props.dailySchedule} onChange={(event) => props.onDaily(event.target.checked)} />Schedule daily</label>{props.dailySchedule && <label>Time of day<input type="time" aria-label="Time of day" value={dailyTime} onChange={(event) => changeTime(event.target.value)} />{props.scheduleValid ? <span className="field-note">Your time ({localTimeZone()}). Runs at {utcHour.padStart(2, "0")}:{utcMinute.padStart(2, "0")} UTC.</span> : <span className="field-hint">Choose a time for the daily run.</span>}</label>}</div>}<div className="setup-actions"><button className="button button-quiet" type="button" onClick={props.onBack} disabled={props.busy}>Back to review</button><button className={`button ${testSucceeded ? "button-quiet" : "button-primary"}`} type="button" onClick={props.onRun} disabled={props.busy || running}>{running ? "Test running…" : testSucceeded || testFailed ? "Run test again" : "Run test"}</button>{testSucceeded && !props.dailySchedule && <button className="button button-primary" type="button" onClick={props.onFinish} disabled={!props.canFinish}>Finish setup</button>}{props.scheduleAllowed && props.dailySchedule && <button className="button button-primary" type="button" onClick={props.onSchedule} disabled={!props.canSchedule}>Schedule agent</button>}</div></div>;
 }
 
 /** Shows the test's browser without letting the user click, type, or scroll into it. */
 function WatchOnlyBrowser(props: { url: string | null }): JSX.Element {
   return <div className="browser-frame watch-only">{props.url === null ? <p>Opening the virtual browser.</p> : <><iframe title="Test browser (view only)" src={props.url} tabIndex={-1} {...{ inert: "" }} /><div className="watch-only-shield" aria-hidden="true" /></>}</div>;
+}
+
+// "portal.example.com" means https://portal.example.com; anything with a scheme is left for startUrlError to judge.
+function withScheme(value: string): string {
+  const trimmed = value.trim();
+  return trimmed === "" || /^[a-z][a-z0-9+.-]*:/i.test(trimmed) ? trimmed : `https://${trimmed}`;
 }
 
 function startUrlError(value: string): string | null {
@@ -603,6 +608,25 @@ function choiceUpdate(step: SetupStep, value: string): Partial<SetupStep> {
 
 function credentialLabel(kind: string | null | undefined): string {
   return kind === "otp" ? "one-time code" : kind ?? "sign-in detail";
+}
+
+// A daily cron is stored in UTC. Converting with today's offset means the local time shifts by an hour at DST changes.
+function localTimeToUtcCron(time: string): string {
+  const [hours, minutes] = time.split(":").map(Number);
+  const date = new Date();
+  date.setHours(hours, minutes, 0, 0);
+  return `${date.getUTCMinutes()} ${date.getUTCHours()} * * *`;
+}
+
+function utcCronToLocalTime(cron: string): string {
+  const [minutes, hours] = cron.trim().split(/\s+/).map(Number);
+  const date = new Date();
+  date.setUTCHours(hours, minutes, 0, 0);
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function localTimeZone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone;
 }
 
 function isFivePartCron(value: string): boolean {

@@ -38,6 +38,7 @@ select {
 .close-confirmation h2 {
   margin: 0;
   color: #17182b;
+  font-weight: 650;
   letter-spacing: -0.018em;
 }
 
@@ -538,7 +539,7 @@ select {
   border: 0;
   background: transparent;
   padding: 4px 0;
-  color: #a61d35;
+  color: #5236ad;
   font-weight: 700;
   cursor: pointer;
 }
@@ -632,6 +633,31 @@ select {
   background: #fbfbfe;
   color: #5f667c;
   font-size: 0.82rem;
+}
+
+.field-note {
+  color: #5f667c;
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+
+.test-result-failed {
+  border-color: #e4b0b7;
+  background: #fff5f5;
+  color: #922e3d;
+}
+
+.test-result-failed p {
+  color: #922e3d;
+}
+
+.test-result-failed [role="alert"] {
+  display: grid;
+  gap: 4px;
+}
+
+.test-result-title {
+  font-weight: 700;
 }
 
 .field-hint {
