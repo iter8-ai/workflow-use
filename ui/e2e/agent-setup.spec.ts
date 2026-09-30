@@ -175,6 +175,7 @@ test("asks the host for sign-in details before the first test and never handles 
   await setup.getByRole("button", { name: "Run test" }).click();
   await expect.poll(() => page.evaluate(() => window.__credentialRequests)).toEqual([
     { kinds: ["username", "password"], replace: false },
+    { kinds: ["username", "password"], replace: false },
   ]);
   const saved = await page.evaluate(() => window.__savedAgents);
   expect(JSON.stringify(saved)).toContain("Type exactly $password into Password.");

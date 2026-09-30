@@ -43,7 +43,6 @@ export default function AgentSetup() {
   const [cron, setCron] = useState("0 9 * * *");
   const [scheduleAllowed, setScheduleAllowed] = useState(false);
   const [credentialsAllowed, setCredentialsAllowed] = useState(false);
-  const [savedCredentials, setSavedCredentials] = useState<CredentialKind[]>([]);
   const [connecting, setConnecting] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -320,12 +319,11 @@ export default function AgentSetup() {
     if (bridge === undefined || bridge === null) {
       return false;
     }
-    const missing = replace ? kinds : kinds.filter((kind) => !savedCredentials.includes(kind));
-    if (missing.length === 0) {
+    if (kinds.length === 0) {
       return true;
     }
+    // The host prompts only for values it does not already hold for this website.
     const result = await bridge.request("requestCredentials", { kinds, replace }, { timeoutMs: credentialRequestTimeoutMs });
-    setSavedCredentials(result.saved);
     return kinds.every((kind) => result.saved.includes(kind));
   }
 

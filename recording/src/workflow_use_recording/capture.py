@@ -20,6 +20,11 @@ CAPTURE_SCRIPT = r"""
   const credentialKind = (node) => {
     if (!(node instanceof HTMLElement)) return null;
     const input = node instanceof HTMLInputElement ? node : null;
+    // Buttons and checkboxes in a sign-in form are ordinary steps (e.g. "Sign in").
+    const notTyped = ["button", "submit", "reset", "checkbox", "radio", "image", "file", "hidden"];
+    const editable = (input && !notTyped.includes(input.type)) ||
+      node instanceof HTMLTextAreaElement || node.isContentEditable;
+    if (!editable) return null;
     const hint = (`${input?.type || ""} ${input?.autocomplete || ""} ${input?.name || ""} ${node.id} ` +
       `${labelText(node)} ${node.getAttribute("placeholder") || ""}`).toLowerCase();
     if (/one.?time|otp|passcode|verification.?code|2fa|mfa|authenticator/.test(hint)) return "otp";

@@ -174,3 +174,36 @@ async def test_capture_records_select_target_without_selected_value() -> None:
     assert select_events == [{"type": "select_change", "target": "Status"}]
     assert all("Paid invoices" not in str(event) for event in events)
     assert [event["value"] for event in events if event["type"] == "scroll"] == ["down", "up"]
+
+
+@pytest.mark.asyncio
+async def test_capture_records_the_sign_in_button_but_no_field_values() -> None:
+    playwright = pytest.importorskip("playwright.async_api")
+    events: list[dict[str, Any]] = []
+
+    async def record(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    async with playwright.async_playwright() as runtime:
+        browser = await runtime.chromium.launch()
+        context = await browser.new_context()
+        await context.expose_binding("workflowUseRecord", lambda _, event: record(event))
+        await context.add_init_script(CAPTURE_SCRIPT)
+        page = await context.new_page()
+        fixture = (
+            '<form onsubmit="return false"><input aria-label="Email"><input aria-label="Password" type="password">'
+            '<button type="submit">Sign in</button></form>'
+        )
+        await page.goto("data:text/html," + quote(fixture))
+        await page.get_by_label("Email").fill("user-that-must-not-persist")
+        await page.get_by_label("Password").fill("password-that-must-not-persist")
+        await page.get_by_role("button", name="Sign in").click()
+        await asyncio.sleep(0.05)
+        await browser.close()
+
+    assert [(event.get("type"), event.get("value")) for event in events if event.get("type") != "click"] == [
+        ("credential", "username"),
+        ("credential", "password"),
+    ]
+    assert {"type": "click", "target": "Sign in"} in events
+    assert all("must-not-persist" not in str(event) for event in events)
