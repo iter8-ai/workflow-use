@@ -489,7 +489,62 @@ function Demonstrate(props: { recording: Recording | null; steps: SetupStep[]; l
 }
 
 function Review(props: { steps: SetupStep[]; busy: boolean; onUpdateStep(id: string, updates: Partial<SetupStep>): void; onRemoveStep(id: string): void; onBack(): void; onContinue(): void }): JSX.Element {
-  return <div className="setup-panel"><div><h2>Review the draft</h2><p>Make the instructions clear. Form-entry tasks are not supported in this release.</p></div>{props.steps.map((step, index) => <article className="review-step" key={step.id}><div className="review-step-heading"><h3>Step {index + 1}</h3><button type="button" className="text-button" onClick={() => props.onRemoveStep(step.id)} disabled={props.busy}>Remove step</button></div><label>Description<textarea aria-label={`Step ${index + 1} description`} value={step.description} onChange={(event) => props.onUpdateStep(step.id, { description: event.target.value })} /></label><label>Expected outcome<textarea aria-label={`Step ${index + 1} expected outcome`} value={step.expectedOutcome ?? ""} onChange={(event) => props.onUpdateStep(step.id, { expectedOutcome: event.target.value || undefined })} /></label>{step.type === "credential" && <p className="credential-warning">Uses the saved {credentialLabel(step.value)}. You enter it in Reiterate before the test; it is never part of these instructions.</p>}{(step.type === "input" || step.type === "credential") && <label>{step.type === "credential" ? "Sign-in field" : "Is this a sign-in field?"}<select aria-label={`Step ${index + 1} sign-in field`} value={step.type === "credential" ? step.value ?? "" : ""} onChange={(event) => { const kind = event.target.value as CredentialKind | ""; props.onUpdateStep(step.id, kind === "" ? { type: "input", value: null } : { type: "credential", value: kind, description: `Enter the saved ${credentialLabel(kind)} in ${step.target ?? "the sign-in field"}` }); }}><option value="">{step.type === "credential" ? "Not a sign-in field" : "No, remove this step"}</option><option value="username">Username</option><option value="password">Password</option><option value="otp">One-time code</option></select></label>}{(step.type === "input" || step.type === "select_change") && <p className="credential-warning">Remove this form-entry step before continuing, or mark it as a sign-in field.</p>}</article>)}<div className="setup-actions"><button className="button button-quiet" type="button" onClick={props.onBack} disabled={props.busy}>Back to demonstration</button><button className="button button-primary" type="button" onClick={props.onContinue} disabled={props.busy}>Continue to test</button></div></div>;
+  function setSignInKind(step: SetupStep, kind: CredentialKind | ""): void {
+    props.onUpdateStep(step.id, kind === ""
+      ? { type: "input", value: null }
+      : { type: "credential", value: kind, description: `Enter the saved ${credentialLabel(kind)} in ${step.target ?? "the sign-in field"}` });
+  }
+  return (
+    <div className="setup-panel">
+      <div>
+        <h2>Review the draft</h2>
+        <p>Make each instruction clear. Sign-in fields use details you save in Reiterate; other form entry is not supported yet.</p>
+      </div>
+      <div className="review-list">
+        <div className="review-columns" aria-hidden="true">
+          <span>#</span>
+          <span>Instruction</span>
+          <span>Expected outcome <em>optional</em></span>
+        </div>
+        <ol>
+          {props.steps.map((step, index) => {
+            const formEntry = step.type === "input" || step.type === "select_change";
+            const signIn = step.type === "input" || step.type === "credential";
+            return (
+              <li className={formEntry ? "review-step review-step-blocked" : "review-step"} key={step.id}>
+                <span className="review-step-number">{index + 1}</span>
+                <textarea rows={1} aria-label={`Step ${index + 1} description`} value={step.description} onChange={(event) => props.onUpdateStep(step.id, { description: event.target.value })} />
+                <textarea rows={1} aria-label={`Step ${index + 1} expected outcome`} placeholder="Add what should be visible" value={step.expectedOutcome ?? ""} onChange={(event) => props.onUpdateStep(step.id, { expectedOutcome: event.target.value || undefined })} />
+                <button type="button" className="icon-button" aria-label={`Remove step ${index + 1}`} title="Remove step" onClick={() => props.onRemoveStep(step.id)} disabled={props.busy}>
+                  <svg aria-hidden="true" viewBox="0 0 16 16" width="16" height="16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg>
+                </button>
+                {signIn && (
+                  <div className="review-step-note">
+                    <label className="review-step-kind">
+                      {step.type === "credential" ? "Saved sign-in detail" : "Sign-in field?"}
+                      <select aria-label={`Step ${index + 1} sign-in field`} value={step.type === "credential" ? step.value ?? "" : ""} onChange={(event) => setSignInKind(step, event.target.value as CredentialKind | "")}>
+                        <option value="">{step.type === "credential" ? "Not a sign-in field" : "No"}</option>
+                        <option value="username">Username</option>
+                        <option value="password">Password</option>
+                        <option value="otp">One-time code</option>
+                      </select>
+                    </label>
+                    {formEntry && <span>Mark it as a sign-in field or remove this step.</span>}
+                    {step.type === "credential" && <span>Entered in Reiterate before the test; never part of these instructions.</span>}
+                  </div>
+                )}
+                {step.type === "select_change" && <p className="review-step-note">Remove this form-entry step before continuing.</p>}
+              </li>
+            );
+          })}
+        </ol>
+      </div>
+      <div className="setup-actions">
+        <button className="button button-quiet" type="button" onClick={props.onBack} disabled={props.busy}>Back to demonstration</button>
+        <button className="button button-primary" type="button" onClick={props.onContinue} disabled={props.busy}>Continue to test</button>
+      </div>
+    </div>
+  );
 }
 
 function Test(props: { credentials: CredentialKind[]; onChangeCredentials(): void; run: RunState | null; checked: boolean; canFinish: boolean; canSchedule: boolean; scheduleAllowed: boolean; dailySchedule: boolean; cron: string; scheduleValid: boolean; busy: boolean; onRun(): void; onCheck(value: boolean): void; onDaily(value: boolean): void; onCron(value: string): void; onSchedule(): void; onFinish(): void; onBack(): void }): JSX.Element {
