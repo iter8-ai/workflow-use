@@ -16,14 +16,25 @@ CAPTURE_SCRIPT = r"""
       ? Array.from(node.labels || []).map((label) => label.textContent || "").join(" ") : "";
     return semanticText(node.getAttribute("aria-label") || labelled || associated);
   };
-  const secretInput = (node) => {
-    if (!(node instanceof HTMLElement)) return false;
+  // Sign-in fields become credential steps: the kind is recorded, never the value.
+  // Buttons and checkboxes are clicked, not typed into (e.g. "Sign in", "Remember me").
+  const typedField = (node) => (node instanceof HTMLInputElement &&
+      !["button", "submit", "reset", "checkbox", "radio", "image", "file", "hidden"].includes(node.type)) ||
+    node instanceof HTMLTextAreaElement || (node instanceof HTMLElement && node.isContentEditable);
+  const credentialKind = (node) => {
+    if (!typedField(node)) return null;
     const input = node instanceof HTMLInputElement ? node : null;
     const hint = (`${input?.type || ""} ${input?.autocomplete || ""} ${input?.name || ""} ${node.id} ` +
       `${labelText(node)} ${node.getAttribute("placeholder") || ""}`).toLowerCase();
+    // Most specific signal first: the input type, then explicit autocomplete and username hints.
+    const oneTime = /one.?time|otp|passcode|verification.?code|2fa|mfa|authenticator/.test(hint);
+    if (input?.type === "password") return /one-time-code/.test(input.autocomplete) ? "otp" : "password";
+    if (/\b(?:username|email)\b/.test(input?.autocomplete || "") || /user.?name/.test(hint)) return "username";
+    if (oneTime) return "otp";
+    if (/api.?key|\bauth\b|credential|jwt|secret|token/.test(hint)) return "password";
     const passwordInForm = Boolean(node.closest("form")?.querySelector('input[type="password"]'));
-    return input?.type === "password" || passwordInForm ||
-      /api.?key|auth|credential|jwt|login|one.?time|otp|passcode|secret|token|user.?name|verification.?code/.test(hint);
+    if (passwordInForm || /user.?name|login/.test(hint)) return "username";
+    return null;
   };
   const target = (node) => {
     if (!(node instanceof Element)) return "";
@@ -49,19 +60,16 @@ CAPTURE_SCRIPT = r"""
   document.addEventListener("click", (event) => {
     const node = event.target instanceof Element
       ? event.target.closest("button,a,input,select,textarea,[role]") || event.target : null;
-    if (secretInput(node)) {
-      emit({ secret: true });
-      return;
-    }
+    // Focusing a sign-in field is implied by its credential step.
+    if (credentialKind(node)) return;
     emit({ type: "click", target: target(node) });
   }, true);
   document.addEventListener("input", (event) => {
     const node = event.target;
-    const editable = node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement ||
-      (node instanceof HTMLElement && node.isContentEditable);
-    if (!editable) return;
-    if (secretInput(node)) {
-      emit({ secret: true });
+    if (!typedField(node)) return;
+    const kind = credentialKind(node);
+    if (kind) {
+      emit({ type: "credential", value: kind, target: target(node), targetKey: targetKey(node) });
       return;
     }
     emit({ type: "input", target: target(node), targetKey: targetKey(node) });
@@ -73,13 +81,11 @@ CAPTURE_SCRIPT = r"""
   }, true);
   document.addEventListener("keydown", (event) => {
     const node = event.target;
-    if (secretInput(node)) {
-      emit({ secret: true });
-      return;
-    }
-    if (["Enter", "Escape", "Tab", "ArrowDown", "ArrowUp"].includes(event.key)) {
-      emit({ type: "key_press", target: target(node), value: event.key });
-    }
+    if (!["Enter", "Escape", "Tab", "ArrowDown", "ArrowUp"].includes(event.key)) return;
+    // Submitting a sign-in field keeps the key but not the field's label.
+    emit(credentialKind(node)
+      ? { type: "key_press", value: event.key }
+      : { type: "key_press", target: target(node), value: event.key });
   }, true);
   let lastScroll = 0;
   let lastScrollY = window.scrollY;

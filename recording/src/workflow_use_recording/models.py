@@ -10,7 +10,7 @@ class SetupStep(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     id: str
-    type: Literal["navigation", "click", "input", "select_change", "key_press", "scroll", "agent"]
+    type: Literal["navigation", "click", "input", "credential", "select_change", "key_press", "scroll", "agent"]
     description: str
     target: str | None = None
     value: str | None = None

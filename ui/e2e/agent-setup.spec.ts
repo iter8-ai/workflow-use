@@ -16,7 +16,7 @@ test("takes a user through demonstration, review, testing, and result confirmati
   const setup = page.frameLocator("iframe");
 
   await expect(setup.getByRole("heading", { name: "Set up your agent" })).toBeVisible();
-  await expect(setup.getByText("Do not enter logins, passwords, one-time codes, or API keys.")).toBeVisible();
+  await expect(setup.getByText("Reiterate records which field you filled, never what you typed.", { exact: false })).toBeVisible();
   await expect(setup.getByRole("link", { name: "Source code" })).toHaveAttribute("href", "https://github.com/iter8-ai/workflow-use");
   await expect(setup.getByRole("link", { name: "AGPL-3.0 license" })).toHaveAttribute("href", "https://github.com/iter8-ai/workflow-use/blob/main/LICENSE");
   await setup.getByLabel("Agent name").fill("Download monthly statement");
@@ -164,6 +164,47 @@ test("requires a form-entry step to be removed before compiling", async ({ page 
   await expect(setup.getByRole("heading", { name: "Test a fresh run" })).toBeVisible();
 });
 
+test("asks the host for sign-in details before the first test and never handles them itself", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=sign-in`);
+  const setup = page.frameLocator("iframe");
+
+  await completeToTest(setup);
+  await expect(setup.getByText("signs in with the saved username, password")).toBeVisible();
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await expect(setup.getByText("Test completed")).toBeVisible();
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await expect.poll(() => page.evaluate(() => window.__credentialRequests)).toEqual([
+    { kinds: ["username", "password"], replace: false },
+    { kinds: ["username", "password"], replace: false },
+  ]);
+  const saved = await page.evaluate(() => window.__savedAgents);
+  expect(JSON.stringify(saved)).toContain("type exactly $password into Password.");
+  expect(saved.every((agent: { config: { parameters: object } }) => Object.keys(agent.config.parameters).length === 0)).toBe(true);
+});
+
+test("turns a demonstrated form field into a saved sign-in field", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=form-entry`);
+  const setup = page.frameLocator("iframe");
+
+  await describeAndDemonstrate(setup);
+  await setup.getByLabel("Step 2 sign-in field").selectOption("password");
+  await setup.getByRole("button", { name: "Continue to test" }).click();
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await expect(setup.getByText("Test completed")).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.__credentialRequests)).toEqual([{ kinds: ["password"], replace: false }]);
+  expect(JSON.stringify(await page.evaluate(() => window.__savedAgents))).toContain("type exactly $password into Statement month.");
+});
+
+test("does not test a sign-in agent when the host has no credential support", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=sign-in-unsupported`);
+  const setup = page.frameLocator("iframe");
+
+  await describeAndDemonstrate(setup);
+  await setup.getByRole("button", { name: "Continue to test" }).click();
+  await expect(setup.getByRole("alert")).toContainText("cannot save sign-in details yet");
+  await expect.poll(() => page.evaluate(() => window.__savedAgents)).toEqual([]);
+});
+
 test("ignores a response posted by the setup iframe instead of its host", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=delayed-ready`);
   const setup = page.frameLocator("iframe");
@@ -261,10 +302,16 @@ function hostPage(url: string): string {
   window.__scheduleArguments = [];
   window.__closeRequests = [];
   window.__savedAgents = [];
+  window.__credentialRequests = [];
   let recordingActive = false;
+  const signIn = scenario === "sign-in" || scenario === "sign-in-unsupported";
   const steps = [
     { id: "open-reports", type: "click", description: "Open the reports section", target: "Reports", expectedOutcome: "The reports list is visible" },
     ...(scenario === "form-entry" ? [{ id: "choose-month", type: "input", description: "Choose the statement month", target: "Statement month" }] : []),
+    ...(signIn ? [
+      { id: "user", type: "credential", description: "Enter the saved username in Email", target: "Email", value: "username" },
+      { id: "pass", type: "credential", description: "Enter the saved password in Password", target: "Password", value: "password" },
+    ] : []),
     { id: "download", type: "click", description: "Download the statement", target: "Download statement" }
   ];
   addEventListener("message", (event) => {
@@ -275,8 +322,8 @@ function hostPage(url: string): string {
     const fail = (error) => event.source.postMessage({ type: "workflow-use:response", version: 1, id: request.id, error }, event.origin);
     if (request.method === "ready") {
       if (scenario === "delayed-ready") setTimeout(() => send({ schedule: true }), 300);
-      else send({ schedule: true });
-    } else if (request.method === "startRecording") { if (recordingActive) { fail("Finish the current demonstration first."); return; } recordingActive = true; send({ id: "recording-1", status: "recording", liveViewUrl: "https://live.browserbase.com/session", steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
+      else send({ schedule: true, credentials: scenario !== "sign-in-unsupported" });
+    } else if (request.method === "requestCredentials") { window.__credentialRequests.push(request.params); send({ saved: request.params.kinds }); } else if (request.method === "startRecording") { if (recordingActive) { fail("Finish the current demonstration first."); return; } recordingActive = true; send({ id: "recording-1", status: "recording", liveViewUrl: "https://live.browserbase.com/session", steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
     else if (request.method === "getRecording" || request.method === "stopRecording") send({ id: "recording-1", status: "stopped", liveViewUrl: "https://live.browserbase.com/session", steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null });
     else if (request.method === "cancelRecording") { recordingActive = false; send(undefined); }
     else if (request.method === "saveAgent") { window.__savedAgents.push(request.params); send({ id: "agent-1" }); }

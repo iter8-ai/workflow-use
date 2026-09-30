@@ -107,7 +107,9 @@ async def test_capture_never_sends_secret_values() -> None:
         await asyncio.sleep(0.05)
         await browser.close()
 
-    assert any(event.get("secret") is True for event in events)
+    assert {"type": "credential", "value": "password", "target": "Password"}.items() <= next(
+        event for event in events if event.get("type") == "credential"
+    ).items()
     assert all("do-not-store-me" not in str(event) for event in events)
 
 
@@ -127,18 +129,30 @@ async def test_capture_blocks_plain_text_token_and_contenteditable_credentials()
         page = await context.new_page()
         fixture = (
             '<input aria-label="API token"><div contenteditable aria-label="One-time code"></div>'
-            '<form><label for="username">Username</label><input id="username"><input type="password"></form>'
+            '<form><label for="username">Username</label><input id="username"><input aria-label="Secret key">'
+            '<input type="password" aria-label="Passcode">'
+            '<input aria-label="Account" id="auth-username" autocomplete="username"></form>'
         )
         await page.goto("data:text/html," + quote(fixture))
         await page.get_by_label("API token").fill("token-that-must-not-persist")
         await page.get_by_label("One-time code").fill("code-that-must-not-persist")
         await page.get_by_label("Username").fill("username-that-must-not-persist")
+        await page.get_by_label("Secret key").fill("secret-that-must-not-persist")
+        await page.get_by_label("Passcode").fill("passcode-that-must-not-persist")
+        await page.get_by_label("Account").fill("account-that-must-not-persist")
         await asyncio.sleep(0.05)
         await browser.close()
 
-    secrets = [event for event in events if event.get("secret") is True]
-    assert len(secrets) == 3
-    assert all(event == {"secret": True} for event in secrets)
+    kinds = {event["target"]: event["value"] for event in events if event.get("type") == "credential"}
+    assert kinds == {
+        "API token": "password",
+        "One-time code": "otp",
+        "Username": "username",
+        "Secret key": "password",
+        "Passcode": "password",
+        "Account": "username",
+    }
+    assert all(event.get("type") != "input" for event in events)
     assert all("must-not-persist" not in str(event) for event in events)
 
 
@@ -172,3 +186,37 @@ async def test_capture_records_select_target_without_selected_value() -> None:
     assert select_events == [{"type": "select_change", "target": "Status"}]
     assert all("Paid invoices" not in str(event) for event in events)
     assert [event["value"] for event in events if event["type"] == "scroll"] == ["down", "up"]
+
+
+@pytest.mark.asyncio
+async def test_capture_records_the_sign_in_button_but_no_field_values() -> None:
+    playwright = pytest.importorskip("playwright.async_api")
+    events: list[dict[str, Any]] = []
+
+    async def record(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    async with playwright.async_playwright() as runtime:
+        browser = await runtime.chromium.launch()
+        context = await browser.new_context()
+        await context.expose_binding("workflowUseRecord", lambda _, event: record(event))
+        await context.add_init_script(CAPTURE_SCRIPT)
+        page = await context.new_page()
+        fixture = (
+            '<form onsubmit="return false"><input aria-label="Email"><input aria-label="Password" type="password">'
+            '<label><input type="checkbox"> Remember me</label><button type="submit">Sign in</button></form>'
+        )
+        await page.goto("data:text/html," + quote(fixture))
+        await page.get_by_label("Email").fill("user-that-must-not-persist")
+        await page.get_by_label("Password").fill("password-that-must-not-persist")
+        await page.get_by_label("Remember me").check()
+        await page.get_by_role("button", name="Sign in").click()
+        await asyncio.sleep(0.05)
+        await browser.close()
+
+    assert [(event.get("type"), event.get("value")) for event in events if event.get("type") != "click"] == [
+        ("credential", "username"),
+        ("credential", "password"),
+    ]
+    assert {"type": "click", "target": "Sign in"} in events
+    assert all("must-not-persist" not in str(event) for event in events)

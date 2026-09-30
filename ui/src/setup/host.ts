@@ -1,4 +1,4 @@
-import type { SetupDraft, SetupStep } from "./compiler";
+import type { CredentialKind, SetupDraft, SetupStep } from "./compiler";
 
 export type Recording = {
   id: string;
@@ -16,7 +16,9 @@ export type TestRun = {
 };
 
 type RequestMap = {
-  ready: { params: Record<string, never>; result: { schedule: boolean } };
+  ready: { params: Record<string, never>; result: { schedule: boolean; credentials?: boolean } };
+  // The host collects and stores the values; only the saved kinds come back.
+  requestCredentials: { params: { kinds: CredentialKind[]; replace?: boolean }; result: { saved: CredentialKind[] } };
   startRecording: { params: { url: string }; result: Recording };
   getRecording: { params: { id: string }; result: Recording };
   stopRecording: { params: { id: string }; result: Recording };
@@ -38,6 +40,7 @@ type PendingRequest = {
 
 type RequestOptions = {
   onLateResult?: (result: unknown) => void;
+  timeoutMs?: number;
 };
 
 export type HostBridge = {
@@ -109,7 +112,7 @@ export function createHostBridge(): HostBridge | null {
             timedOut.set(id, request.onLateResult);
           }
           request.reject(new Error("The request timed out. Retry to continue."));
-        }, requestTimeoutMs);
+        }, options?.timeoutMs ?? requestTimeoutMs);
         pending.set(id, {
           resolve: (result) => resolve(result as RequestMap[M]["result"]),
           reject,

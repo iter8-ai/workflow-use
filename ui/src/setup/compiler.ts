@@ -1,6 +1,6 @@
 export type SetupStep = {
   id: string;
-  type: "navigation" | "click" | "input" | "select_change" | "key_press" | "scroll" | "agent";
+  type: "navigation" | "click" | "input" | "credential" | "select_change" | "key_press" | "scroll" | "agent";
   description: string;
   target?: string | null;
   value?: string | null;
@@ -44,53 +44,30 @@ type CompiledAgent = {
   parameters: Record<string, never>;
 };
 
-const credentialStem = String.raw`(?:password(?!less)s?|passcodes?|passphrases?|secret(?!santa)s?|(?:api)?token(?!ization|izer)s?|apikeys?|credentials?|auth|authenticat(?:e|es|ed|ing|ion|or|ors)|authoriz(?:e|es|ed|ing|ation|ations)|oauth2?|log(?:ged|ging)?(?:in|into|on)|logins?|logons?|sign(?:ed|ing)?(?:in|into|on)|signins?|signons?|onetime(?:passwords?|passcodes?|codes?)|(?:onetime)?(?:otp|totp)|mfa|2fa|verificationcodes?|recoverycodes?|backupcodes?|cvv|cvc|socialsecurity(?:number)?|ssn|creditcards?|cardnumbers?|username(?!generator)s?)`;
-const directDigitCredentialPattern = new RegExp(String.raw`\b[\p{L}\p{N}]*${credentialStem}\p{N}+`, "iu");
-const strongCredentialPattern = /(?:password(?!less)|passcode|passphrase|apikey|credential|username(?!generator)|otp|totp|cvv|cvc)/iu;
-const ownedCredentialPattern = new RegExp(String.raw`^(?:my|your|our|account|admin|root|ops|service|user|team|v)[\p{L}\p{N}]*?(${credentialStem})([\p{L}\p{N}]*)$`, "iu");
-const credentialIntentPatterns = [
-  directDigitCredentialPattern,
-  /\b(?:passwords?|pass words?)(?!\p{L})/iu,
-  /\bpasscodes?(?!\p{L})/iu,
-  /\bpassphrases?(?!\p{L})/iu,
-  /\bsecrets?(?!\p{L})/iu,
-  /\b(?:api )?tokens?(?!\p{L})/iu,
-  /\bapi ?keys?(?!\p{L})/iu,
-  /\bcredentials?(?!\p{L})/iu,
-  /\bauth(?!\p{L})/iu,
-  /\bauthenticat(?:e|es|ed|ing|ion|or|ors)(?!\p{L})/iu,
-  /\bauthoriz(?:e|es|ed|ing|ation|ations)(?!\p{L})/iu,
-  /\boauth(?:2)?(?!\p{L})/iu,
-  /\b(?:log(?:ged|ging)?\s*(?:in|into|on)|logins?|logons?)(?!\p{L})/iu,
-  /\b(?:sign(?:ed|ing)?\s*(?:in|into|on)|signins?|signons?)(?!\p{L})/iu,
-  /\b(?:one ?time) ?(?:passwords?|passcodes?|codes?)(?!\p{L})/iu,
-  /\b(?:one time )?(?:otp|totp)(?!\p{L})/iu,
-  /\b(?:mfa|m f a|2fa|2 fa|2 f a)(?!\p{L})/iu,
-  /\bverification codes?(?!\p{L})/iu,
-  /\brecovery codes?(?!\p{L})/iu,
-  /\bbackup codes?(?!\p{L})/iu,
-  /\b(?:cvv|cvc)(?!\p{L})/iu,
-  /\bsocial security(?: number)?(?!\p{L})/iu,
-  /\bssn(?!\p{L})/iu,
-  /\bcredit cards?(?!\p{L})/iu,
-  /\bcard numbers?(?!\p{L})/iu,
-  /\buser ?names?(?!\p{L})/iu,
-];
-const pinIntentPattern = /\b(?:enter|provide|type|use|submit|verify) (?:(?:a|the|your) )?pin\b|\bpin (?:code|number|verification)\b|\bpersonal identification number\b|\b(?:my )?pin\s*(?:is|:)\s*\S+\b/i;
-const possessivePinPattern = /\b(?:account|my|your|our) pin\b/i;
-const pinActionIntentPattern = /\b(?:reset|set|change|update|copy|send|show|reveal|choose|insert|paste(?: in)?|fill(?: in)?) (?:(?:a|the|this|that|my|your|our) )?pin\b/i;
-const pinDirectAssignmentPattern = /\bpin\s*[:=]\s*\S+/iu;
-const pinAssignmentPattern = /\b(?:reset|set|change|update)\s+(?:your\s+)?pin\s+(?:to|as)\s+\S+|\bpin\s+(?:to|as)\s+(?:\p{N}{4,12}|(?=[\p{L}\p{N}]{4,12}\b)(?=[\p{L}\p{N}]*\p{N})[\p{L}\p{N}]{4,12})\b/iu;
-const pinCodePattern = /\b[Pp][Ii][Nn]\s*(?:\p{N}{4,12}|(?=[A-Z0-9]{4,12}(?![A-Z0-9]))(?=[A-Z0-9]*\d)[A-Z0-9]+)\s*$/u;
-const pinLeadingCodePattern = /(?:^|\s)pin\s+(?:\p{N}{4,12}|(?=[\p{L}\p{N}]{4,12}(?:\s|$))(?=[\p{L}\p{N}]*\p{N})[\p{L}\p{N}]{4,12})(?=\s|$)/iu;
-const safePinClickActionPattern = /^(?:(?:click|please|then)\s+)?pin\s+(?:\p{L}{2,}\p{N}{1,4}(?:\s+(?:to|onto|on)\s+(?:the\s+)?dashboard)?|(?:19|20)\p{N}{2}\s+\p{L}+(?:\s+\p{L}+)*\s+(?:to|onto|on)\s+(?:the\s+)?dashboard)$/iu;
-const safePinClickLabelPattern = /^(?:open|click|select|choose)\s+pin\s+(?:report|\p{L}{2,}\s?\p{N}{1,5})$/iu;
-const safeMapPinActionPattern = /\b(?:set|choose|place|drop)\b.*\bpin\b/iu;
-const pinDisclosureOrEntryPattern = /\b(?:enter|provide|type|use|submit|verify|copy|send|show|reveal|insert|paste|fill)\s+(?:(?:a|the|this|that|my|your|our)\s+)?pin\b|\bpin\b.*\b(?:enter|provide|type|use|submit|verify|copy|send|show|reveal|insert|paste|fill)\s+(?:it|this|that|the code)\b/iu;
-const pinPostActionObjectPattern = /\b(?:enter|provide|type|use|submit|verify|copy|send|show|reveal|insert|paste|fill)\s+([\p{L}\p{N}]{4,12})\b/giu;
-const pinAssociatedCodePattern = /^(?:[A-Z]{4,12}|(?=[\p{L}\p{N}]*\p{N})[\p{L}\p{N}]{4,12})$/u;
-const safePinContentPathPattern = /^pin\s+report\p{N}{1,4}$/iu;
-const maximumPathDecodes = 4;
+/** Sign-in values the host stores encrypted as agent parameters; setup never sees them. */
+export const credentialKinds = ["username", "password", "otp"] as const;
+export type CredentialKind = (typeof credentialKinds)[number];
+
+export function requiredCredentials(steps: SetupStep[]): CredentialKind[] {
+  return credentialKinds.filter((kind) => steps.some((step) => step.type === "credential" && step.value === kind));
+}
+
+// A credential word followed by an assigned value, or directly by a token containing a
+// digit or symbol (e.g. "password correct-horse-9", "code 482913"). Sign-in wording
+// ("Enter the password and log in") and $placeholders stay allowed.
+const credentialDisclosurePattern = new RegExp(
+  [
+    String.raw`\b(?:user ?name|password|passcode|passphrase|pin|otp|token|api[ -]?key|secret`,
+    String.raw`|(?:verification|security|access|auth(?:entication)?|one[- ]time|2fa|mfa|sms) code)s?\b\s*`,
+    // An assigned value ("password: x", "code sent to me: 482913", "username is jane") ...
+    String.raw`(?:[^.\n:=]{0,40}[:=]\s*\S{3,}|(?:\bis\b|\bwas\b)\s*\S{3,}`,
+    // ... or a value containing a digit or symbol, excluding $placeholders.
+    String.raw`|(?:(?:of|with)\s+)?(?!\$)(?=[^\s,;)]*?[\d@#%&*+_/\\-])[^\s,;)]{4,})`,
+  ].join(""),
+  "iu",
+);
+// A one-time code a few words after its label ("code sent to me 482913").
+const codeNearbyPattern = /\b(?:otp|passcode|(?:verification|security|access|auth(?:entication)?|one[- ]time|2fa|mfa|sms) code)s?\b[^.\n]{0,40}?\b\d{4,8}\b/iu;
 const rawReplayPattern = /\b(?:css|xpath|selector)\b|#[a-z][\w-]*(?:\s*[>+~]|\[)|\[[^\]]+\]|(?:^|\s)(?:x|y)\s*[:=]\s*\d+|^\s*\d+(?:px)?\s*,\s*\d+(?:px)?\s*$/i;
 const maximumNameLength = 150;
 const maximumUrlLength = 2_048;
@@ -123,9 +100,7 @@ function validateDraft(draft: SetupDraft): void {
   requireText(draft.name, "Agent name");
   requireMaximumLength(draft.name, maximumNameLength, "Agent name");
   requireText(draft.goal, "Agent goal");
-  if (containsSensitiveText(draft.name) || containsSensitiveText(draft.goal)) {
-    throw credentialError();
-  }
+  rejectCredentialDisclosure(draft.name, draft.goal);
   validateUrl(draft.url, "Setup URL");
 
   if (draft.steps.length === 0) {
@@ -142,12 +117,7 @@ function validateDraft(draft: SetupDraft): void {
   for (const step of draft.steps) {
     requireText(step.id, "Step id");
     requireText(step.description, `Description for step ${step.id}`);
-    if (
-      (containsSensitiveText(step.description, isSafePinClickText(step, step.description)) && !isRecorderHostDescription(step))
-      || containsSensitiveText(optionalStepText(step.expectedOutcome) ?? "")
-    ) {
-      throw credentialError();
-    }
+    rejectCredentialDisclosure(step.description, step.expectedOutcome, step.target, step.value);
     if (stepIds.has(step.id)) {
       throw new Error(`Step id ${step.id} is duplicated.`);
     }
@@ -172,14 +142,11 @@ function validateStep(step: SetupStep): void {
   } else if (url !== undefined) {
     validateUrl(url, `URL for step ${step.id}`);
   }
-  if (target !== undefined && containsSensitiveText(target, isSafePinClickText(step, target))) {
-    throw credentialError();
+  if (step.type === "credential" && !credentialKinds.includes(value as CredentialKind)) {
+    throw new Error(`Step ${step.id} must be a saved username, password, or one-time code.`);
   }
   if (value !== undefined && isMaskedValue(value)) {
-    throw credentialError();
-  }
-  if (value !== undefined && containsSensitiveText(value)) {
-    throw credentialError();
+    throw new Error(`Step ${step.id} contains a hidden value. Remove it and demonstrate the step again.`);
   }
   if (looksLikeRawReplay(target) || looksLikeRawReplay(step.description)) {
     throw new Error(`Step ${step.id} must use a semantic target, not a selector or screen coordinates.`);
@@ -214,6 +181,11 @@ function formatInstruction(
   if (step.type === "click") {
     return target === undefined ? `Complete this action: ${description}.` : `Click ${target} to ${intent}.`;
   }
+  if (step.type === "credential") {
+    // The engine replaces the placeholder with the stored value while typing.
+    const field = target ?? "the sign-in field";
+    return `${description}: type exactly $${step.value} into ${field}. It is replaced with the saved ${step.value} while typing.`;
+  }
   if (step.type === "input" || step.type === "select_change") {
     return target === undefined ? `Enter ${value} to ${intent}.` : `Set ${target} to ${value} to ${intent}.`;
   }
@@ -241,12 +213,21 @@ function validateUrl(value: string, label: string): void {
   if (url.search !== "" || url.hash !== "") {
     throw new Error(`${label} must not include query parameters or a fragment.`);
   }
-  if (
-    containsSensitivePath(rawPathname(value))
-    || containsSensitivePath(url.pathname)
-  ) {
-    throw credentialError();
+  // Check the path as written (new URL() drops "../" segments) and after each decoding pass.
+  // Browsers read "\" as "/" in http(s) URLs, so normalize it before splitting off the host.
+  let path = value.replace(/\\/g, "/").replace(/^[a-z]+:\/\/[^/]*/i, "").split(/[?#]/, 1)[0] ?? "";
+  for (let pass = 0; pass < 4; pass += 1) {
+    rejectCredentialDisclosure(path.replace(/[\\/]/g, " "));
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(path);
+    } catch {
+      throw new Error(`${label} has an invalid path.`);
+    }
+    if (decoded === path) return;
+    path = decoded;
   }
+  throw new Error(`${label} has an invalid path.`);
 }
 
 function requireText(value: string, label: string): void {
@@ -261,109 +242,10 @@ function requireMaximumLength(value: string, maximum: number, label: string): vo
   }
 }
 
-function containsSensitiveText(value: string, allowPinCode = false): boolean {
-  const normalized = normalizeIntentText(value);
-  const normalizedAssignment = normalizePinAssignmentText(value);
-  const isMapPlacement = safeMapPinActionPattern.test(normalized)
-    && /\bmap\b/i.test(normalized)
-    && !pinDisclosureOrEntryPattern.test(normalized)
-    && !Array.from(normalized.slice(normalized.search(/\bpin\b/i)).matchAll(pinPostActionObjectPattern))
-      .some((match) => pinAssociatedCodePattern.test(match[1]))
-    && normalized.match(/\bpin\b/gi)?.length === 1;
-  return containsCompactCredential(value)
-    || credentialIntentPatterns.some((pattern) => pattern.test(normalized))
-    || pinIntentPattern.test(normalized)
-    || (!isMapPlacement && (possessivePinPattern.test(normalized)
-      || (!allowPinCode && pinActionIntentPattern.test(normalized))))
-    || pinDirectAssignmentPattern.test(normalizedAssignment)
-    || pinAssignmentPattern.test(normalized)
-    || (!allowPinCode && (pinLeadingCodePattern.test(normalized) || pinCodePattern.test(normalized)));
-}
-
-function containsCompactCredential(value: string): boolean {
-  const tokens = value.normalize("NFKD").replace(/\p{M}|\p{Cf}/gu, "").match(/[\p{L}\p{N}]+/gu) ?? [];
-  return tokens.some((token) => {
-    if (!/\p{N}/u.test(token)) return false;
-    if (strongCredentialPattern.test(token)) return true;
-    const owned = ownedCredentialPattern.exec(token);
-    if (!owned) return false;
-    const [, stem, suffix] = owned;
-    const continuation = suffix.toLowerCase();
-    if (stem.toLowerCase() === "auth") return !/^or(?!iz)/u.test(continuation);
-    if (stem.toLowerCase() === "token") return !/^(?:omics|ization|izer)/u.test(continuation);
-    if (/^secrets?$/iu.test(stem)) return !/^(?:ary|aries|ion|ions|santa)/u.test(continuation);
-    return true;
-  });
-}
-
-function normalizePinAssignmentText(value: string): string {
-  return value
-    .normalize("NFKD")
-    .replace(/\p{M}|\p{Cf}/gu, "")
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
-    .replace(/[^\p{L}\p{N}:=]+/gu, " ")
-    .trim();
-}
-
-function isSafePinClickText(step: SetupStep, value: string): boolean {
-  if (step.type !== "click") {
-    return false;
+function rejectCredentialDisclosure(...texts: Array<string | null | undefined>): void {
+  if (texts.some((text) => text !== null && text !== undefined && (credentialDisclosurePattern.test(text) || codeNearbyPattern.test(text)))) {
+    throw new Error("Remove sign-in details from the instructions. Reiterate asks for them separately and stores them encrypted.");
   }
-  const normalized = normalizeIntentText(value);
-  return safePinClickActionPattern.test(normalized) || safePinClickLabelPattern.test(normalized);
-}
-
-function containsSensitivePath(value: string): boolean {
-  const decoded = decodedPathname(value);
-  return containsSensitiveText(decoded, safePinContentPathPattern.test(normalizeIntentText(decoded)));
-}
-
-function isRecorderHostDescription(step: SetupStep): boolean {
-  if (step.type !== "navigation" || step.url === null || step.url === undefined) {
-    return false;
-  }
-  try {
-    return step.description.toLowerCase() === `open ${new URL(step.url).host}`.toLowerCase();
-  } catch {
-    return false;
-  }
-}
-
-function normalizeIntentText(value: string): string {
-  return value
-    .normalize("NFKD")
-    .replace(/\p{M}|\p{Cf}/gu, "")
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
-    .trim();
-}
-
-function decodedPathname(value: string): string {
-  let decoded = value;
-  for (let attempt = 0; attempt < maximumPathDecodes; attempt += 1) {
-    let next: string;
-    try {
-      next = decodeURIComponent(decoded);
-    } catch {
-      throw credentialError();
-    }
-    if (next === decoded || !/%[0-9a-f]{2}/i.test(next)) {
-      return next;
-    }
-    decoded = next;
-  }
-  throw credentialError();
-}
-
-function rawPathname(value: string): string {
-  const schemeEnd = value.indexOf("://");
-  const remainder = value.slice(schemeEnd + 3);
-  const relativePathStart = remainder.search(/[\\/]/);
-  return relativePathStart === -1
-    ? ""
-    : remainder.slice(relativePathStart).split(/[?#]/, 1)[0]!.replace(/\\/g, "/");
 }
 
 function isMaskedValue(value: string): boolean {
@@ -390,6 +272,3 @@ function continuation(description: string, literalValue: string | undefined): st
   return escaped.length === 0 ? "complete the demonstrated task" : escaped[0]!.toLowerCase() + escaped.slice(1);
 }
 
-function credentialError(): Error {
-  return new Error("Setup cannot capture credentials. Credentials must be managed by the host.");
-}

@@ -145,26 +145,25 @@ def test_authentication_and_owner_boundaries() -> None:
 
 
 @pytest.mark.asyncio
-async def test_secret_input_blocks_recording_and_omits_value() -> None:
+async def test_credential_entry_records_its_kind_and_continues_without_the_value() -> None:
     provider = FakeProvider()
     with client(provider) as http:
         recording = create_recording(http)
-        await provider.sessions[0].emit(
-            {
-                "type": "input",
-                "target": "Password",
-                "value": "do-not-store-me",
-                "secret": True,
-            }
-        )
-        await provider.sessions[0].emit({"type": "click", "target": "Must not be recorded"})
+        for _ in range(2):
+            await provider.sessions[0].emit(
+                {"type": "credential", "target": "Password", "targetKey": "p", "value": "password"}
+            )
+        await provider.sessions[0].emit({"type": "credential", "target": "Token", "value": "do-not-store-me"})
+        await provider.sessions[0].emit({"type": "click", "target": "Download report"})
         response = http.get(f"/recordings/{recording['id']}", headers=headers())
 
     body = response.json()
-    assert body["blockedReason"] == "Credentials and one-time codes cannot be taught yet."
+    assert body["blockedReason"] is None
+    assert [(step["type"], step.get("value")) for step in body["steps"][1:]] == [
+        ("credential", "password"),
+        ("click", None),
+    ]
     assert "do-not-store-me" not in response.text
-    assert all(step["type"] != "input" for step in body["steps"])
-    assert all(step.get("target") != "Must not be recorded" for step in body["steps"])
 
 
 @pytest.mark.asyncio
@@ -279,16 +278,15 @@ def test_new_recording_evicts_stopped_capture_when_memory_is_full() -> None:
 
 
 @pytest.mark.asyncio
-async def test_plain_text_credential_event_blocks_without_persisting_contents() -> None:
+async def test_plain_text_input_event_never_persists_its_value() -> None:
     provider = FakeProvider()
     with client(provider) as http:
         recording = create_recording(http)
         await provider.sessions[0].emit(
-            {"type": "input", "target": "API token", "value": "credential-that-must-not-persist", "secret": True}
+            {"type": "input", "target": "API token", "value": "credential-that-must-not-persist"}
         )
         response = http.get(f"/recordings/{recording['id']}", headers=headers())
 
-    assert response.json()["blockedReason"]
     assert "credential-that-must-not-persist" not in response.text
 
 

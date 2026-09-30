@@ -38,7 +38,7 @@ The image serves `ui/dist/` on port 8080. Its Content Security Policy permits em
 
 For an optional deployment smoke check, open `/setup-check.html` and download its synthetic CSV. This page is unlinked and is not part of the customer setup wizard.
 
-Start with a website address without query parameters or fragments; the compiler rejects either so they cannot enter a saved configuration or agent prompt. Navigate to the required page inside the demonstration browser. Recordings are ephemeral and expire after 15 minutes. Form-entry tasks, login demonstrations, and credential-required tasks are not supported in this release.
+Start with a website address without query parameters or fragments; the compiler rejects either so they cannot enter a saved configuration or agent prompt. Navigate to the required page inside the demonstration browser. Recordings are ephemeral and expire after 15 minutes. Form-entry tasks are not supported in this release. Sign-in is: each demonstrated sign-in field compiles to an exact `$username`, `$password`, or `$otp` placeholder. The host collects the values in its own dialog, stores them as encrypted agent parameters, and tells the setup page only which kinds are saved. The web agent engine substitutes them while typing, so the model and the setup page never receive them.
 
 Schedules repeat the tested workflow. Relative dates such as “previous month” are not resolved automatically. A successful test still requires the user to inspect the result before scheduling.
 
