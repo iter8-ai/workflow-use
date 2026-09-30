@@ -5,7 +5,7 @@ import os
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
-from .capture import CAPTURE_SCRIPT
+from .capture import CAPTURE_SCRIPT, install_sign_in_capture, page_event
 from .security import is_public_http_url, resolves_to_public_host, safe_public_url
 
 EventSink = Callable[[dict[str, Any]], Awaitable[None]]
@@ -70,11 +70,12 @@ async def _configure_context(context: Any, on_event: EventSink) -> None:
         await route.continue_()
 
     await context.route("**/*", guarded_route)
-    await context.expose_binding("workflowUseRecord", lambda _source, event: on_event(event))
+    # Page scripts can call this binding too, so nothing arriving through it may carry a sign-in value.
+    await context.expose_binding("workflowUseRecord", lambda _source, event: on_event(page_event(event)))
     await context.add_init_script(CAPTURE_SCRIPT)
 
 
-def _install_page_events(session: PlaywrightRecordingSession, page: Any, on_event: EventSink) -> None:
+async def _install_page_events(session: PlaywrightRecordingSession, page: Any, on_event: EventSink) -> None:
     def on_navigation(frame: Any) -> None:
         if not is_public_http_url(frame.url):
             return
@@ -84,6 +85,7 @@ def _install_page_events(session: PlaywrightRecordingSession, page: Any, on_even
         session.track(on_event(event))
 
     page.on("framenavigated", on_navigation)
+    await install_sign_in_capture(page.context, page, lambda event: session.track(on_event(event)))
 
 
 class BrowserbaseProvider:
@@ -142,14 +144,14 @@ class BrowserbaseProvider:
             )
             context = contexts[0]
             await _configure_context(context, on_event)
+            page = context.pages[0] if context.pages else await context.new_page()
             for existing_page in context.pages:
-                _install_page_events(session, existing_page, on_event)
+                await _install_page_events(session, existing_page, on_event)
 
-            def on_new_page(page: Any) -> None:
-                _install_page_events(session, page, on_event)
+            def on_new_page(new_page: Any) -> None:
+                session.track(_install_page_events(session, new_page, on_event))
 
             context.on("page", on_new_page)
-            page = context.pages[0] if context.pages else await context.new_page()
             await page.goto(start_url, wait_until="domcontentloaded", timeout=self.timeout_seconds * 1000)
             return session
         except BaseException:
@@ -177,8 +179,8 @@ class LocalPlaywrightProvider:
         session = PlaywrightRecordingSession(browser=browser, runtime=runtime, live_view_url=None)
         await _configure_context(context, on_event)
         page = await context.new_page()
-        _install_page_events(session, page, on_event)
-        context.on("page", lambda new_page: _install_page_events(session, new_page, on_event))
+        await _install_page_events(session, page, on_event)
+        context.on("page", lambda new_page: session.track(_install_page_events(session, new_page, on_event)))
         await page.goto(start_url, wait_until="domcontentloaded")
         self.last_session = session
         return session

@@ -16,7 +16,7 @@ test("takes a user through demonstration, review, testing, and result confirmati
   const setup = page.frameLocator("iframe");
 
   await expect(setup.getByRole("heading", { name: "Set up your agent" })).toBeVisible();
-  await expect(setup.getByText("Reiterate records which field you filled, never what you typed.", { exact: false })).toBeVisible();
+  await expect(setup.getByText("Reiterate saves the username and password you type there, encrypted", { exact: false })).toBeVisible();
   await expect(setup.getByRole("link", { name: "Source code" })).toHaveAttribute("href", "https://github.com/iter8-ai/workflow-use");
   await expect(setup.getByRole("link", { name: "AGPL-3.0 license" })).toHaveAttribute("href", "https://github.com/iter8-ai/workflow-use/blob/main/LICENSE");
   await setup.getByLabel("Agent name").fill("Download monthly statement");
@@ -110,6 +110,33 @@ test("starts another demonstration after a stopped recording", async ({ page }) 
   await setup.getByRole("button", { name: "Continue to demonstration" }).click();
   await expect(setup.getByRole("heading", { name: "Demonstrate the task" })).toBeVisible();
   await expect(setup.getByRole("alert")).toHaveCount(0);
+});
+
+test("gives the demonstration the full width and scrolls long step lists", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`${baseUrl}/host?scenario=many-steps`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByLabel("Agent name").fill("Reports");
+  await setup.getByLabel("Website address").fill("https://portal.example.test/reports");
+  await setup.getByLabel("What should the agent do?").fill("Get the report.");
+  await setup.getByRole("button", { name: "Continue to demonstration" }).click();
+  await setup.getByRole("button", { name: "Finish demonstration" }).click();
+
+  const browser = setup.getByTitle("Virtual browser");
+  await expect(browser).toHaveAttribute("allow", "clipboard-read; clipboard-write");
+  const grid = await setup.locator(".demonstration-grid").boundingBox();
+  expect(grid?.width ?? 0).toBeGreaterThan(1440 - 60);
+  const browserBox = await browser.boundingBox();
+  expect(browserBox?.width ?? 0).toBeGreaterThan(1000);
+  expect(browserBox?.height ?? 0).toBeGreaterThan(560);
+
+  const list = setup.getByLabel("Recorded steps list");
+  const sizes = await list.evaluate((node) => ({ scroll: node.scrollHeight, client: node.clientHeight }));
+  expect(sizes.scroll).toBeGreaterThan(sizes.client);
+  await list.evaluate((node) => { node.scrollTop = node.scrollHeight; });
+  await expect(setup.getByText("Recorded action 60")).toBeInViewport();
+  await expect(setup.getByRole("button", { name: "Continue to review" })).toBeInViewport();
+  await page.screenshot({ path: "e2e-artifacts/demonstrate-many-steps.png" });
 });
 
 test("shows the running test's browser without letting the user interact with it", async ({ page }) => {
@@ -235,7 +262,7 @@ test("asks the host for sign-in details before the first test and never handles 
   const setup = page.frameLocator("iframe");
 
   await completeToTest(setup);
-  await expect(setup.getByText("signs in with the saved username, password")).toBeVisible();
+  await expect(setup.getByText("signs in with the username, password from your demonstration")).toBeVisible();
   await setup.getByRole("button", { name: "Run test" }).click();
   await expect(setup.getByText("Test completed")).toBeVisible();
   await setup.getByRole("button", { name: "Run test" }).click();
@@ -392,6 +419,7 @@ function hostPage(url: string): string {
       { id: "choose-month", type: "input", description: "Fill in Statement month", target: "Statement month", value: "September 2026" },
       { id: "choose-format", type: "select_change", description: "Choose PDF in Format", target: "Format", value: "PDF" },
     ] : []),
+    ...(scenario === "many-steps" ? Array.from({ length: 60 }, (_, index) => ({ id: "scroll-" + index, type: "click", description: "Recorded action " + (index + 1), target: "Item " + (index + 1) })) : []),
     ...(scenario === "ten-steps" ? Array.from({ length: 8 }, (_, index) => ({ id: "filter-" + index, type: "click", description: "Apply report filter " + (index + 1), target: "Filter " + (index + 1), expectedOutcome: index % 2 ? "The filtered list is visible" : null })) : []),
     ...(signIn ? [
       { id: "user", type: "credential", description: "Enter the saved username in Email", target: "Email", value: "username" },

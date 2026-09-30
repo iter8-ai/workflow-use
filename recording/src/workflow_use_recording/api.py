@@ -10,7 +10,7 @@ from typing import Annotated, AsyncIterator
 from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
 from fastapi.responses import JSONResponse
 
-from .models import CreateRecordingRequest, RecordingResponse
+from .models import CreateRecordingRequest, RecordingResponse, StoppedRecordingResponse
 from .provider import BrowserbaseProvider, BrowserProvider
 from .service import InvalidRecordingUrl, RecordingOwner, RecordingService
 
@@ -101,7 +101,7 @@ def create_app(provider: BrowserProvider, config: RecordingConfig) -> FastAPI:
             )
         return _response(service.response(recording))
 
-    @app.post("/recordings/{recording_id}/stop", response_model=RecordingResponse)
+    @app.post("/recordings/{recording_id}/stop", response_model=StoppedRecordingResponse)
     async def stop_recording(recording_id: str, recording_owner: RecordingOwner = Depends(owner)) -> JSONResponse:
         try:
             recording = await service.stop(recording_id, recording_owner)
@@ -111,7 +111,11 @@ def create_app(provider: BrowserProvider, config: RecordingConfig) -> FastAPI:
             ) from None
         if recording is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording not found.")
-        return _response(service.response(recording))
+        # Only the stop response carries captured sign-in values, once; the host stores them encrypted.
+        credentials = service.take_credentials(recording)
+        response = _response(service.response(recording), credentials=credentials or None)
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.delete("/recordings/{recording_id}", status_code=204)
     async def delete_recording(recording_id: str, recording_owner: RecordingOwner = Depends(owner)) -> Response:
@@ -128,9 +132,16 @@ def create_app(provider: BrowserProvider, config: RecordingConfig) -> FastAPI:
     return app
 
 
-def _response(recording: RecordingResponse, *, status_code: int = status.HTTP_200_OK) -> JSONResponse:
+def _response(
+    recording: RecordingResponse,
+    *,
+    status_code: int = status.HTTP_200_OK,
+    credentials: dict[str, str] | None = None,
+) -> JSONResponse:
     body = recording.model_dump(mode="json", by_alias=True)
     body["steps"] = [step.model_dump(mode="json", by_alias=True, exclude_none=True) for step in recording.steps]
+    if credentials:
+        body["credentials"] = credentials
     return JSONResponse(status_code=status_code, content=body)
 
 
