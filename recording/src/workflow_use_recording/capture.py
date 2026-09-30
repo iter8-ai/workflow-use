@@ -90,7 +90,8 @@ CAPTURE_SCRIPT = r"""
     if (!(node instanceof HTMLSelectElement)) return;
     // A multi-select keeps each label as its own JSON array item so commas inside labels stay unambiguous.
     const labels = Array.from(node.selectedOptions).map((option) => semanticText(option.label || option.text, 240));
-    emit({ type: "select_change", target: target(node), value: node.multiple ? JSON.stringify(labels) : labels[0] || "" });
+    const value = node.multiple ? JSON.stringify(labels) : labels[0] || "";
+    emit({ type: "select_change", target: target(node), value });
   }, true);
   document.addEventListener("keydown", (event) => {
     const node = event.target;
