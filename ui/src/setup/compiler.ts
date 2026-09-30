@@ -212,7 +212,8 @@ function validateUrl(value: string, label: string): void {
     throw new Error(`${label} must not include query parameters or a fragment.`);
   }
   // Check the path as written (new URL() drops "../" segments) and after each decoding pass.
-  let path = value.replace(/^[a-z]+:\/\/[^/]*/i, "").split(/[?#]/, 1)[0] ?? "";
+  // Browsers read "\" as "/" in http(s) URLs, so normalize it before splitting off the host.
+  let path = value.replace(/\\/g, "/").replace(/^[a-z]+:\/\/[^/]*/i, "").split(/[?#]/, 1)[0] ?? "";
   for (let pass = 0; pass < 4; pass += 1) {
     rejectCredentialDisclosure(path.replace(/[\\/]/g, " "));
     let decoded: string;

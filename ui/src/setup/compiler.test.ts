@@ -212,6 +212,7 @@ test("rejects credential values in URL paths but allows sign-in paths", () => {
     "https://portal.example.test/api-key/sk_live%5Fabc",
     "https://portal.example.test/token/abc123/../reports",
     "https://portal.example.test/%2574oken/abc123",
+    "https://portal.example.test\\token\\abc123\\..\\reports",
   ]) {
     const draft = baseDraft();
     draft.url = url;
