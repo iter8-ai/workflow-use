@@ -59,8 +59,8 @@ const credentialDisclosurePattern = new RegExp(
   [
     String.raw`\b(?:user ?name|password|passcode|passphrase|pin|otp|token|api[ -]?key|secret`,
     String.raw`|(?:verification|security|access|auth(?:entication)?|one[- ]time|2fa|mfa|sms) code)s?\b\s*`,
-    // An assigned value ("password: x", "username is jane") ...
-    String.raw`(?:(?:[:=]|\bis\b|\bwas\b)\s*\S{3,}`,
+    // An assigned value ("password: x", "code sent to me: 482913", "username is jane") ...
+    String.raw`(?:[^.\n:=]{0,40}[:=]\s*\S{3,}|(?:\bis\b|\bwas\b)\s*\S{3,}`,
     // ... or a value containing a digit or symbol, excluding $placeholders.
     String.raw`|(?:(?:of|with)\s+)?(?!\$)(?=[^\s,;)]*?[\d@#%&*+_/\\-])[^\s,;)]{4,})`,
   ].join(""),
@@ -211,13 +211,20 @@ function validateUrl(value: string, label: string): void {
   if (url.search !== "" || url.hash !== "") {
     throw new Error(`${label} must not include query parameters or a fragment.`);
   }
-  let path = url.pathname;
-  try {
-    path = decodeURIComponent(path);
-  } catch {
-    throw new Error(`${label} has an invalid path.`);
+  // Check the path as written (new URL() drops "../" segments) and after each decoding pass.
+  let path = value.replace(/^[a-z]+:\/\/[^/]*/i, "").split(/[?#]/, 1)[0] ?? "";
+  for (let pass = 0; pass < 4; pass += 1) {
+    rejectCredentialDisclosure(path.replace(/[\\/]/g, " "));
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(path);
+    } catch {
+      throw new Error(`${label} has an invalid path.`);
+    }
+    if (decoded === path) return;
+    path = decoded;
   }
-  rejectCredentialDisclosure(path.replace(/\//g, " "));
+  throw new Error(`${label} has an invalid path.`);
 }
 
 function requireText(value: string, label: string): void {

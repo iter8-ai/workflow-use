@@ -188,6 +188,7 @@ test("rejects literal sign-in values in instructions but allows sign-in wording"
     "one-time code 482913",
     "Log in with password correct-horse-battery-staple",
     "Enter verification code 482913",
+    "Enter verification code sent to me: 482913",
   ]) {
     const draft = baseDraft();
     draft.goal = goal;
@@ -206,7 +207,12 @@ test("rejects literal sign-in values in instructions but allows sign-in wording"
 });
 
 test("rejects credential values in URL paths but allows sign-in paths", () => {
-  for (const url of ["https://portal.example.test/token/abc123", "https://portal.example.test/api-key/sk_live%5Fabc"]) {
+  for (const url of [
+    "https://portal.example.test/token/abc123",
+    "https://portal.example.test/api-key/sk_live%5Fabc",
+    "https://portal.example.test/token/abc123/../reports",
+    "https://portal.example.test/%2574oken/abc123",
+  ]) {
     const draft = baseDraft();
     draft.url = url;
     assert.throws(() => compileAgent(draft), /Remove sign-in details/, url);
