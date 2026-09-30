@@ -111,6 +111,26 @@ test("starts another demonstration after a stopped recording", async ({ page }) 
   await expect(setup.getByRole("alert")).toHaveCount(0);
 });
 
+test("shows the running test's browser without letting the user interact with it", async ({ page }) => {
+  await page.route("https://www.browserbase.com/**", (route) => route.fulfill({ contentType: "text/html", body: "<button>Portal</button>" }));
+  await page.goto(`${baseUrl}/host?scenario=watch`);
+  const setup = page.frameLocator("iframe");
+
+  await completeToTest(setup);
+  await setup.getByRole("button", { name: "Run test" }).click();
+
+  await expect(setup.getByText("Test is running.")).toBeVisible();
+  const browser = setup.locator('iframe[title="Test browser (view only)"]');
+  await expect(browser).toHaveAttribute("src", "https://www.browserbase.com/devtools-fullscreen/inspector.html");
+  await expect(browser).toHaveAttribute("inert", "");
+  await expect(browser).toHaveAttribute("tabindex", "-1");
+  const topmost = await browser.evaluate((frame) => {
+    const box = frame.getBoundingClientRect();
+    return document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)?.className;
+  });
+  expect(topmost).toBe("watch-only-shield");
+});
+
 test("keeps scheduling disabled after a failed test", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=failed`);
   const setup = page.frameLocator("iframe");
@@ -347,6 +367,7 @@ function hostPage(url: string): string {
     else if (request.method === "testAgent") { window.__testArguments.push(request.params.arguments); send({ id: "run-1" }); }
     else if (request.method === "getTestRun") {
       if (scenario === "failed") send({ status: "failed", error: "The website rejected the request." });
+      else if (scenario === "watch") send({ status: "running", liveViewUrl: "https://www.browserbase.com/devtools-fullscreen/inspector.html" });
       else send({ status: "succeeded", files: [{ name: "statement.pdf", url: "https://files.example.test/statement.pdf" }] });
     } else if (request.method === "scheduleAgent") { window.__savedSchedule = request.params.cron; window.__scheduleArguments.push(request.params.arguments); send(undefined); }
     else if (request.method === "close") { window.__closeRequests.push(request.params); send(undefined); }

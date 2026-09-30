@@ -10,6 +10,7 @@ type RunState = {
   status: TestRun["status"];
   error?: string;
   files: Array<{ name: string; url: string }>;
+  liveViewUrl: string | null;
   revision: number;
 };
 
@@ -194,6 +195,7 @@ export default function AgentSetup() {
           status: next.status,
           error: next.error,
           files: next.files ?? [],
+          liveViewUrl: next.status === "running" ? browserbaseLiveViewUrl(next.liveViewUrl ?? null) : null,
         });
       }).catch((requestError: Error) => {
         if (active) {
@@ -363,7 +365,7 @@ export default function AgentSetup() {
       const saved = await bridge.request("saveAgent", { draft, config, agentId: agentId ?? undefined });
       setAgentId(saved.id);
       const started = await bridge.request("testAgent", { agentId: saved.id, arguments: {} });
-      setTestRun({ id: started.id, status: "running", files: [], revision });
+      setTestRun({ id: started.id, status: "running", files: [], liveViewUrl: null, revision });
       setCheckedResult(false);
     } catch (requestError) {
       setError(errorMessage(requestError));
@@ -560,7 +562,12 @@ function Test(props: { credentials: CredentialKind[]; onChangeCredentials(): voi
     const [hours, minutes] = value.split(":");
     props.onCron(`${Number(minutes)} ${Number(hours)} * * *`);
   }
-  return <div className="setup-panel"><div><h2>Test a fresh run</h2><p>Reiterate runs the saved draft in a new browser session. Check the output, then finish setup or choose a daily schedule.</p></div>{props.credentials.length > 0 && <p className="setup-notice">This agent signs in with the saved {props.credentials.map(credentialLabel).join(", ")}. Reiterate asks for them before the first test. <button type="button" className="text-button" onClick={props.onChangeCredentials} disabled={props.busy}>Change sign-in details</button></p>}<div className="test-result" aria-live="polite">{props.run?.status === "running" && <p>Test is running.</p>}{testSucceeded && <><p>Test completed</p>{props.run?.files.map((file) => <a key={file.url} href={file.url} target="_blank" rel="noreferrer">{file.name}</a>)}</>}{testFailed && <p role="alert">{props.run?.error ?? "The test failed."}</p>}{props.run === null && <p>Run a test after each change.</p>}</div>{testSucceeded && <label className="result-check"><input aria-label="I checked the result" type="checkbox" checked={props.checked} onChange={(event) => props.onCheck(event.target.checked)} />I checked the result</label>}{props.scheduleAllowed && <div className="schedule-options"><p>Daily runs repeat the tested workflow. You can finish setup without a schedule.</p><label className="result-check"><input aria-label="Schedule daily" type="checkbox" checked={props.dailySchedule} onChange={(event) => props.onDaily(event.target.checked)} />Schedule daily</label>{props.dailySchedule && <label>Time of day (UTC)<input type="time" aria-label="Time of day (UTC)" value={dailyTime} onChange={(event) => changeTime(event.target.value)} />{!props.scheduleValid && <span className="field-hint">Choose a time for the daily run.</span>}</label>}</div>}<div className="setup-actions"><button className="button button-quiet" type="button" onClick={props.onBack} disabled={props.busy}>Back to review</button><button className={`button ${testSucceeded ? "button-quiet" : "button-primary"}`} type="button" onClick={props.onRun} disabled={props.busy}>Run test</button>{testSucceeded && !props.dailySchedule && <button className="button button-primary" type="button" onClick={props.onFinish} disabled={!props.canFinish}>Finish setup</button>}{props.scheduleAllowed && props.dailySchedule && <button className="button button-primary" type="button" onClick={props.onSchedule} disabled={!props.canSchedule}>Schedule agent</button>}</div></div>;
+  return <div className="setup-panel"><div><h2>Test a fresh run</h2><p>Reiterate runs the saved draft in a new browser session. Check the output, then finish setup or choose a daily schedule.</p></div>{props.credentials.length > 0 && <p className="setup-notice">This agent signs in with the saved {props.credentials.map(credentialLabel).join(", ")}. Reiterate asks for them before the first test. <button type="button" className="text-button" onClick={props.onChangeCredentials} disabled={props.busy}>Change sign-in details</button></p>}<div className="test-result" aria-live="polite">{props.run?.status === "running" && <p>Test is running.</p>}{props.run?.status === "running" && <WatchOnlyBrowser url={props.run.liveViewUrl} />}{testSucceeded && <><p>Test completed</p>{props.run?.files.map((file) => <a key={file.url} href={file.url} target="_blank" rel="noreferrer">{file.name}</a>)}</>}{testFailed && <p role="alert">{props.run?.error ?? "The test failed."}</p>}{props.run === null && <p>Run a test after each change.</p>}</div>{testSucceeded && <label className="result-check"><input aria-label="I checked the result" type="checkbox" checked={props.checked} onChange={(event) => props.onCheck(event.target.checked)} />I checked the result</label>}{props.scheduleAllowed && <div className="schedule-options"><p>Daily runs repeat the tested workflow. You can finish setup without a schedule.</p><label className="result-check"><input aria-label="Schedule daily" type="checkbox" checked={props.dailySchedule} onChange={(event) => props.onDaily(event.target.checked)} />Schedule daily</label>{props.dailySchedule && <label>Time of day (UTC)<input type="time" aria-label="Time of day (UTC)" value={dailyTime} onChange={(event) => changeTime(event.target.value)} />{!props.scheduleValid && <span className="field-hint">Choose a time for the daily run.</span>}</label>}</div>}<div className="setup-actions"><button className="button button-quiet" type="button" onClick={props.onBack} disabled={props.busy}>Back to review</button><button className={`button ${testSucceeded ? "button-quiet" : "button-primary"}`} type="button" onClick={props.onRun} disabled={props.busy}>Run test</button>{testSucceeded && !props.dailySchedule && <button className="button button-primary" type="button" onClick={props.onFinish} disabled={!props.canFinish}>Finish setup</button>}{props.scheduleAllowed && props.dailySchedule && <button className="button button-primary" type="button" onClick={props.onSchedule} disabled={!props.canSchedule}>Schedule agent</button>}</div></div>;
+}
+
+/** Shows the test's browser without letting the user click, type, or scroll into it. */
+function WatchOnlyBrowser(props: { url: string | null }): JSX.Element {
+  return <div className="browser-frame watch-only">{props.url === null ? <p>Opening the virtual browser.</p> : <><iframe title="Test browser (view only)" src={props.url} tabIndex={-1} {...{ inert: "" }} /><div className="watch-only-shield" aria-hidden="true" /></>}</div>;
 }
 
 function startUrlError(value: string): string | null {
