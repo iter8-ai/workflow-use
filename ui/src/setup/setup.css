@@ -478,11 +478,18 @@ select {
   font-weight: 650;
 }
 
-.setup-panel .review-step-value input {
+.setup-panel .review-step-value input,
+.setup-panel .review-step-value textarea {
   min-height: 28px;
   padding: 2px 8px;
   font-size: 0.86rem;
   font-weight: 400;
+}
+
+.setup-panel .review-step-value textarea {
+  min-height: 28px;
+  resize: vertical;
+  field-sizing: content;
 }
 
 .setup-panel .review-step-kind select {

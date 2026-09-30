@@ -28,7 +28,11 @@ CAPTURE_SCRIPT = r"""
       `${labelText(node)} ${node.getAttribute("placeholder") || ""}`).toLowerCase();
     // Most specific signal first: the input type, then explicit autocomplete and username hints.
     const oneTime = /one.?time|otp|passcode|verification.?code|2fa|mfa|authenticator/.test(hint);
-    if (input?.type === "password") return /one-time-code/.test(input.autocomplete) ? "otp" : "password";
+    if (input?.type === "password" || /(?:current|new)-password/.test(input?.autocomplete || "")) {
+      return /one-time-code/.test(input?.autocomplete || "") ? "otp" : "password";
+    }
+    // A "show password" toggle turns the field into type=text; its hints still say password.
+    if (/pass.?word/.test(hint)) return "password";
     if (/\b(?:username|email)\b/.test(input?.autocomplete || "") || /user.?name/.test(hint)) return "username";
     if (oneTime) return "otp";
     const secretHint =

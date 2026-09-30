@@ -535,7 +535,9 @@ function Review(props: { steps: SetupStep[]; busy: boolean; onUpdateStep(id: str
                     {step.type !== "credential" && (
                       <label className="review-step-value">
                         {step.type === "select_change" ? "Choose" : "Type"}
-                        <input aria-label={`Step ${index + 1} ${step.type === "select_change" ? "option" : "text"}`} value={step.value ?? ""} placeholder={step.type === "select_change" ? "Option to choose" : "Leave empty to clear the field"} onChange={(event) => props.onUpdateStep(step.id, { value: event.target.value })} autoComplete="off" />
+                        {step.type === "select_change"
+                          ? <input aria-label={`Step ${index + 1} option`} value={step.value ?? ""} placeholder="Option to choose" onChange={(event) => props.onUpdateStep(step.id, choiceUpdate(step, event.target.value))} autoComplete="off" />
+                          : <textarea rows={1} aria-label={`Step ${index + 1} text`} value={step.value ?? ""} placeholder="Leave empty to clear the field" onChange={(event) => props.onUpdateStep(step.id, { value: event.target.value })} />}
                       </label>
                     )}
                     {step.type === "credential" && <span>Entered in Reiterate before the test; never part of these instructions.</span>}
@@ -583,6 +585,13 @@ function startUrlError(value: string): string | null {
   } catch {
     return "Enter a valid http(s) website address before starting.";
   }
+}
+
+// The recorder writes "Choose <option> in <menu>"; keep that description in step with an edited option.
+function choiceUpdate(step: SetupStep, value: string): Partial<SetupStep> {
+  const menu = step.target ?? "menu";
+  const recorded = `Choose ${step.value || "option"} in ${menu}`;
+  return step.description === recorded ? { value, description: `Choose ${value || "option"} in ${menu}` } : { value };
 }
 
 function credentialLabel(kind: string | null | undefined): string {

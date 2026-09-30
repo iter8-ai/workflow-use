@@ -159,6 +159,8 @@ test("repeats demonstrated typing and choices as exact values", async ({ page })
   await expect(setup.getByLabel("Step 2 text")).toHaveValue("September 2026");
   await setup.getByLabel("Step 2 text").fill("October 2026");
   await expect(setup.getByLabel("Step 3 option")).toHaveValue("PDF");
+  await setup.getByLabel("Step 3 option").fill("CSV");
+  await expect(setup.getByLabel("Step 3 description")).toHaveValue("Choose CSV in Format");
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.screenshot({ path: "e2e-artifacts/review-form-entry.png" });
   await setup.getByRole("button", { name: "Continue to test" }).click();
@@ -166,7 +168,8 @@ test("repeats demonstrated typing and choices as exact values", async ({ page })
   await expect(setup.getByText("Test completed")).toBeVisible();
   const saved = JSON.stringify(await page.evaluate(() => window.__savedAgents));
   expect(saved).toContain('replace any text in Statement month with exactly \\"October 2026\\"');
-  expect(saved).toContain('in Format, choose exactly \\"PDF\\"');
+  expect(saved).toContain('Choose CSV in Format: in Format, choose exactly \\"CSV\\"');
+  expect(saved).not.toContain("PDF");
   await expect.poll(() => page.evaluate(() => window.__credentialRequests)).toEqual([]);
 });
 
