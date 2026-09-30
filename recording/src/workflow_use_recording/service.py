@@ -53,6 +53,9 @@ class Recording:
     steps: list[SetupStep] = field(default_factory=list)
     blocked_reason: str | None = None
     last_input_key: str | None = None
+    # Sign-in values typed during the demonstration, by kind. Never part of steps, responses or logs;
+    # handed to the host once on stop, then forgotten.
+    credentials: dict[str, str] = field(default_factory=dict, repr=False)
     close_requested: Literal["stopped", "expired"] | None = None
     closing: bool = False
     creating: bool = True
@@ -113,11 +116,18 @@ class RecordingService:
         await self._stop(recording, expired=False)
         return recording
 
+    @staticmethod
+    def take_credentials(recording: Recording) -> dict[str, str]:
+        """Return the captured sign-in values once; later calls get nothing."""
+        credentials, recording.credentials = recording.credentials, {}
+        return credentials
+
     async def delete(self, recording_id: str, owner: RecordingOwner) -> bool:
         recording = await self.get(recording_id, owner)
         if recording is None:
             return False
         await self._stop(recording, expired=False)
+        recording.credentials = {}
         self._recordings.pop(recording_id, None)
         return True
 
@@ -132,6 +142,17 @@ class RecordingService:
                 or recording.blocked_reason is not None
                 or datetime.now(UTC) >= recording.expires_at
             ):
+                return
+            if event.get("type") == "sign_in_value":
+                # Only the provider's isolated sign-in world produces these; page events are stripped of them.
+                kind, secret = event.get("value"), event.get("secret")
+                if kind in {"username", "password"} and isinstance(secret, str):
+                    # The latest input wins: a cleared or oversized field leaves nothing to hand over,
+                    # so the host asks for the value instead of saving a stale one.
+                    if 0 < len(secret) <= MAX_FIELD_LENGTH:
+                        recording.credentials[kind] = secret
+                    else:
+                        recording.credentials.pop(kind, None)
                 return
             step = _to_step(event)
             if step is None:
@@ -153,6 +174,9 @@ class RecordingService:
     async def cleanup(self) -> None:
         now = datetime.now(UTC)
         for recording in list(self._recordings.values()):
+            if now >= recording.expires_at:
+                # Values nobody collected do not outlive the recording.
+                recording.credentials = {}
             if recording.status != "recording":
                 continue
             requested = recording.close_requested
@@ -207,6 +231,8 @@ class RecordingService:
             recording.status = recording.close_requested or ("expired" if expired else "stopped")
             recording.close_requested = None
             recording.closing = False
+            if recording.status == "expired":
+                recording.credentials = {}
 
     async def _attach_browser(self, recording: Recording, browser: BrowserSession) -> bool:
         """Attach a newly created browser only while its recording remains live."""

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -27,9 +28,7 @@ class FakeProvider(BrowserProvider):
     def __init__(self) -> None:
         self.sessions: list[FakeSession] = []
 
-    async def create(
-        self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]
-    ) -> BrowserSession:
+    async def create(self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]) -> BrowserSession:
         session = FakeSession(on_event)
         self.sessions.append(session)
         return session
@@ -46,9 +45,7 @@ class FailingProvider(FakeProvider):
         self.fail_create = fail_create
         self.value_error = value_error
 
-    async def create(
-        self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]
-    ) -> BrowserSession:
+    async def create(self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]) -> BrowserSession:
         if self.fail_create:
             if self.value_error:
                 raise ValueError("wss://browserbase.example/connect?token=must-not-leak")
@@ -133,12 +130,8 @@ def test_authentication_and_owner_boundaries() -> None:
 
         response = create_recording(http)
         recording_id = response["id"]
-        wrong_owner = http.get(
-            f"/recordings/{recording_id}", headers=headers(email="other@iter7.example")
-        )
-        wrong_tenant = http.get(
-            f"/recordings/{recording_id}", headers=headers(organization="other")
-        )
+        wrong_owner = http.get(f"/recordings/{recording_id}", headers=headers(email="other@iter7.example"))
+        wrong_tenant = http.get(f"/recordings/{recording_id}", headers=headers(organization="other"))
 
     assert wrong_owner.status_code == 404
     assert wrong_tenant.status_code == 404
@@ -164,6 +157,70 @@ async def test_credential_entry_records_its_kind_and_continues_without_the_value
         ("click", None),
     ]
     assert "do-not-store-me" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_stop_hands_over_captured_sign_in_values_once() -> None:
+    provider = FakeProvider()
+    with client(provider) as http:
+        recording = create_recording(http)
+        session = provider.sessions[0]
+        await session.emit({"type": "credential", "target": "Email", "targetKey": "u", "value": "username"})
+        await session.emit({"type": "sign_in_value", "value": "username", "secret": "synthetic-user"})
+        for typed in ("s", "synthetic-password"):
+            await session.emit({"type": "sign_in_value", "value": "password", "secret": typed})
+        # Only username and password are ever kept; anything else is ignored.
+        await session.emit({"type": "sign_in_value", "value": "otp", "secret": "123456"})
+        during = http.get(f"/recordings/{recording['id']}", headers=headers())
+        stopped = http.post(f"/recordings/{recording['id']}/stop", headers=headers())
+        again = http.post(f"/recordings/{recording['id']}/stop", headers=headers())
+        after = http.get(f"/recordings/{recording['id']}", headers=headers())
+
+    assert stopped.json()["credentials"] == {"username": "synthetic-user", "password": "synthetic-password"}
+    stop_schema = http.get("/openapi.json").json()["components"]["schemas"]
+    assert set(stop_schema["CapturedCredentials"]["properties"]) == {"username", "password"}
+    assert "credentials" in stop_schema["StoppedRecordingResponse"]["properties"]
+    assert stopped.headers["cache-control"] == "no-store"
+    for response in (during, again, after):
+        assert "credentials" not in response.json()
+        assert "synthetic" not in response.text
+    assert "synthetic" not in json.dumps(stopped.json()["steps"])
+    assert "123456" not in stopped.text
+
+
+@pytest.mark.asyncio
+async def test_cleared_or_oversized_sign_in_field_hands_over_nothing() -> None:
+    provider = FakeProvider()
+    with client(provider) as http:
+        recording = create_recording(http)
+        session = provider.sessions[0]
+        for secret in ("synthetic-password", ""):
+            await session.emit({"type": "sign_in_value", "value": "password", "secret": secret})
+        for secret in ("synthetic-user", "x" * 10_000):
+            await session.emit({"type": "sign_in_value", "value": "username", "secret": secret})
+        stopped = http.post(f"/recordings/{recording['id']}/stop", headers=headers())
+
+    assert "credentials" not in stopped.json()
+    assert "synthetic" not in stopped.text
+
+
+@pytest.mark.asyncio
+async def test_deleted_or_expired_recordings_forget_captured_sign_in_values() -> None:
+    service = recording_service.RecordingService(FakeProvider(), timeout_seconds=60)
+    owner = recording_service.RecordingOwner("iter7", "owner@iter7.example")
+    event = {"type": "sign_in_value", "value": "password", "secret": "synthetic-password"}
+
+    deleted = await service.create(owner, "https://example.com/")
+    await service.record_event(deleted.id, event)
+    assert await service.delete(deleted.id, owner)
+
+    expired = await service.create(owner, "https://example.com/")
+    await service.record_event(expired.id, event)
+    expired.expires_at = expired.expires_at.replace(year=2000)
+    await service.cleanup()
+
+    assert deleted.credentials == {} and expired.credentials == {}
+    assert "synthetic-password" not in repr(deleted) + repr(expired)
 
 
 @pytest.mark.asyncio
@@ -348,9 +405,7 @@ def test_health_endpoint_never_requires_or_leaks_credentials() -> None:
     "operation,value_error",
     [("create", False), ("create", True), ("stop", False), ("delete", False)],
 )
-def test_provider_errors_are_generic_and_never_leak_connection_urls(
-    operation: str, value_error: bool
-) -> None:
+def test_provider_errors_are_generic_and_never_leak_connection_urls(operation: str, value_error: bool) -> None:
     provider = FailingProvider(fail_create=operation == "create", value_error=value_error)
     with client(provider) as http:
         if operation == "create":

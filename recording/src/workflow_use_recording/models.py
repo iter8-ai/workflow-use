@@ -31,3 +31,15 @@ class RecordingResponse(BaseModel):
     steps: list[SetupStep]
     expires_at: datetime = Field(serialization_alias="expiresAt")
     blocked_reason: str | None = Field(serialization_alias="blockedReason")
+
+
+class CapturedCredentials(BaseModel):
+    """Sign-in values typed during the demonstration. For the host to store encrypted; never shown to users."""
+
+    username: str | None = None
+    password: str | None = None
+
+
+class StoppedRecordingResponse(RecordingResponse):
+    # Present once, on the stop response only, when the demonstration captured sign-in values.
+    credentials: CapturedCredentials | None = None
