@@ -207,7 +207,7 @@ test("does not test a sign-in agent when the host has no credential support", as
 
   await describeAndDemonstrate(setup);
   await setup.getByRole("button", { name: "Continue to test" }).click();
-  await expect(setup.getByRole("alert")).toContainText("cannot save sign-in details yet");
+  await expect(setup.getByRole("alert")).toContainText("Reload Reiterate");
   await expect.poll(() => page.evaluate(() => window.__savedAgents)).toEqual([]);
 });
 

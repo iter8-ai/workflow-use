@@ -307,7 +307,7 @@ export default function AgentSetup() {
     try {
       compileAgent(draft);
       if (!credentialsAllowed && requiredCredentials(steps).length > 0) {
-        throw new Error("This Reiterate version cannot save sign-in details yet. Remove the sign-in steps or try again later.");
+        throw new Error("This Reiterate page is out of date and cannot save sign-in details. Reload Reiterate and set up the agent again.");
       }
       setScreen("test");
     } catch (compileError) {

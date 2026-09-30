@@ -31,7 +31,9 @@ CAPTURE_SCRIPT = r"""
     if (input?.type === "password") return /one-time-code/.test(input.autocomplete) ? "otp" : "password";
     if (/\b(?:username|email)\b/.test(input?.autocomplete || "") || /user.?name/.test(hint)) return "username";
     if (oneTime) return "otp";
-    if (/api.?key|\bauth\b|credential|jwt|secret|token/.test(hint)) return "password";
+    const secretHint =
+      /api.?key|\bauth\b|credential|jwt|secret|token|\bpin\b|passphrase|security.?answer|cvv|cvc|card.?number/;
+    if (secretHint.test(hint)) return "password";
     const passwordInForm = Boolean(node.closest("form")?.querySelector('input[type="password"]'));
     if (passwordInForm || /user.?name|login/.test(hint)) return "username";
     return null;
@@ -73,8 +75,11 @@ CAPTURE_SCRIPT = r"""
       return;
     }
     // Ordinary fields keep what was typed so the agent can repeat it; sign-in fields never do.
-    const typed = node instanceof HTMLElement && node.isContentEditable ? node.innerText : node.value;
-    emit({ type: "input", target: target(node), targetKey: targetKey(node), value: semanticText(typed, 500) });
+    // Kept verbatim (whitespace and line breaks matter); oversized text is flagged, not cut.
+    const typed = String((node instanceof HTMLElement && node.isContentEditable ? node.innerText : node.value) ?? "");
+    emit(typed.length > 2000
+      ? { type: "input", target: target(node), targetKey: targetKey(node), tooLong: true }
+      : { type: "input", target: target(node), targetKey: targetKey(node), value: typed });
   }, true);
   document.addEventListener("change", (event) => {
     const node = event.target;

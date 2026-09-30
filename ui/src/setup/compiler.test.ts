@@ -82,6 +82,23 @@ test("requires an option for a choice step and rejects declared inputs", () => {
   assert.throws(() => compileAgent(declaredInput), /reusable inputs are not supported/i);
 });
 
+test("keeps typed text verbatim and rejects missing or secret-field values", () => {
+  const multiline = baseDraft();
+  multiline.steps.push({ id: "note", type: "input", description: "Fill in Notes", target: "Notes", value: "Line one\n  indented" });
+  const prompt = (compileAgent(multiline).stages[0] as { prompt: string }).prompt;
+  assert.ok(prompt.includes(JSON.stringify("Line one\n  indented")));
+
+  const missing = baseDraft();
+  missing.steps.push({ id: "note", type: "input", description: "Fill in Notes", target: "Notes", value: null });
+  assert.throws(() => compileAgent(missing), /does not say what to type/);
+
+  for (const target of ["PIN", "Passphrase", "Card number"]) {
+    const secret = baseDraft();
+    secret.steps.push({ id: "pin", type: "input", description: `Fill in ${target}`, target, value: "sunflower" });
+    assert.throws(() => compileAgent(secret), /Mark it as a saved sign-in field/, target);
+  }
+});
+
 test("rejects a credential typed into an ordinary field", () => {
   const draft = baseDraft();
   draft.steps.push({ id: "note", type: "input", description: "Fill in Notes", target: "Notes", value: "password: hunter2" });

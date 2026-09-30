@@ -20,7 +20,13 @@ CREDENTIAL_KINDS = frozenset({"username", "password", "otp"})
 _SECRET_TARGETS = (
     (re.compile(r"one.?time|\botp\b|passcode|verification.?code|2fa|mfa|authenticator", re.I), "otp"),
     (re.compile(r"user.?name", re.I), "username"),
-    (re.compile(r"pass.?word|api.?key|\bauth\b|credential|jwt|secret|token", re.I), "password"),
+    (
+        re.compile(
+            r"pass.?word|pass.?phrase|api.?key|\bauth\b|credential|jwt|secret|token|\bpin\b|security.?answer|cvv|cvc|card.?number",
+            re.I,
+        ),
+        "password",
+    ),
 )
 STEP_TYPES = frozenset({"navigation", "click", "input", "credential", "select_change", "key_press", "scroll", "agent"})
 CAPTURE_LIMIT_REASON = "The demonstration reached the 200-step capture limit. Start a shorter demonstration."
@@ -253,6 +259,10 @@ def _to_step(event: dict[str, Any]) -> SetupStep | None:
         return None
     target = _text(event.get("target"), maximum=240)
     value = _text(event.get("value"), maximum=500)
+    if event_type == "input":
+        # Typed text is replayed exactly: keep it verbatim, including "" (clear the field).
+        raw = event.get("value")
+        value = raw if isinstance(raw, str) and len(raw) <= MAX_FIELD_LENGTH else None
     if event_type == "input" and target:
         kind = next((kind for pattern, kind in _SECRET_TARGETS if pattern.search(target)), None)
         if kind is not None:

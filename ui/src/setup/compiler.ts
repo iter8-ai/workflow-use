@@ -66,6 +66,8 @@ const credentialDisclosurePattern = new RegExp(
   ].join(""),
   "iu",
 );
+// Field labels whose typed value is a secret and must use a saved sign-in field.
+const secretFieldPattern = /pass.?(?:word|code|phrase)|\bpin\b|api.?key|\bauth\b|credential|jwt|secret|token|one.?time|\botp\b|verification.?code|2fa|mfa|security.?answer|cvv|cvc|card.?number/iu;
 // A one-time code a few words after its label ("code sent to me 482913").
 const codeNearbyPattern = /\b(?:otp|passcode|(?:verification|security|access|auth(?:entication)?|one[- ]time|2fa|mfa|sms) code)s?\b[^.\n]{0,40}?\b\d{4,8}\b/iu;
 const rawReplayPattern = /\b(?:css|xpath|selector)\b|#[a-z][\w-]*(?:\s*[>+~]|\[)|\[[^\]]+\]|(?:^|\s)(?:x|y)\s*[:=]\s*\d+|^\s*\d+(?:px)?\s*,\s*\d+(?:px)?\s*$/i;
@@ -126,6 +128,12 @@ function validateDraft(draft: SetupDraft): void {
     validateStep(step);
     if (step.type === "select_change" && optionalStepText(step.value) === undefined) {
       throw new Error(`Step ${step.id} does not say which option to choose. Enter the option or remove the step.`);
+    }
+    if (step.type === "input" && (step.value === null || step.value === undefined)) {
+      throw new Error(`Step ${step.id} does not say what to type (the recorded text was too long). Enter the text or remove the step.`);
+    }
+    if (step.type === "input" && step.value && secretFieldPattern.test(step.target ?? "")) {
+      throw new Error(`Step ${step.id} types into ${step.target}. Mark it as a saved sign-in field instead of typing the value.`);
     }
     if (step.inputName !== undefined) {
       throw new Error("Reusable inputs are not supported in this release.");

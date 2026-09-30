@@ -288,6 +288,27 @@ async def test_typing_into_a_secret_labelled_field_keeps_only_the_kind() -> None
     assert [(step["type"], step["value"]) for step in response.json()["steps"][1:]] == [("credential", "password")]
 
 
+@pytest.mark.asyncio
+async def test_typed_text_is_kept_verbatim_and_oversized_text_is_not_truncated() -> None:
+    provider = FakeProvider()
+    with client(provider) as http:
+        recording = create_recording(http)
+        await provider.sessions[0].emit(
+            {"type": "input", "target": "Notes", "targetKey": "a", "value": "Line one\n  two"}
+        )
+        await provider.sessions[0].emit({"type": "input", "target": "Memo", "targetKey": "b", "tooLong": True})
+        await provider.sessions[0].emit({"type": "input", "target": "PIN", "targetKey": "c", "value": "sunflower"})
+        response = http.get(f"/recordings/{recording['id']}", headers=headers())
+
+    steps = response.json()["steps"][1:]
+    assert [(step["type"], step.get("value")) for step in steps] == [
+        ("input", "Line one\n  two"),
+        ("input", None),
+        ("credential", "password"),
+    ]
+    assert "sunflower" not in response.text
+
+
 def test_create_rejects_query_and_fragment_urls_without_creating_a_recording() -> None:
     provider = FakeProvider()
     with client(provider) as http:
