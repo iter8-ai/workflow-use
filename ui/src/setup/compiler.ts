@@ -66,6 +66,8 @@ const credentialDisclosurePattern = new RegExp(
   ].join(""),
   "iu",
 );
+// Field labels whose typed value is a secret and must use a saved sign-in field.
+const secretFieldPattern = /pass.?(?:word|code|phrase)|\bpin\b|api.?key|\bauth\b|credential|jwt|secret|token|one.?time|\botp\b|verification.?code|2fa|mfa|security.?answer|cvv|cvc|card.?number/iu;
 // A one-time code a few words after its label ("code sent to me 482913").
 const codeNearbyPattern = /\b(?:otp|passcode|(?:verification|security|access|auth(?:entication)?|one[- ]time|2fa|mfa|sms) code)s?\b[^.\n]{0,40}?\b\d{4,8}\b/iu;
 const rawReplayPattern = /\b(?:css|xpath|selector)\b|#[a-z][\w-]*(?:\s*[>+~]|\[)|\[[^\]]+\]|(?:^|\s)(?:x|y)\s*[:=]\s*\d+|^\s*\d+(?:px)?\s*,\s*\d+(?:px)?\s*$/i;
@@ -110,7 +112,7 @@ function validateDraft(draft: SetupDraft): void {
     throw new Error(`A setup can contain at most ${maximumSteps} demonstrated steps.`);
   }
   if (draft.inputs.length > 0) {
-    throw new Error("Form-entry tasks are not supported in this release. Remove input and select steps.");
+    throw new Error("Reusable inputs are not supported in this release.");
   }
 
   const stepIds = new Set<string>();
@@ -124,8 +126,14 @@ function validateDraft(draft: SetupDraft): void {
     stepIds.add(step.id);
 
     validateStep(step);
-    if (step.type === "input" || step.type === "select_change") {
-      throw new Error("Form-entry tasks are not supported in this release. Remove input and select steps.");
+    if (step.type === "select_change" && optionalStepText(step.value) === undefined) {
+      throw new Error(`Step ${step.id} does not say which option to choose. Enter the option or remove the step.`);
+    }
+    if (step.type === "input" && (step.value === null || step.value === undefined)) {
+      throw new Error(`Step ${step.id} does not say what to type (the recorded text was too long). Enter the text or remove the step.`);
+    }
+    if (step.type === "input" && step.value && secretFieldPattern.test(step.target ?? "")) {
+      throw new Error(`Step ${step.id} types into ${step.target}. Mark it as a saved sign-in field instead of typing the value.`);
     }
     if (step.inputName !== undefined) {
       throw new Error("Reusable inputs are not supported in this release.");
@@ -186,8 +194,18 @@ function formatInstruction(
     const field = target ?? "the sign-in field";
     return `${description}: type exactly $${step.value} into ${field}. It is replaced with the saved ${step.value} while typing.`;
   }
-  if (step.type === "input" || step.type === "select_change") {
-    return target === undefined ? `Enter ${value} to ${intent}.` : `Set ${target} to ${value} to ${intent}.`;
+  // Form values are fixed text the agent repeats on every run.
+  const field = target ?? "the field";
+  if (step.type === "input") {
+    return !step.value
+      ? `${description}: clear ${field} so it is empty.`
+      : `${description}: replace any text in ${field} with exactly ${quoted(step.value ?? "")}.`;
+  }
+  if (step.type === "select_change") {
+    const options = multipleChoices(step.value ?? "");
+    return options === null
+      ? `${description}: in ${field}, choose exactly ${quoted(step.value ?? "")}.`
+      : `${description}: in ${field}, select exactly these options and no others: ${options.map(quoted).join(", ")}.`;
   }
   if (step.type === "key_press") {
     return value === undefined ? `Complete this action: ${description}.` : `Press ${value} to ${intent}.`;
@@ -262,6 +280,21 @@ function looksLikeRawReplay(value: string | null | undefined): boolean {
 
 function escapeLiteral(value: string): string {
   return value.replace(/\{/g, "{{").replace(/\}/g, "}}");
+}
+
+/** Multi-select values are recorded as a JSON array of option labels. */
+function multipleChoices(value: string): string[] | null {
+  if (!value.startsWith("[")) return null;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed) && parsed.every((item) => typeof item === "string") ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function quoted(value: string): string {
+  return escapeLiteral(JSON.stringify(value));
 }
 
 function continuation(description: string, literalValue: string | undefined): string {

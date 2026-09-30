@@ -171,17 +171,26 @@ test("does not start or save an agent when the setup URL has a credential query"
   await expect.poll(() => page.evaluate(() => window.__savedAgents)).toEqual([]);
 });
 
-test("requires a form-entry step to be removed before compiling", async ({ page }) => {
+test("repeats demonstrated typing and choices as exact values", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=form-entry`);
   const setup = page.frameLocator("iframe");
 
   await describeAndDemonstrate(setup);
-  await expect(setup.getByText("Mark it as a sign-in field or remove this step.")).toBeVisible();
+  await expect(setup.getByLabel("Step 2 text")).toHaveValue("September 2026");
+  await setup.getByLabel("Step 2 text").fill("October 2026");
+  await expect(setup.getByLabel("Step 3 option")).toHaveValue("PDF");
+  await setup.getByLabel("Step 3 option").fill("CSV");
+  await expect(setup.getByLabel("Step 3 description")).toHaveValue("Choose CSV in Format");
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.screenshot({ path: "e2e-artifacts/review-form-entry.png" });
   await setup.getByRole("button", { name: "Continue to test" }).click();
-  await expect(setup.getByRole("alert")).toContainText("Remove input and select steps");
-  await setup.getByRole("button", { name: "Remove step 2" }).click();
-  await setup.getByRole("button", { name: "Continue to test" }).click();
-  await expect(setup.getByRole("heading", { name: "Test a fresh run" })).toBeVisible();
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await expect(setup.getByText("Test completed")).toBeVisible();
+  const saved = JSON.stringify(await page.evaluate(() => window.__savedAgents));
+  expect(saved).toContain('replace any text in Statement month with exactly \\"October 2026\\"');
+  expect(saved).toContain('Choose CSV in Format: in Format, choose exactly \\"CSV\\"');
+  expect(saved).not.toContain("PDF");
+  await expect.poll(() => page.evaluate(() => window.__credentialRequests)).toEqual([]);
 });
 
 test("asks the host for sign-in details before the first test and never handles them itself", async ({ page }) => {
@@ -207,9 +216,7 @@ test("turns a demonstrated form field into a saved sign-in field", async ({ page
   const setup = page.frameLocator("iframe");
 
   await describeAndDemonstrate(setup);
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await page.screenshot({ path: "e2e-artifacts/review-sign-in.png" });
-  await setup.getByLabel("Step 2 sign-in field").selectOption("password");
+  await setup.getByLabel("Step 2 field type").selectOption("password");
   await setup.getByRole("button", { name: "Continue to test" }).click();
   await setup.getByRole("button", { name: "Run test" }).click();
   await expect(setup.getByText("Test completed")).toBeVisible();
@@ -223,7 +230,7 @@ test("does not test a sign-in agent when the host has no credential support", as
 
   await describeAndDemonstrate(setup);
   await setup.getByRole("button", { name: "Continue to test" }).click();
-  await expect(setup.getByRole("alert")).toContainText("cannot save sign-in details yet");
+  await expect(setup.getByRole("alert")).toContainText("Reload Reiterate");
   await expect.poll(() => page.evaluate(() => window.__savedAgents)).toEqual([]);
 });
 
@@ -343,7 +350,10 @@ function hostPage(url: string): string {
   const signIn = scenario === "sign-in" || scenario === "sign-in-unsupported";
   const steps = [
     { id: "open-reports", type: "click", description: "Open the reports section", target: "Reports", expectedOutcome: "The reports list is visible" },
-    ...(scenario === "form-entry" ? [{ id: "choose-month", type: "input", description: "Choose the statement month", target: "Statement month" }] : []),
+    ...(scenario === "form-entry" ? [
+      { id: "choose-month", type: "input", description: "Fill in Statement month", target: "Statement month", value: "September 2026" },
+      { id: "choose-format", type: "select_change", description: "Choose PDF in Format", target: "Format", value: "PDF" },
+    ] : []),
     ...(scenario === "ten-steps" ? Array.from({ length: 8 }, (_, index) => ({ id: "filter-" + index, type: "click", description: "Apply report filter " + (index + 1), target: "Filter " + (index + 1), expectedOutcome: index % 2 ? "The filtered list is visible" : null })) : []),
     ...(signIn ? [
       { id: "user", type: "credential", description: "Enter the saved username in Email", target: "Email", value: "username" },

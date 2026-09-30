@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 from urllib.parse import quote
 
@@ -32,12 +33,12 @@ async def test_playwright_capture_records_visible_click_and_compacts_input() -> 
 
     assert any(event["type"] == "input" and event["target"] == "Invoice number" for event in events)
     assert any(event["type"] == "click" and event["target"] == "Save invoice" for event in events)
-    assert all("value" not in event for event in events if event["type"] == "input")
-    assert all("generic-synthetic-secret" not in str(event) for event in events)
+    inputs = [event for event in events if event["type"] == "input"]
+    assert inputs[-1]["value"] == "generic-synthetic-secret"
 
 
 @pytest.mark.asyncio
-async def test_capture_never_reads_generic_input_values() -> None:
+async def test_capture_records_typed_text_of_ordinary_fields() -> None:
     playwright = pytest.importorskip("playwright.async_api")
     events: list[dict[str, Any]] = []
     value = "generic-synthetic-secret"
@@ -57,9 +58,7 @@ async def test_capture_never_reads_generic_input_values() -> None:
         await browser.close()
 
     inputs = [event for event in events if event.get("type") == "input"]
-    assert inputs
-    assert all("value" not in event for event in inputs)
-    assert all(value not in str(event) for event in events)
+    assert inputs[-1]["value"] == value
 
 
 @pytest.mark.asyncio
@@ -85,7 +84,6 @@ async def test_capture_never_uses_unlabeled_editable_text_as_a_target() -> None:
     inputs = [event for event in events if event.get("type") == "input"]
     assert inputs
     assert all(event["target"] == "div" for event in inputs)
-    assert all(value not in str(event) for event in events)
 
 
 @pytest.mark.asyncio
@@ -131,7 +129,8 @@ async def test_capture_blocks_plain_text_token_and_contenteditable_credentials()
             '<input aria-label="API token"><div contenteditable aria-label="One-time code"></div>'
             '<form><label for="username">Username</label><input id="username"><input aria-label="Secret key">'
             '<input type="password" aria-label="Passcode">'
-            '<input aria-label="Account" id="auth-username" autocomplete="username"></form>'
+            '<input aria-label="Account" id="auth-username" autocomplete="username"><input aria-label="PIN">'
+            '<input aria-label="Passphrase"><input autocomplete="current-password" class="revealed"></form>'
         )
         await page.goto("data:text/html," + quote(fixture))
         await page.get_by_label("API token").fill("token-that-must-not-persist")
@@ -140,6 +139,9 @@ async def test_capture_blocks_plain_text_token_and_contenteditable_credentials()
         await page.get_by_label("Secret key").fill("secret-that-must-not-persist")
         await page.get_by_label("Passcode").fill("passcode-that-must-not-persist")
         await page.get_by_label("Account").fill("account-that-must-not-persist")
+        await page.get_by_label("PIN").fill("pin-that-must-not-persist")
+        await page.get_by_label("Passphrase").fill("phrase-that-must-not-persist")
+        await page.locator(".revealed").fill("revealed-that-must-not-persist")
         await asyncio.sleep(0.05)
         await browser.close()
 
@@ -151,13 +153,16 @@ async def test_capture_blocks_plain_text_token_and_contenteditable_credentials()
         "Secret key": "password",
         "Passcode": "password",
         "Account": "username",
+        "PIN": "password",
+        "Passphrase": "password",
+        "input": "password",
     }
     assert all(event.get("type") != "input" for event in events)
     assert all("must-not-persist" not in str(event) for event in events)
 
 
 @pytest.mark.asyncio
-async def test_capture_records_select_target_without_selected_value() -> None:
+async def test_capture_records_select_target_and_chosen_label() -> None:
     playwright = pytest.importorskip("playwright.async_api")
     events: list[dict[str, Any]] = []
 
@@ -183,8 +188,7 @@ async def test_capture_records_select_target_without_selected_value() -> None:
         await browser.close()
 
     select_events = [event for event in events if event["type"] == "select_change"]
-    assert select_events == [{"type": "select_change", "target": "Status"}]
-    assert all("Paid invoices" not in str(event) for event in events)
+    assert select_events == [{"type": "select_change", "target": "Status", "value": "Paid invoices"}]
     assert [event["value"] for event in events if event["type"] == "scroll"] == ["down", "up"]
 
 
@@ -220,3 +224,30 @@ async def test_capture_records_the_sign_in_button_but_no_field_values() -> None:
     ]
     assert {"type": "click", "target": "Sign in"} in events
     assert all("must-not-persist" not in str(event) for event in events)
+
+
+@pytest.mark.asyncio
+async def test_capture_records_each_multi_select_label_separately() -> None:
+    playwright = pytest.importorskip("playwright.async_api")
+    events: list[dict[str, Any]] = []
+
+    async def record(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    async with playwright.async_playwright() as runtime:
+        browser = await runtime.chromium.launch()
+        context = await browser.new_context()
+        await context.expose_binding("workflowUseRecord", lambda _, event: record(event))
+        await context.add_init_script(CAPTURE_SCRIPT)
+        page = await context.new_page()
+        fixture = (
+            '<select aria-label="Status" multiple><option value="p">Paid, in full</option>'
+            '<option value="o">Overdue</option><option value="d">Draft</option></select>'
+        )
+        await page.goto("data:text/html," + quote(fixture))
+        await page.get_by_label("Status").select_option(["p", "o"])
+        await asyncio.sleep(0.05)
+        await browser.close()
+
+    selects = [event for event in events if event["type"] == "select_change"]
+    assert json.loads(selects[-1]["value"]) == ["Paid, in full", "Overdue"]

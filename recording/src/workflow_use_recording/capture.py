@@ -28,10 +28,16 @@ CAPTURE_SCRIPT = r"""
       `${labelText(node)} ${node.getAttribute("placeholder") || ""}`).toLowerCase();
     // Most specific signal first: the input type, then explicit autocomplete and username hints.
     const oneTime = /one.?time|otp|passcode|verification.?code|2fa|mfa|authenticator/.test(hint);
-    if (input?.type === "password") return /one-time-code/.test(input.autocomplete) ? "otp" : "password";
+    if (input?.type === "password" || /(?:current|new)-password/.test(input?.autocomplete || "")) {
+      return /one-time-code/.test(input?.autocomplete || "") ? "otp" : "password";
+    }
+    // A "show password" toggle turns the field into type=text; its hints still say password.
+    if (/pass.?word/.test(hint)) return "password";
     if (/\b(?:username|email)\b/.test(input?.autocomplete || "") || /user.?name/.test(hint)) return "username";
     if (oneTime) return "otp";
-    if (/api.?key|\bauth\b|credential|jwt|secret|token/.test(hint)) return "password";
+    const secretHint =
+      /api.?key|\bauth\b|credential|jwt|secret|token|\bpin\b|passphrase|security.?answer|cvv|cvc|card.?number/;
+    if (secretHint.test(hint)) return "password";
     const passwordInForm = Boolean(node.closest("form")?.querySelector('input[type="password"]'));
     if (passwordInForm || /user.?name|login/.test(hint)) return "username";
     return null;
@@ -72,12 +78,20 @@ CAPTURE_SCRIPT = r"""
       emit({ type: "credential", value: kind, target: target(node), targetKey: targetKey(node) });
       return;
     }
-    emit({ type: "input", target: target(node), targetKey: targetKey(node) });
+    // Ordinary fields keep what was typed so the agent can repeat it; sign-in fields never do.
+    // Kept verbatim (whitespace and line breaks matter); oversized text is flagged, not cut.
+    const typed = String((node instanceof HTMLElement && node.isContentEditable ? node.innerText : node.value) ?? "");
+    emit(typed.length > 2000
+      ? { type: "input", target: target(node), targetKey: targetKey(node), tooLong: true }
+      : { type: "input", target: target(node), targetKey: targetKey(node), value: typed });
   }, true);
   document.addEventListener("change", (event) => {
     const node = event.target;
     if (!(node instanceof HTMLSelectElement)) return;
-    emit({ type: "select_change", target: target(node) });
+    // A multi-select keeps each label as its own JSON array item so commas inside labels stay unambiguous.
+    const labels = Array.from(node.selectedOptions).map((option) => semanticText(option.label || option.text, 240));
+    const value = node.multiple ? JSON.stringify(labels) : labels[0] || "";
+    emit({ type: "select_change", target: target(node), value });
   }, true);
   document.addEventListener("keydown", (event) => {
     const node = event.target;

@@ -446,10 +446,6 @@ select {
   opacity: 1;
 }
 
-.review-step-blocked {
-  background: #fff8f2;
-}
-
 .review-step .review-step-note {
   display: flex;
   flex-wrap: wrap;
@@ -462,11 +458,6 @@ select {
   font-size: 0.82rem;
 }
 
-.review-step-blocked .review-step-note {
-  color: #8a3d20;
-  font-weight: 600;
-}
-
 .setup-panel .review-step-kind {
   display: flex;
   align-items: center;
@@ -474,6 +465,31 @@ select {
   color: #363b50;
   font-size: 0.82rem;
   font-weight: 650;
+}
+
+.setup-panel .review-step-value {
+  display: flex;
+  flex: 1 1 260px;
+  max-width: 480px;
+  align-items: center;
+  gap: 6px;
+  color: #363b50;
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.setup-panel .review-step-value input,
+.setup-panel .review-step-value textarea {
+  min-height: 28px;
+  padding: 2px 8px;
+  font-size: 0.86rem;
+  font-weight: 400;
+}
+
+.setup-panel .review-step-value textarea {
+  min-height: 28px;
+  resize: vertical;
+  field-sizing: content;
 }
 
 .setup-panel .review-step-kind select {

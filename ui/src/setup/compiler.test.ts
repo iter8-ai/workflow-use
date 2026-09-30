@@ -57,19 +57,59 @@ test("compiles recorder steps with serialized null optional fields", () => {
   assert.doesNotThrow(() => compileAgent(draft));
 });
 
-test("rejects every form-entry step and declared input", () => {
-  const inputStep = baseDraft();
-  inputStep.steps.push({ id: "input", type: "input", description: "Enter report month", target: "Month" });
+test("compiles typed text and chosen options as exact values", () => {
+  const draft = baseDraft();
+  draft.steps.push(
+    { id: "search", type: "input", description: "Search for the statement", target: "Search", value: "bank statement export" },
+    { id: "clear", type: "input", description: "Clear the filter", target: "Filter", value: "" },
+    { id: "month", type: "select_change", description: "Choose the month", target: "Month", value: "September {2026}" },
+  );
 
+  const prompt = compileAgent(draft).stages[0]?.type === "agent" ? (compileAgent(draft).stages[0] as { prompt: string }).prompt : "";
+
+  assert.match(prompt, /Search for the statement: replace any text in Search with exactly "bank statement export"\./);
+  assert.match(prompt, /Clear the filter: clear Filter so it is empty\./);
+  assert.match(prompt, /Choose the month: in Month, choose exactly "September \{\{2026\}\}"\./);
+});
+
+test("compiles a multi-select as separate options", () => {
+  const draft = baseDraft();
+  draft.steps.push({ id: "status", type: "select_change", description: "Choose statuses", target: "Status", value: JSON.stringify(["Paid, in full", "Overdue"]) });
+  const prompt = (compileAgent(draft).stages[0] as { prompt: string }).prompt;
+  assert.match(prompt, /in Status, select exactly these options and no others: "Paid, in full", "Overdue"\./);
+});
+
+test("requires an option for a choice step and rejects declared inputs", () => {
   const selectStep = baseDraft();
   selectStep.steps.push({ id: "select", type: "select_change", description: "Choose month", target: "Month" });
+  assert.throws(() => compileAgent(selectStep), /which option to choose/);
 
   const declaredInput = baseDraft();
   declaredInput.inputs = [{ name: "month", label: "Month", type: "text", example: "September" }];
+  assert.throws(() => compileAgent(declaredInput), /reusable inputs are not supported/i);
+});
 
-  for (const draft of [inputStep, selectStep, declaredInput]) {
-    assert.throws(() => compileAgent(draft), /form-entry tasks are not supported/i);
+test("keeps typed text verbatim and rejects missing or secret-field values", () => {
+  const multiline = baseDraft();
+  multiline.steps.push({ id: "note", type: "input", description: "Fill in Notes", target: "Notes", value: "Line one\n  indented" });
+  const prompt = (compileAgent(multiline).stages[0] as { prompt: string }).prompt;
+  assert.ok(prompt.includes(JSON.stringify("Line one\n  indented")));
+
+  const missing = baseDraft();
+  missing.steps.push({ id: "note", type: "input", description: "Fill in Notes", target: "Notes", value: null });
+  assert.throws(() => compileAgent(missing), /does not say what to type/);
+
+  for (const target of ["PIN", "Passphrase", "Card number"]) {
+    const secret = baseDraft();
+    secret.steps.push({ id: "pin", type: "input", description: `Fill in ${target}`, target, value: "sunflower" });
+    assert.throws(() => compileAgent(secret), /Mark it as a saved sign-in field/, target);
   }
+});
+
+test("rejects a credential typed into an ordinary field", () => {
+  const draft = baseDraft();
+  draft.steps.push({ id: "note", type: "input", description: "Fill in Notes", target: "Notes", value: "password: hunter2" });
+  assert.throws(() => compileAgent(draft), /Remove sign-in details/);
 });
 
 test("rejects reusable input references", () => {

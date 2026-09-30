@@ -1,6 +1,6 @@
 # Workflow Use agent setup
 
-This public fork adds a demonstration-based setup flow for computer-use agents. Users describe a task, demonstrate a non-form-entry task in a remote browser, edit the captured steps, and test before scheduling.
+This public fork adds a demonstration-based setup flow for computer-use agents. Users describe a task, demonstrate a task in a remote browser, edit the captured steps, and test before scheduling.
 
 The default `ui/` app is an embedded authoring interface. Its host handles authentication, agent storage, test execution, and scheduling through an origin-checked message bridge. The separate `recording/` service captures browser actions. It does not run agents. Compiled configurations select the computer-use engine explicitly.
 
@@ -38,7 +38,7 @@ The image serves `ui/dist/` on port 8080. Its Content Security Policy permits em
 
 For an optional deployment smoke check, open `/setup-check.html` and download its synthetic CSV. This page is unlinked and is not part of the customer setup wizard.
 
-Start with a website address without query parameters or fragments; the compiler rejects either so they cannot enter a saved configuration or agent prompt. Navigate to the required page inside the demonstration browser. Recordings are ephemeral and expire after 15 minutes. Form-entry tasks are not supported in this release. Sign-in is: each demonstrated sign-in field compiles to an exact `$username`, `$password`, or `$otp` placeholder. The host collects the values in its own dialog, stores them as encrypted agent parameters, and tells the setup page only which kinds are saved. The web agent engine substitutes them while typing, so the model and the setup page never receive them.
+Start with a website address without query parameters or fragments; the compiler rejects either so they cannot enter a saved configuration or agent prompt. Navigate to the required page inside the demonstration browser. Recordings are ephemeral and expire after 15 minutes. Typed text and dropdown choices are recorded and repeated as exact values; they can be edited in review. Sign-in is different: each demonstrated sign-in field compiles to an exact `$username`, `$password`, or `$otp` placeholder. The host collects the values in its own dialog, stores them as encrypted agent parameters, and tells the setup page only which kinds are saved. The web agent engine substitutes them while typing, so the model and the setup page never receive them.
 
 Schedules repeat the tested workflow. Relative dates such as “previous month” are not resolved automatically. A successful test still requires the user to inspect the result before scheduling.
 
