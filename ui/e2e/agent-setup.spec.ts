@@ -156,10 +156,10 @@ test("requires a form-entry step to be removed before compiling", async ({ page 
   const setup = page.frameLocator("iframe");
 
   await describeAndDemonstrate(setup);
-  await expect(setup.getByText("Form-entry tasks are not supported in this release.")).toBeVisible();
+  await expect(setup.getByText("Mark it as a sign-in field or remove this step.")).toBeVisible();
   await setup.getByRole("button", { name: "Continue to test" }).click();
   await expect(setup.getByRole("alert")).toContainText("Remove input and select steps");
-  await setup.locator(".review-step").filter({ hasText: "Choose the statement month" }).getByRole("button", { name: "Remove step" }).click();
+  await setup.getByRole("button", { name: "Remove step 2" }).click();
   await setup.getByRole("button", { name: "Continue to test" }).click();
   await expect(setup.getByRole("heading", { name: "Test a fresh run" })).toBeVisible();
 });
@@ -187,6 +187,8 @@ test("turns a demonstrated form field into a saved sign-in field", async ({ page
   const setup = page.frameLocator("iframe");
 
   await describeAndDemonstrate(setup);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.screenshot({ path: "e2e-artifacts/review-sign-in.png" });
   await setup.getByLabel("Step 2 sign-in field").selectOption("password");
   await setup.getByRole("button", { name: "Continue to test" }).click();
   await setup.getByRole("button", { name: "Run test" }).click();
@@ -250,6 +252,20 @@ test("uses new request IDs after the setup iframe reloads", async ({ page }) => 
   expect(requestIds[0]).not.toBe(requestIds[1]);
 });
 
+test("fits a ten-step review on one desktop screen", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`${baseUrl}/host?scenario=ten-steps`);
+  const setup = page.frameLocator("iframe");
+
+  await describeAndDemonstrate(setup);
+  await expect(setup.getByLabel("Step 10 description")).toBeInViewport();
+  await expect(setup.getByRole("button", { name: "Continue to test" })).toBeInViewport();
+  await setup.getByLabel("Step 4 description").hover();
+  await page.screenshot({ path: "e2e-artifacts/review-ten-steps.png" });
+  await page.setViewportSize({ width: 480, height: 900 });
+  await page.screenshot({ path: "e2e-artifacts/review-narrow.png" });
+});
+
 test("captures the controlled setup states for visual review", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 980 });
   await page.goto(`${baseUrl}/host?scenario=success`);
@@ -308,6 +324,7 @@ function hostPage(url: string): string {
   const steps = [
     { id: "open-reports", type: "click", description: "Open the reports section", target: "Reports", expectedOutcome: "The reports list is visible" },
     ...(scenario === "form-entry" ? [{ id: "choose-month", type: "input", description: "Choose the statement month", target: "Statement month" }] : []),
+    ...(scenario === "ten-steps" ? Array.from({ length: 8 }, (_, index) => ({ id: "filter-" + index, type: "click", description: "Apply report filter " + (index + 1), target: "Filter " + (index + 1), expectedOutcome: index % 2 ? "The filtered list is visible" : null })) : []),
     ...(signIn ? [
       { id: "user", type: "credential", description: "Enter the saved username in Email", target: "Email", value: "username" },
       { id: "pass", type: "credential", description: "Enter the saved password in Password", target: "Password", value: "password" },
