@@ -32,12 +32,12 @@ async def test_playwright_capture_records_visible_click_and_compacts_input() -> 
 
     assert any(event["type"] == "input" and event["target"] == "Invoice number" for event in events)
     assert any(event["type"] == "click" and event["target"] == "Save invoice" for event in events)
-    assert all("value" not in event for event in events if event["type"] == "input")
-    assert all("generic-synthetic-secret" not in str(event) for event in events)
+    inputs = [event for event in events if event["type"] == "input"]
+    assert inputs[-1]["value"] == "generic-synthetic-secret"
 
 
 @pytest.mark.asyncio
-async def test_capture_never_reads_generic_input_values() -> None:
+async def test_capture_records_typed_text_of_ordinary_fields() -> None:
     playwright = pytest.importorskip("playwright.async_api")
     events: list[dict[str, Any]] = []
     value = "generic-synthetic-secret"
@@ -57,9 +57,7 @@ async def test_capture_never_reads_generic_input_values() -> None:
         await browser.close()
 
     inputs = [event for event in events if event.get("type") == "input"]
-    assert inputs
-    assert all("value" not in event for event in inputs)
-    assert all(value not in str(event) for event in events)
+    assert inputs[-1]["value"] == value
 
 
 @pytest.mark.asyncio
@@ -85,7 +83,6 @@ async def test_capture_never_uses_unlabeled_editable_text_as_a_target() -> None:
     inputs = [event for event in events if event.get("type") == "input"]
     assert inputs
     assert all(event["target"] == "div" for event in inputs)
-    assert all(value not in str(event) for event in events)
 
 
 @pytest.mark.asyncio
@@ -157,7 +154,7 @@ async def test_capture_blocks_plain_text_token_and_contenteditable_credentials()
 
 
 @pytest.mark.asyncio
-async def test_capture_records_select_target_without_selected_value() -> None:
+async def test_capture_records_select_target_and_chosen_label() -> None:
     playwright = pytest.importorskip("playwright.async_api")
     events: list[dict[str, Any]] = []
 
@@ -183,8 +180,7 @@ async def test_capture_records_select_target_without_selected_value() -> None:
         await browser.close()
 
     select_events = [event for event in events if event["type"] == "select_change"]
-    assert select_events == [{"type": "select_change", "target": "Status"}]
-    assert all("Paid invoices" not in str(event) for event in events)
+    assert select_events == [{"type": "select_change", "target": "Status", "value": "Paid invoices"}]
     assert [event["value"] for event in events if event["type"] == "scroll"] == ["down", "up"]
 
 

@@ -72,12 +72,15 @@ CAPTURE_SCRIPT = r"""
       emit({ type: "credential", value: kind, target: target(node), targetKey: targetKey(node) });
       return;
     }
-    emit({ type: "input", target: target(node), targetKey: targetKey(node) });
+    // Ordinary fields keep what was typed so the agent can repeat it; sign-in fields never do.
+    const typed = node instanceof HTMLElement && node.isContentEditable ? node.innerText : node.value;
+    emit({ type: "input", target: target(node), targetKey: targetKey(node), value: semanticText(typed, 500) });
   }, true);
   document.addEventListener("change", (event) => {
     const node = event.target;
     if (!(node instanceof HTMLSelectElement)) return;
-    emit({ type: "select_change", target: target(node) });
+    const chosen = Array.from(node.selectedOptions).map((option) => option.label || option.text).join(", ");
+    emit({ type: "select_change", target: target(node), value: semanticText(chosen, 240) });
   }, true);
   document.addEventListener("keydown", (event) => {
     const node = event.target;

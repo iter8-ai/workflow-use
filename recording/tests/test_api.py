@@ -182,13 +182,12 @@ async def test_typing_is_compacted_and_late_events_are_ignored_after_stop() -> N
     assert session.closed
     inputs = [step for step in read.json()["steps"] if step["type"] == "input"]
     assert len(inputs) == 1
-    assert inputs[0].get("value") is None
-    assert "generic-synthetic-secret" not in read.text
+    assert inputs[0]["value"] == "generic-synthetic-secret-2"
     assert all(step.get("target") != "Submit" for step in read.json()["steps"])
 
 
 @pytest.mark.asyncio
-async def test_input_values_are_never_persisted() -> None:
+async def test_input_values_are_kept_for_replay() -> None:
     provider = FakeProvider()
     value = "generic-synthetic-secret"
     with client(provider) as http:
@@ -197,12 +196,11 @@ async def test_input_values_are_never_persisted() -> None:
         response = http.get(f"/recordings/{recording['id']}", headers=headers())
 
     inputs = [step for step in response.json()["steps"] if step["type"] == "input"]
-    assert inputs[0].get("value") is None
-    assert value not in response.text
+    assert inputs[0]["value"] == value
 
 
 @pytest.mark.asyncio
-async def test_selected_option_values_are_never_persisted() -> None:
+async def test_selected_option_labels_are_kept_for_replay() -> None:
     provider = FakeProvider()
     value = "generic-synthetic-secret"
     with client(provider) as http:
@@ -211,9 +209,8 @@ async def test_selected_option_values_are_never_persisted() -> None:
         response = http.get(f"/recordings/{recording['id']}", headers=headers())
 
     selects = [step for step in response.json()["steps"] if step["type"] == "select_change"]
-    assert selects[0].get("value") is None
-    assert selects[0]["description"] == "Choose option in Status"
-    assert value not in response.text
+    assert selects[0]["value"] == value
+    assert selects[0]["description"] == f"Choose {value} in Status"
 
 
 @pytest.mark.asyncio
@@ -278,7 +275,7 @@ def test_new_recording_evicts_stopped_capture_when_memory_is_full() -> None:
 
 
 @pytest.mark.asyncio
-async def test_plain_text_input_event_never_persists_its_value() -> None:
+async def test_typing_into_a_secret_labelled_field_keeps_only_the_kind() -> None:
     provider = FakeProvider()
     with client(provider) as http:
         recording = create_recording(http)
@@ -288,6 +285,7 @@ async def test_plain_text_input_event_never_persists_its_value() -> None:
         response = http.get(f"/recordings/{recording['id']}", headers=headers())
 
     assert "credential-that-must-not-persist" not in response.text
+    assert [(step["type"], step["value"]) for step in response.json()["steps"][1:]] == [("credential", "password")]
 
 
 def test_create_rejects_query_and_fragment_urls_without_creating_a_recording() -> None:
@@ -363,4 +361,4 @@ async def test_typing_with_same_visible_label_in_distinct_fields_does_not_merge(
         response = http.get(f"/recordings/{recording['id']}", headers=headers())
 
     inputs = [step for step in response.json()["steps"] if step["type"] == "input"]
-    assert [step.get("value") for step in inputs] == [None, None]
+    assert [step.get("value") for step in inputs] == ["10", "20"]

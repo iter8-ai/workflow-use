@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -15,6 +16,12 @@ from .security import safe_public_url
 MAX_STEPS = 200
 MAX_FIELD_LENGTH = 2000
 CREDENTIAL_KINDS = frozenset({"username", "password", "otp"})
+# Backstop for the page script: typing into a field labelled like a secret never keeps the text.
+_SECRET_TARGETS = (
+    (re.compile(r"one.?time|\botp\b|passcode|verification.?code|2fa|mfa|authenticator", re.I), "otp"),
+    (re.compile(r"user.?name", re.I), "username"),
+    (re.compile(r"pass.?word|api.?key|\bauth\b|credential|jwt|secret|token", re.I), "password"),
+)
 STEP_TYPES = frozenset({"navigation", "click", "input", "credential", "select_change", "key_press", "scroll", "agent"})
 CAPTURE_LIMIT_REASON = "The demonstration reached the 200-step capture limit. Start a shorter demonstration."
 logger = logging.getLogger(__name__)
@@ -245,7 +252,11 @@ def _to_step(event: dict[str, Any]) -> SetupStep | None:
     if event_type not in STEP_TYPES:
         return None
     target = _text(event.get("target"), maximum=240)
-    value = None if event_type in {"input", "select_change"} else _text(event.get("value"))
+    value = _text(event.get("value"), maximum=500)
+    if event_type == "input" and target:
+        kind = next((kind for pattern, kind in _SECRET_TARGETS if pattern.search(target)), None)
+        if kind is not None:
+            event_type, value = "credential", kind
     # A credential step carries only its kind; anything else is dropped.
     if event_type == "credential" and value not in CREDENTIAL_KINDS:
         return None

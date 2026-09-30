@@ -57,19 +57,35 @@ test("compiles recorder steps with serialized null optional fields", () => {
   assert.doesNotThrow(() => compileAgent(draft));
 });
 
-test("rejects every form-entry step and declared input", () => {
-  const inputStep = baseDraft();
-  inputStep.steps.push({ id: "input", type: "input", description: "Enter report month", target: "Month" });
+test("compiles typed text and chosen options as exact values", () => {
+  const draft = baseDraft();
+  draft.steps.push(
+    { id: "search", type: "input", description: "Search for the statement", target: "Search", value: "bank statement export" },
+    { id: "clear", type: "input", description: "Clear the filter", target: "Filter", value: "" },
+    { id: "month", type: "select_change", description: "Choose the month", target: "Month", value: "September {2026}" },
+  );
 
+  const prompt = compileAgent(draft).stages[0]?.type === "agent" ? (compileAgent(draft).stages[0] as { prompt: string }).prompt : "";
+
+  assert.match(prompt, /Search for the statement: replace any text in Search with exactly "bank statement export"\./);
+  assert.match(prompt, /Clear the filter: clear Filter so it is empty\./);
+  assert.match(prompt, /Choose the month: in Month, choose exactly "September \{\{2026\}\}"\./);
+});
+
+test("requires an option for a choice step and rejects declared inputs", () => {
   const selectStep = baseDraft();
   selectStep.steps.push({ id: "select", type: "select_change", description: "Choose month", target: "Month" });
+  assert.throws(() => compileAgent(selectStep), /which option to choose/);
 
   const declaredInput = baseDraft();
   declaredInput.inputs = [{ name: "month", label: "Month", type: "text", example: "September" }];
+  assert.throws(() => compileAgent(declaredInput), /reusable inputs are not supported/i);
+});
 
-  for (const draft of [inputStep, selectStep, declaredInput]) {
-    assert.throws(() => compileAgent(draft), /form-entry tasks are not supported/i);
-  }
+test("rejects a credential typed into an ordinary field", () => {
+  const draft = baseDraft();
+  draft.steps.push({ id: "note", type: "input", description: "Fill in Notes", target: "Notes", value: "password: hunter2" });
+  assert.throws(() => compileAgent(draft), /Remove sign-in details/);
 });
 
 test("rejects reusable input references", () => {

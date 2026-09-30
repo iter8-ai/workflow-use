@@ -110,7 +110,7 @@ function validateDraft(draft: SetupDraft): void {
     throw new Error(`A setup can contain at most ${maximumSteps} demonstrated steps.`);
   }
   if (draft.inputs.length > 0) {
-    throw new Error("Form-entry tasks are not supported in this release. Remove input and select steps.");
+    throw new Error("Reusable inputs are not supported in this release.");
   }
 
   const stepIds = new Set<string>();
@@ -124,8 +124,8 @@ function validateDraft(draft: SetupDraft): void {
     stepIds.add(step.id);
 
     validateStep(step);
-    if (step.type === "input" || step.type === "select_change") {
-      throw new Error("Form-entry tasks are not supported in this release. Remove input and select steps.");
+    if (step.type === "select_change" && optionalStepText(step.value) === undefined) {
+      throw new Error(`Step ${step.id} does not say which option to choose. Enter the option or remove the step.`);
     }
     if (step.inputName !== undefined) {
       throw new Error("Reusable inputs are not supported in this release.");
@@ -186,8 +186,15 @@ function formatInstruction(
     const field = target ?? "the sign-in field";
     return `${description}: type exactly $${step.value} into ${field}. It is replaced with the saved ${step.value} while typing.`;
   }
-  if (step.type === "input" || step.type === "select_change") {
-    return target === undefined ? `Enter ${value} to ${intent}.` : `Set ${target} to ${value} to ${intent}.`;
+  // Form values are fixed text the agent repeats on every run.
+  const field = target ?? "the field";
+  if (step.type === "input") {
+    return !step.value
+      ? `${description}: clear ${field} so it is empty.`
+      : `${description}: replace any text in ${field} with exactly ${quoted(step.value ?? "")}.`;
+  }
+  if (step.type === "select_change") {
+    return `${description}: in ${field}, choose exactly ${quoted(step.value ?? "")}.`;
   }
   if (step.type === "key_press") {
     return value === undefined ? `Complete this action: ${description}.` : `Press ${value} to ${intent}.`;
@@ -262,6 +269,10 @@ function looksLikeRawReplay(value: string | null | undefined): boolean {
 
 function escapeLiteral(value: string): string {
   return value.replace(/\{/g, "{{").replace(/\}/g, "}}");
+}
+
+function quoted(value: string): string {
+  return escapeLiteral(JSON.stringify(value));
 }
 
 function continuation(description: string, literalValue: string | undefined): string {

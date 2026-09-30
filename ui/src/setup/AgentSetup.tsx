@@ -489,16 +489,18 @@ function Demonstrate(props: { recording: Recording | null; steps: SetupStep[]; l
 }
 
 function Review(props: { steps: SetupStep[]; busy: boolean; onUpdateStep(id: string, updates: Partial<SetupStep>): void; onRemoveStep(id: string): void; onBack(): void; onContinue(): void }): JSX.Element {
-  function setSignInKind(step: SetupStep, kind: CredentialKind | ""): void {
+  function setFieldKind(step: SetupStep, kind: CredentialKind | ""): void {
+    const field = step.target ?? "the field";
+    // Switching to a sign-in field drops the typed value; it is saved separately in Reiterate.
     props.onUpdateStep(step.id, kind === ""
-      ? { type: "input", value: null }
-      : { type: "credential", value: kind, description: `Enter the saved ${credentialLabel(kind)} in ${step.target ?? "the sign-in field"}` });
+      ? { type: "input", value: "", description: `Fill in ${field}` }
+      : { type: "credential", value: kind, description: `Enter the saved ${credentialLabel(kind)} in ${field}` });
   }
   return (
     <div className="setup-panel">
       <div>
         <h2>Review the draft</h2>
-        <p>Make each instruction clear. Sign-in fields use details you save in Reiterate; other form entry is not supported yet.</p>
+        <p>Make each instruction clear. Typed text and choices are repeated on every run; sign-in fields use details you save in Reiterate.</p>
       </div>
       <div className="review-list">
         <div className="review-columns" aria-hidden="true">
@@ -508,32 +510,37 @@ function Review(props: { steps: SetupStep[]; busy: boolean; onUpdateStep(id: str
         </div>
         <ol>
           {props.steps.map((step, index) => {
-            const formEntry = step.type === "input" || step.type === "select_change";
-            const signIn = step.type === "input" || step.type === "credential";
+            const typedField = step.type === "input" || step.type === "credential";
             return (
-              <li className={formEntry ? "review-step review-step-blocked" : "review-step"} key={step.id}>
+              <li className="review-step" key={step.id}>
                 <span className="review-step-number">{index + 1}</span>
                 <textarea rows={1} aria-label={`Step ${index + 1} description`} value={step.description} onChange={(event) => props.onUpdateStep(step.id, { description: event.target.value })} />
                 <textarea rows={1} aria-label={`Step ${index + 1} expected outcome`} placeholder="Add what should be visible" value={step.expectedOutcome ?? ""} onChange={(event) => props.onUpdateStep(step.id, { expectedOutcome: event.target.value || undefined })} />
                 <button type="button" className="icon-button" aria-label={`Remove step ${index + 1}`} title="Remove step" onClick={() => props.onRemoveStep(step.id)} disabled={props.busy}>
                   <svg aria-hidden="true" viewBox="0 0 16 16" width="16" height="16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg>
                 </button>
-                {signIn && (
+                {(typedField || step.type === "select_change") && (
                   <div className="review-step-note">
-                    <label className="review-step-kind">
-                      {step.type === "credential" ? "Saved sign-in detail" : "Sign-in field?"}
-                      <select aria-label={`Step ${index + 1} sign-in field`} value={step.type === "credential" ? step.value ?? "" : ""} onChange={(event) => setSignInKind(step, event.target.value as CredentialKind | "")}>
-                        <option value="">{step.type === "credential" ? "Not a sign-in field" : "No"}</option>
-                        <option value="username">Username</option>
-                        <option value="password">Password</option>
-                        <option value="otp">One-time code</option>
-                      </select>
-                    </label>
-                    {formEntry && <span>Mark it as a sign-in field or remove this step.</span>}
+                    {typedField && (
+                      <label className="review-step-kind">
+                        Field
+                        <select aria-label={`Step ${index + 1} field type`} value={step.type === "credential" ? step.value ?? "" : ""} onChange={(event) => setFieldKind(step, event.target.value as CredentialKind | "")}>
+                          <option value="">Text</option>
+                          <option value="username">Saved username</option>
+                          <option value="password">Saved password</option>
+                          <option value="otp">Saved one-time code</option>
+                        </select>
+                      </label>
+                    )}
+                    {step.type !== "credential" && (
+                      <label className="review-step-value">
+                        {step.type === "select_change" ? "Choose" : "Type"}
+                        <input aria-label={`Step ${index + 1} ${step.type === "select_change" ? "option" : "text"}`} value={step.value ?? ""} placeholder={step.type === "select_change" ? "Option to choose" : "Leave empty to clear the field"} onChange={(event) => props.onUpdateStep(step.id, { value: event.target.value })} autoComplete="off" />
+                      </label>
+                    )}
                     {step.type === "credential" && <span>Entered in Reiterate before the test; never part of these instructions.</span>}
                   </div>
                 )}
-                {step.type === "select_change" && <p className="review-step-note">Remove this form-entry step before continuing.</p>}
               </li>
             );
           })}
