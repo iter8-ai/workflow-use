@@ -274,7 +274,7 @@ test("compiles each done-when kind to the contracted stage list", () => {
   const draft = baseDraft();
   assert.deepEqual(compileAgent(draft).stages.map((stage) => stage.type), ["agent", "download"]);
   draft.doneWhen = { kind: "text", value: "Export sent" };
-  assert.deepEqual(compileAgent(draft).stages.slice(1), [{ type: "expect_text", text: "Export sent", timeout_ms: 10_000 }]);
+  assert.deepEqual(compileAgent(draft).stages.slice(1), [{ type: "expect_text", text: "Export sent" }]);
   draft.doneWhen = { kind: "email", address: "tenant+agent@reiterate.com", channelId: "channel-1" };
   assert.deepEqual(compileAgent(draft).stages.map((stage) => stage.type), ["agent"]);
   draft.doneWhen = { kind: "clicked", value: "Export payments" };

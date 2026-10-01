@@ -100,6 +100,67 @@ test("waits for a slow host schedule choice without timing out", async ({ page }
   await expect.poll(() => page.evaluate(() => window.__savedSchedule)).toBe("30 9 * * *");
 });
 
+test("retries the same schedule after the host saves it but loses its reply", async ({ page }) => {
+  await page.clock.install();
+  await page.goto(`${baseUrl}/host?scenario=lost-schedule-reply`);
+  const setup = page.frameLocator("iframe");
+
+  await completeToTest(setup);
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await expect(setup.getByText("The agent completed every step")).toBeVisible();
+  await setup.getByRole("button", { name: "Continue to schedule" }).click();
+  await expect.poll(() => page.evaluate(() => window.__scheduleRequests)).toHaveLength(1);
+  await expect.poll(() => page.evaluate(() => window.__savedSchedule)).toBe("30 9 * * *");
+  await page.clock.fastForward(45_001);
+  await expect(setup.getByRole("alert")).toContainText("The request timed out. Retry to continue.");
+  await expect(setup.getByRole("heading", { name: "Your agent is ready" })).toHaveCount(0);
+
+  await setup.getByRole("button", { name: "Continue to schedule" }).click();
+  await expect(setup.getByRole("heading", { name: "Your agent is ready" })).toBeVisible();
+  expect(await page.evaluate(() => window.__chooseScheduleCalls)).toHaveLength(1);
+  const requests = await page.evaluate(() => window.__scheduleRequests);
+  expect(requests).toEqual([
+    { agentId: "agent-1", runId: "run-1", arguments: {}, cron: "30 9 * * *" },
+    { agentId: "agent-1", runId: "run-1", arguments: {}, cron: "30 9 * * *" },
+  ]);
+  expect(await page.evaluate(() => window.__scheduleArguments)).toEqual([{}]);
+});
+
+test("retries a rejected schedule save with the selected schedule", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=schedule-save-failure`);
+  const setup = page.frameLocator("iframe");
+
+  await completeToTest(setup);
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await expect(setup.getByText("The agent completed every step")).toBeVisible();
+  await setup.getByRole("button", { name: "Continue to schedule" }).click();
+  await expect(setup.getByRole("alert")).toContainText("Schedule save failed.");
+  expect(await page.evaluate(() => window.__savedSchedule)).toBeUndefined();
+  await setup.getByRole("button", { name: "Continue to schedule" }).click();
+  await expect(setup.getByRole("heading", { name: "Your agent is ready" })).toBeVisible();
+  expect(await page.evaluate(() => window.__chooseScheduleCalls)).toHaveLength(1);
+  expect(await page.evaluate(() => window.__scheduleRequests)).toHaveLength(2);
+});
+
+test("chooses a new schedule after a new test replaces a rejected save's run", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=schedule-save-failure`);
+  const setup = page.frameLocator("iframe");
+
+  await completeToTest(setup);
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await expect(setup.getByText("The agent completed every step")).toBeVisible();
+  await setup.getByRole("button", { name: "Continue to schedule" }).click();
+  await expect(setup.getByRole("alert")).toContainText("Schedule save failed.");
+  await setup.getByRole("button", { name: "Run test again" }).click();
+  await expect(setup.getByText("The agent completed every step")).toBeVisible();
+  await setup.getByRole("button", { name: "Continue to schedule" }).click();
+  await expect(setup.getByRole("heading", { name: "Your agent is ready" })).toBeVisible();
+  expect(await page.evaluate(() => window.__chooseScheduleCalls)).toHaveLength(2);
+  expect(await page.evaluate(() => window.__scheduleRequests.at(-1))).toEqual({
+    agentId: "agent-1", runId: "run-2", arguments: {}, cron: "30 9 * * *",
+  });
+});
+
 test("confirms before closing work that has not been saved", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=success`);
   const setup = page.frameLocator("iframe");
@@ -326,7 +387,7 @@ test("uses custom text as the completion stage", async ({ page }) => {
   await expect(setup.getByText("The agent completed every step")).toBeVisible();
   const saved = await page.evaluate(() => window.__savedAgents);
   expect(saved.at(-1).draft.doneWhen).toEqual({ kind: "text", value: "Export sent" });
-  expect(saved.at(-1).config.stages.at(-1)).toEqual({ type: "expect_text", text: "Export sent", timeout_ms: 10000 });
+  expect(saved.at(-1).config.stages.at(-1)).toEqual({ type: "expect_text", text: "Export sent" });
 });
 
 test("keeps custom done-when editable after validation fails and requires a fresh test", async ({ page }) => {
@@ -669,6 +730,7 @@ function hostPage(url: string): string {
   window.__allowedSenders = [];
   window.__emailArrivals = [];
   window.__scheduleArguments = [];
+  window.__scheduleRequests = [];
   window.__closeRequests = [];
   window.__savedAgents = [];
   window.__credentialRequests = [];
@@ -732,9 +794,22 @@ function hostPage(url: string): string {
     } else if (request.method === "allowEmailSender") { window.__allowedSenders.push(request.params); send(undefined); }
     else if (request.method === "chooseSchedule") {
       window.__chooseScheduleCalls.push(request.params);
-      if (scenario === "slow-schedule") setTimeout(() => send({ cron: "30 9 * * *" }), 90_000);
+      if (window.__savedSchedule) fail("This agent is already scheduled.");
+      else if (scenario === "slow-schedule") setTimeout(() => send({ cron: "30 9 * * *" }), 90_000);
       else send(scenario === "cancel-schedule" ? null : { cron: scenario === "manual-schedule" ? "" : "30 9 * * *" });
-    } else if (request.method === "scheduleAgent") { window.__savedSchedule = request.params.cron; window.__scheduleArguments.push(request.params.arguments); send(undefined); }
+    } else if (request.method === "scheduleAgent") {
+      window.__scheduleRequests.push(request.params);
+      if (window.__savedSchedule) {
+        const first = window.__scheduleRequests[0];
+        if (first.runId === request.params.runId && first.cron === request.params.cron) send(undefined);
+        else fail("This agent is already scheduled.");
+      } else if (scenario === "schedule-save-failure" && window.__scheduleRequests.length === 1) fail("Schedule save failed.");
+      else {
+        window.__savedSchedule = request.params.cron;
+        window.__scheduleArguments.push(request.params.arguments);
+        if (scenario !== "lost-schedule-reply") send(undefined);
+      }
+    }
     else if (request.method === "close") { window.__closeRequests.push(request.params); send(undefined); }
     else fail("Unknown request");
   });

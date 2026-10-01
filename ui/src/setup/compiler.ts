@@ -50,7 +50,7 @@ type DownloadStage = {
   type: "download";
 };
 
-type ExpectTextStage = { type: "expect_text"; text: string; timeout_ms: number };
+type ExpectTextStage = { type: "expect_text"; text: string };
 
 type WorkflowStage = AgentStage | DownloadStage | ExpectTextStage;
 
@@ -114,7 +114,7 @@ export function compileAgent(draft: SetupDraft): CompiledAgent {
     stages: [
       { type: "agent", prompt, step_limit: 64 },
       ...(draft.doneWhen?.kind === "text"
-        ? [{ type: "expect_text" as const, text: draft.doneWhen.value.trim(), timeout_ms: 10_000 }]
+        ? [{ type: "expect_text" as const, text: draft.doneWhen.value.trim() }]
         : draft.doneWhen === undefined || draft.doneWhen.kind === "file" ? [{ type: "download" as const }] : []),
     ],
     parameters: {},

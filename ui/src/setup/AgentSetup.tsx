@@ -33,6 +33,7 @@ const screens: Array<{ id: Screen; label: string }> = [
 
 export default function AgentSetup() {
   const recordingRef = useRef<Recording | null>(null);
+  const selectedScheduleRef = useRef<{ runId: string; cron: string } | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const closeDialogRef = useRef<HTMLDivElement>(null);
   const [bridge, setBridge] = useState<ReturnType<typeof createHostBridge> | undefined>(undefined);
@@ -240,6 +241,7 @@ export default function AgentSetup() {
   }, [bridge, doneWhen, testRun?.id, testRun?.status, testRun?.startedAt]);
 
   function invalidateTest(): void {
+    selectedScheduleRef.current = null;
     setRevision((current) => current + 1);
     // Nothing to invalidate before the first test; the notice would only confuse on the Describe step.
     if (testRun !== null) setNotice("Changes require a new test.");
@@ -389,6 +391,7 @@ export default function AgentSetup() {
     setTestRun(null);
     setEmailStatus(null);
     setEmailFiles([]);
+    selectedScheduleRef.current = null;
     setBusy(true);
     try {
       if (!(await saveCredentials(requiredCredentials(nextSteps), false))) {
@@ -470,8 +473,12 @@ export default function AgentSetup() {
     if (!chooseScheduleAllowed) { setCron(""); setScreen("schedule"); return; }
     setBusy(true);
     try {
-      const selected = await bridge.request("chooseSchedule", { cron }, { timeoutMs: interactiveRequestTimeoutMs });
+      const selected = selectedScheduleRef.current?.runId === testRun.id
+        ? selectedScheduleRef.current
+        : await bridge.request("chooseSchedule", { cron }, { timeoutMs: interactiveRequestTimeoutMs });
       if (selected === null) return;
+      // A save can succeed without a reply. Retry the host's idempotent request for this run.
+      selectedScheduleRef.current = { runId: testRun.id, cron: selected.cron.trim() };
       if (selected.cron.trim() !== "") await bridge.request("scheduleAgent", {
         agentId,
         runId: testRun.id,
@@ -514,6 +521,7 @@ export default function AgentSetup() {
       setEmailFrom(null);
       setEmailFiles([]);
       setTestRun(null);
+      selectedScheduleRef.current = null;
       setScheduleSaved(false);
       setNotice(null);
       setRevision((current) => current + 1);
@@ -572,7 +580,7 @@ export default function AgentSetup() {
           {screen === "describe" && <Describe name={name} url={url} goal={goal} busy={busy || connecting} onName={(value) => setDraftField(setName, value)} onUrl={(value) => setDraftField(setUrl, value)} onGoal={(value) => setDraftField(setGoal, value)} onContinue={() => void startRecording()} />}
           {screen === "demonstrate" && <Demonstrate recording={recording} steps={steps} liveViewUrl={liveViewUrl} busy={busy} onStop={() => void stopRecording()} onReview={continueToReview} onReset={() => void reset()} />}
           {screen === "review" && <Review steps={steps} busy={busy} onUpdateStep={updateStep} onRemoveStep={removeStep} onBack={() => setScreen("demonstrate")} onContinue={continueToTest} />}
-          {screen === "test" && <Test credentials={requiredCredentials(steps)} steps={steps} url={url} emailRoutesAllowed={emailRoutesAllowed} textAllowed={chooseScheduleAllowed} doneWhen={doneWhen} emailStatus={emailStatus} emailFrom={emailFrom} emailFiles={emailFiles} canContinue={canContinue} onDoneWhen={chooseDoneWhen} onChooseEmail={() => void chooseEmailDoneWhen()} onAllowEmail={() => void allowEmailSender()} onChangeCredentials={() => void changeCredentials()} run={testRun} busy={busy} onRun={() => void runTest()} onSchedule={() => void schedule()} onBack={() => setScreen("review")} onEditStep={editTestStep} />}
+          {screen === "test" && <Test steps={steps} url={url} emailRoutesAllowed={emailRoutesAllowed} textAllowed={chooseScheduleAllowed} doneWhen={doneWhen} emailStatus={emailStatus} emailFrom={emailFrom} emailFiles={emailFiles} canContinue={canContinue} onDoneWhen={chooseDoneWhen} onChooseEmail={() => void chooseEmailDoneWhen()} onAllowEmail={() => void allowEmailSender()} onChangeCredentials={() => void changeCredentials()} run={testRun} busy={busy} onRun={() => void runTest()} onSchedule={() => void schedule()} onBack={() => setScreen("review")} onEditStep={editTestStep} />}
           {screen === "schedule" && !scheduleSaved && <div className="setup-panel"><h2>Schedule</h2><p>Your test passed. Scheduled runs repeat the tested steps.</p><p>Finish setup to run manually, or choose a daily schedule.</p>{scheduleAllowed && <><label className="result-check"><input type="checkbox" aria-label="Schedule daily" checked={cron !== ""} disabled={busy} onChange={(event) => setCron(event.target.checked ? localTimeToUtcCron(dailyTime) : "")} />Schedule daily</label>{cron !== "" && <label>Time of day<input type="time" aria-label="Time of day" value={dailyTime} disabled={busy} onChange={(event) => { setDailyTime(event.target.value); if (event.target.value) setCron(localTimeToUtcCron(event.target.value)); }} /><span className="field-note">Your local time. The schedule is stored in UTC.</span></label>}</>}<div className="setup-actions"><button className="button button-quiet" type="button" onClick={() => setScreen("test")} disabled={busy}>Back to test</button><button className="button button-primary" type="button" onClick={() => void saveInlineSchedule()} disabled={!canContinue || busy || (cron !== "" && dailyTime === "")}>{cron.trim() ? "Schedule agent" : "Finish setup"}</button></div></div>}
           {scheduleSaved && <div className="setup-panel"><h2>Your agent is ready</h2><p>{cron.trim() ? "The schedule is saved. It will repeat the tested workflow." : "Run this agent manually whenever you need it."}</p><div className="setup-actions"><button className="button button-primary" type="button" onClick={() => void close()} disabled={busy}>Open agent</button></div></div>}
         </section>
@@ -714,7 +722,7 @@ function Review(props: { steps: SetupStep[]; busy: boolean; onUpdateStep(id: str
 }
 
 function Test(props: {
-  credentials: CredentialKind[]; steps: SetupStep[]; url: string; emailRoutesAllowed: boolean; textAllowed: boolean; doneWhen: DoneWhen;
+  steps: SetupStep[]; url: string; emailRoutesAllowed: boolean; textAllowed: boolean; doneWhen: DoneWhen;
   onDoneWhen(value: DoneWhen): void; onChooseEmail(): void; onAllowEmail(): void; onChangeCredentials(): void; run: RunState | null; busy: boolean; emailStatus: "waiting" | "routed" | "rejected" | "no_documents" | "timeout" | null; emailFrom: string | null; emailFiles: Array<{ name: string; url: string }>; canContinue: boolean;
   onRun(): void; onSchedule(): void; onBack(): void; onEditStep(id: string, description: string): void;
 }): JSX.Element {

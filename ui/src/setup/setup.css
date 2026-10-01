@@ -46,13 +46,6 @@ select {
   font-size: 1.25rem;
 }
 
-.setup-product {
-  margin: 0 0 2px;
-  color: #7056c7;
-  font-size: 0.78rem;
-  font-weight: 750;
-}
-
 .setup-shell {
   width: min(1480px, 100%);
   min-height: calc(100vh - 121px);
@@ -390,9 +383,7 @@ select {
   font-size: 0.88rem;
 }
 
-.input-definition,
-.test-result,
-.schedule-options {
+.input-definition {
   display: grid;
   gap: 14px;
   border: 1px solid #d9dbe7;
@@ -602,15 +593,6 @@ select {
   gap: 14px;
 }
 
-.test-result {
-  min-height: 70px;
-}
-
-.test-result p {
-  margin: 0;
-}
-
-.test-result a,
 .setup-footer a {
   color: #5236ad;
   font-weight: 650;
@@ -684,25 +666,6 @@ select {
   color: #5f667c;
   font-size: 0.82rem;
   font-weight: 500;
-}
-
-.test-result-failed {
-  border-color: #e4b0b7;
-  background: #fff5f5;
-  color: #922e3d;
-}
-
-.test-result-failed p {
-  color: #922e3d;
-}
-
-.test-result-failed [role="alert"] {
-  display: grid;
-  gap: 4px;
-}
-
-.test-result-title {
-  font-weight: 700;
 }
 
 .field-hint {
