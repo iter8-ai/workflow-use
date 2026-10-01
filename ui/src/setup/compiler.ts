@@ -72,6 +72,34 @@ export function requiredCredentials(steps: SetupStep[]): CredentialKind[] {
   return credentialKinds.filter((kind) => steps.some((step) => step.type === "credential" && step.value === kind));
 }
 
+export type DraftChange = { key: string; label: string; from: string; to: string };
+
+export function draftChanges(draft: SetupDraft, live: SetupDraft): DraftChange[] {
+  const changes: DraftChange[] = [];
+  if (draft.url !== live.url) changes.push({ key: "url", label: "Website address", from: live.url, to: draft.url });
+  if (draft.goal !== live.goal) changes.push({ key: "goal", label: "Goal", from: live.goal, to: draft.goal });
+  const added = draft.steps.filter((step) => !live.steps.some((original) => original.id === step.id));
+  const removed = live.steps.filter((step) => !draft.steps.some((current) => current.id === step.id));
+  for (const step of added) changes.push({ key: `added:${step.id}`, label: "Step added", from: "", to: step.description });
+  for (const step of removed) changes.push({ key: `removed:${step.id}`, label: "Step removed", from: step.description, to: "" });
+  const currentOrder = draft.steps.filter((step) => live.steps.some((original) => original.id === step.id));
+  const liveOrder = live.steps.filter((step) => draft.steps.some((current) => current.id === step.id));
+  if (currentOrder.some((step, index) => step.id !== liveOrder[index]?.id)) {
+    changes.push({ key: "steps", label: "Step order changed", from: liveOrder.map((step) => step.description).join(" → "), to: currentOrder.map((step) => step.description).join(" → ") });
+  }
+  draft.steps.forEach((step, index) => {
+    const original = live.steps.find((item) => item.id === step.id);
+    if (!original) return;
+    if (step.description !== original.description) changes.push({ key: `step:${step.id}:description`, label: `Step ${index + 1} instruction`, from: original.description, to: step.description });
+    if ((step.expectedOutcome ?? "") !== (original.expectedOutcome ?? "")) changes.push({ key: `step:${step.id}:outcome`, label: `Step ${index + 1} expected outcome`, from: original.expectedOutcome ?? "", to: step.expectedOutcome ?? "" });
+  });
+  return changes;
+}
+
+export function replaceStepsFrom(steps: SetupStep[], index: number, replacement: SetupStep[]): SetupStep[] {
+  return [...steps.slice(0, index), ...replacement];
+}
+
 // A credential word followed by an assigned value, or directly by a token containing a
 // digit or symbol (e.g. "password correct-horse-9", "code 482913"). Sign-in wording
 // ("Enter the password and log in") and $placeholders stay allowed.

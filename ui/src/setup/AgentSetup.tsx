@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { compileAgent, doneWhenOptions, findUnambiguousEmailStep, requiredCredentials, type CredentialKind, type DoneWhen, type SetupDraft, type SetupStep } from "./compiler";
-import { browserbaseLiveViewUrl, createHostBridge, HostRequestTimeoutError, type Recording, type TestRun } from "./host";
+import { compileAgent, doneWhenOptions, draftChanges, findUnambiguousEmailStep, replaceStepsFrom, requiredCredentials, type CredentialKind, type DoneWhen, type SetupDraft, type SetupStep } from "./compiler";
+import { browserbaseLiveViewUrl, createHostBridge, HostRequestTimeoutError, type EditAgent as EditAgentData, type HostBridge, type Recording, type TestRun } from "./host";
 import "./setup.css";
 
 type Screen = "describe" | "demonstrate" | "review" | "test" | "schedule";
@@ -57,6 +57,7 @@ export default function AgentSetup() {
   const [emailRoutesAllowed, setEmailRoutesAllowed] = useState(false);
   const [chooseScheduleAllowed, setChooseScheduleAllowed] = useState(false);
   const [credentialsAllowed, setCredentialsAllowed] = useState(false);
+  const [mode, setMode] = useState<"create" | "edit">("create");
   const [connecting, setConnecting] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -141,6 +142,7 @@ export default function AgentSetup() {
       setEmailRoutesAllowed(result.emailRoutes === true);
       setChooseScheduleAllowed(result.chooseSchedule === true);
       setCredentialsAllowed(result.credentials === true);
+      setMode(result.mode ?? "create");
       setConnecting(false);
     }).catch((requestError: Error) => {
       if (active) {
@@ -576,6 +578,8 @@ export default function AgentSetup() {
     return <main className="setup-unavailable"><h1>Open agent setup from Reiterate</h1><p>This page needs the Reiterate host to securely create and test an agent.</p></main>;
   }
 
+  if (mode === "edit") return <EditScreen bridge={bridge} />;
+
   return (
     <main className={`agent-setup${screen === "demonstrate" ? " agent-setup-demonstrating" : screen === "test" ? " agent-setup-testing" : ""}`}>
       <header className="setup-header">
@@ -604,6 +608,153 @@ export default function AgentSetup() {
     </main>
   );
 }
+
+function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
+  const [agent, setAgent] = useState<EditAgentData | null>(null);
+  const [draft, setDraft] = useState<SetupDraft | null>(null);
+  const [stages, setStages] = useState<unknown[]>([]);
+  const [testRun, setTestRun] = useState<TestRun & { id: string } | null>(null);
+  const [checked, setChecked] = useState(false);
+  const [recording, setRecording] = useState<Recording | null>(null);
+  const [fromStep, setFromStep] = useState(0);
+  const [busy, setBusy] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [conflict, setConflict] = useState<{ updatedBy: string | null; updatedAt: string | null } | null>(null);
+  const [publishOpen, setPublishOpen] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const modalRef = useRef<HTMLDivElement>(null);
+  const recordingRef = useRef<Recording | null>(null);
+
+  const load = async (): Promise<void> => {
+    setBusy(true); setError(null);
+    try {
+      const loaded = await bridge.request("loadAgent", {});
+      setAgent(loaded);
+      setRenameError(null);
+      setDraft({ name: loaded.name, url: loaded.url, goal: loaded.goal, steps: loaded.steps ?? [], inputs: [] });
+      setStages(loaded.stages);
+      setTestRun(null); setChecked(false); setConflict(null); setPublishOpen(false);
+    } catch (requestError) { setError(errorMessage(requestError)); }
+    finally { setBusy(false); }
+  };
+  // load is intentionally called once for the host-bound agent.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    if (recording?.status !== "recording") return;
+    const timer = window.setInterval(() => void bridge.request("getRecording", { id: recording.id }).then(setRecording).catch((e) => setError(errorMessage(e))), 1500);
+    return () => window.clearInterval(timer);
+  }, [bridge, recording?.id, recording?.status]);
+  useEffect(() => {
+    if (testRun?.status !== "running" || agent === null) return;
+    let active = true;
+    const poll = () => void bridge.request("getTestRun", { agentId: agent.agentId, runId: testRun.id }).then((next) => { if (active) setTestRun((current) => current === null ? null : { ...current, ...next }); }).catch((e) => setError(errorMessage(e)));
+    poll(); const timer = window.setInterval(poll, 1000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [agent, bridge, testRun?.id, testRun?.status]);
+  useEffect(() => { recordingRef.current = recording; }, [recording]);
+  useEffect(() => () => { const current = recordingRef.current; if (current?.status === "recording") void bridge.request("cancelRecording", { id: current.id }).catch(() => undefined); }, [bridge]);
+  useEffect(() => { if (publishOpen || conflict) modalRef.current?.querySelector<HTMLElement>("button:not(:disabled)")?.focus(); }, [conflict, publishOpen]);
+
+  if (agent === null || draft === null) return <main className="setup-unavailable">{error ? <div role="alert"><p>{error}</p><button className="button button-primary" onClick={() => void load()}>Retry</button></div> : <p>Loading agent</p>}</main>;
+  const live: SetupDraft = { name: agent.name, url: agent.url, goal: agent.goal, steps: agent.steps ?? [], inputs: [] };
+  const raw = agent.steps === null || agent.steps.length === 0;
+  const changes = [...draftChanges(draft, live), ...(raw ? rawStageChanges(stages, agent.stages) : [])];
+  const changed = changes.length > 0;
+  const canPublish = !agent.internal && changed && checked && testRun?.status === "succeeded";
+  const update = (next: Partial<SetupDraft>): void => { setDraft((current) => current === null ? current : { ...current, ...next }); setTestRun(null); setChecked(false); };
+  const updateStage = (index: number, next: Record<string, unknown>): void => { setStages((current) => current.map((stage, i) => i === index && isObject(stage) ? { ...stage, ...next } : stage)); setTestRun(null); setChecked(false); };
+  const rename = async (value: string): Promise<void> => {
+    const name = value.trim();
+    setDraft((current) => current === null ? current : { ...current, name });
+    setRenameError(null);
+    if (name === agent.name.trim() || renaming) return;
+    if (!name) { setRenameError("Enter an agent name."); return; }
+    setRenaming(true);
+    try {
+      await bridge.request("renameAgent", { name });
+      // A rename creates no version, so a passed draft test stays valid.
+      setAgent((current) => current === null ? current : { ...current, name });
+    } catch (e) { setRenameError(errorMessage(e)); }
+    finally { setRenaming(false); }
+  };
+  const test = async (): Promise<void> => {
+    setBusy(true); setError(null);
+    try {
+      const config = raw ? { url: draft.url, prompt: "", options: { version: 1, engine: "computer" }, stages, parameters: {} } : compileAgent(draft);
+      await bridge.request("saveDraft", { draft, config });
+      const started = await bridge.request("testAgent", { agentId: agent.agentId, arguments: {} });
+      setTestRun({ id: started.id, status: "running" }); setChecked(false);
+    } catch (e) { setError(errorMessage(e)); }
+    finally { setBusy(false); }
+  };
+  const publish = async (overwrite: boolean): Promise<void> => {
+    setBusy(true);
+    try {
+      const result = await bridge.request("publishDraft", { overwrite });
+      if ("conflict" in result) { setPublishOpen(false); setConflict(result.conflict); } else { setPublishOpen(false); await load(); }
+    } catch (e) { setError(errorMessage(e)); }
+    finally { setBusy(false); }
+  };
+  const startRecording = async (): Promise<void> => {
+    setBusy(true); setError(null);
+    try {
+      if (recording !== null) await bridge.request("cancelRecording", { id: recording.id });
+      setRecording(await bridge.request("startRecording", { url: draft.url }));
+    }
+    catch (e) { setError(errorMessage(e)); }
+    finally { setBusy(false); }
+  };
+  const stopRecording = async (): Promise<void> => {
+    if (recording === null) return;
+    setBusy(true);
+    try { const stopped = await bridge.request("stopRecording", { id: recording.id }); setRecording(stopped); if (stopped.steps.length > 0) update({ steps: replaceStepsFrom(draft.steps, fromStep, stopped.steps) }); }
+    catch (e) { setError(errorMessage(e)); }
+    finally { setBusy(false); }
+  };
+  const revert = (key: string): void => {
+    if (raw && key === "stages") { setStages(agent.stages); setTestRun(null); setChecked(false); return; }
+    if (key === "url" || key === "goal") update({ [key]: live[key] });
+    else if (key === "steps") {
+      const ordered = live.steps.flatMap((step) => draft.steps.filter((item) => item.id === step.id));
+      let index = 0;
+      update({ steps: draft.steps.map((step) => live.steps.some((item) => item.id === step.id) ? ordered[index++]! : step) });
+    }
+    else if (key.startsWith("added:")) update({ steps: draft.steps.filter((step) => step.id !== key.slice(6)) });
+    else if (key.startsWith("removed:")) {
+      const index = live.steps.findIndex((step) => step.id === key.slice(8));
+      const next = live.steps.slice(index + 1).find((step) => draft.steps.some((item) => item.id === step.id));
+      const insertAt = next ? draft.steps.findIndex((step) => step.id === next.id) : draft.steps.length;
+      update({ steps: [...draft.steps.slice(0, insertAt), live.steps[index]!, ...draft.steps.slice(insertAt)] });
+    }
+    else { const [, id, field] = key.split(":"); const original = live.steps.find((step) => step.id === id); update({ steps: draft.steps.map((step) => step.id === id ? { ...step, [field === "outcome" ? "expectedOutcome" : "description"]: original?.[field === "outcome" ? "expectedOutcome" : "description"] } : step) }); }
+  };
+
+  return <main className="agent-setup edit-agent">
+    <header className="setup-header edit-header"><div><p className="setup-product">Reiterate</p><div className="edit-title"><h1>Edit web agent</h1><input aria-label="Agent name" value={draft.name} disabled={agent.internal || renaming} aria-invalid={renameError !== null} aria-describedby={renameError ? "rename-error" : undefined} onChange={(e) => setDraft({ ...draft, name: e.target.value })} onBlur={(e) => void rename(e.target.value)} /><span className="edit-version">Live v{agent.version}</span>{agent.schedule && <span className="edit-schedule">{agent.schedule}{agent.nextRunAt ? ` · next run ${formatConflictDate(agent.nextRunAt)}` : ""}</span>}</div>{renameError && <p id="rename-error" className="edit-rename-error" role="alert">{renameError}</p>}</div><button className="button button-quiet" onClick={() => void bridge.request("close", { agentId: agent.agentId })}>Close</button></header>
+    <section className="edit-layout" aria-busy={busy}>{agent.internal && <p className="setup-notice"><b>Read-only internal agent</b><br />Managed by Operations. Publishing changes is disabled.</p>}{error && <div className="setup-error" role="alert">{error}</div>}<div className="edit-grid"><div className="edit-main">
+      <section className="edit-card"><h2>Details</h2><label>Website address<input aria-label="Website address" value={draft.url} disabled={agent.internal} onChange={(e) => update({ url: e.target.value })} /></label><label>Goal{raw && <span className="field-note">Describes the agent. Change its actions in Advanced instructions.</span>}<textarea aria-label="What should the agent do?" value={draft.goal} disabled={agent.internal} onChange={(e) => update({ goal: e.target.value })} /></label></section>
+      {raw ? <section className="edit-card"><h2>Advanced instructions</h2>{stages.map((stage, index) => { const item = isObject(stage) ? stage : null; return item?.type === "agent" ? <div className="raw-stage" key={index}><label>Agent instructions<textarea aria-label="Agent stage prompt" value={String(item.prompt ?? "")} disabled={agent.internal} onChange={(e) => updateStage(index, { prompt: e.target.value })} /></label><label>Agent step limit<input aria-label="Agent step limit" type="number" min="1" value={Number(item.step_limit ?? 1)} disabled={agent.internal} onChange={(e) => updateStage(index, { step_limit: Number(e.target.value) })} /></label></div> : <div className="raw-preserved" key={index}><span>{preservedStageLabel(item)}</span><span className="raw-unchanged">unchanged</span></div>; })}</section> : <section className="edit-card"><h2>Steps</h2><div className="edit-steps">{draft.steps.map((step, index) => <div className="edit-step" key={step.id}><b>{index + 1}</b><div><label><span className="edit-field-label">Instruction</span><textarea rows={1} aria-label={`Step ${index + 1} description`} value={step.description} disabled={agent.internal} onChange={(e) => update({ steps: draft.steps.map((item) => item.id === step.id ? { ...item, description: e.target.value } : item) })} /></label><label><span className="edit-field-label">Expected outcome</span><textarea rows={1} placeholder="Expected outcome" aria-label={`Step ${index + 1} expected outcome`} value={step.expectedOutcome ?? ""} disabled={agent.internal} onChange={(e) => update({ steps: draft.steps.map((item) => item.id === step.id ? { ...item, expectedOutcome: e.target.value } : item) })} /></label></div><div className="edit-step-controls"><button className="icon-button" aria-label={`Move step ${index + 1} up`} disabled={agent.internal || index === 0} onClick={() => update({ steps: moveStep(draft.steps, index, -1) })}>↑</button><button className="icon-button" aria-label={`Move step ${index + 1} down`} disabled={agent.internal || index === draft.steps.length - 1} onClick={() => update({ steps: moveStep(draft.steps, index, 1) })}>↓</button><button className="icon-button" aria-label={`Remove step ${index + 1}`} disabled={agent.internal} onClick={() => update({ steps: draft.steps.filter((item) => item.id !== step.id) })}>×</button></div></div>)}</div><div className="edit-actions"><button className="button button-quiet" disabled={agent.internal} onClick={() => update({ steps: [...draft.steps, { id: `inserted-${Date.now()}`, type: "agent", description: "Describe the inserted action" }] })}>Insert step</button><div className="redemo-controls"><label>Re-demonstrate from step<select aria-label="Re-demonstrate from step" value={fromStep} disabled={agent.internal || busy || recording?.status === "recording"} onChange={(e) => setFromStep(Number(e.target.value))}>{draft.steps.map((_, index) => <option key={index} value={index}>{index + 1}</option>)}</select></label><button className="button button-quiet" disabled={agent.internal || busy || recording?.status === "recording"} onClick={() => void startRecording()}>Start re-demonstration</button>{recording?.status === "recording" && <button className="button button-primary" disabled={busy} onClick={() => void stopRecording()}>Finish re-demonstration</button>}</div></div>{recording?.blockedReason && <p className="setup-error" role="alert">Cannot continue: {recording.blockedReason}</p>}{recording?.status === "expired" && <p className="setup-error" role="alert">Demonstration expired. Start re-demonstration again.</p>}{recording?.status === "recording" && <div className="browser-frame edit-recording">{browserbaseLiveViewUrl(recording.liveViewUrl) ? <iframe title="Virtual browser" src={browserbaseLiveViewUrl(recording.liveViewUrl)!} allow="clipboard-read; clipboard-write" /> : <p>Opening the virtual browser.</p>}</div>}</section>}
+      <section className="edit-card"><h2>Test &amp; publish</h2><p>Timers continue using the live version until you publish.</p>{testRun?.status === "running" && <p role="status">Test is running.</p>}{testRun?.status === "failed" && <div className="test-result test-result-failed" role="alert"><p>Test failed</p><p>{testRun.error}</p></div>}{testRun?.status === "succeeded" && <div className="test-result" role="status"><p>Test completed</p>{testRun.files?.map((file) => <a href={file.url} key={file.url}>{file.name}</a>)}</div>}<div className="edit-actions"><button className="button button-primary" disabled={busy || agent.internal || testRun?.status === "running" || recording?.status === "recording"} onClick={() => void test()}>{testRun?.status === "failed" ? "Run test again" : "Test draft"}</button>{testRun?.status === "succeeded" && <label className="result-check"><input aria-label="I checked the result" type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} /> I checked the result</label>}<button className="button button-primary" disabled={!canPublish || busy} onClick={() => setPublishOpen(true)}>Publish changes</button></div></section>
+    </div><aside className="edit-rail"><section className="edit-card"><h2>Changes</h2>{changes.length === 0 ? <p>No changes yet.</p> : changes.map((change) => <div className="change-item" key={change.key}><b>{change.label}</b><span>{change.from || "Empty"} → {change.to || "Empty"}</span><button className="text-button" onClick={() => revert(change.key)}>Revert</button></div>)}</section></aside></div></section>
+    {publishOpen && <div className="edit-modal" role="dialog" aria-modal="true"><div className="edit-modal-card" ref={modalRef}><h2>Publish changes?</h2>{agent.schedule && <p className="setup-notice">Timers will use v{agent.version + 1} at the next run time.</p>}<div className="edit-actions"><button className="button button-quiet" onClick={() => setPublishOpen(false)}>Cancel</button><button className="button button-primary" onClick={() => void publish(false)}>Publish</button></div></div></div>}
+    {conflict && <div className="edit-modal" role="dialog" aria-modal="true"><div className="edit-modal-card conflict-modal" ref={modalRef}><h2>Agent change conflict</h2><p>There have been changes to this agent since you've opened</p><p>The following user made changes to this agent that are in conflict with your latest changes.</p><p>Discard your changes to reload the agent, or overwrite their changes with yours. In either case, the lost data cannot be recovered.</p><div className="conflict-rows"><span>User</span><strong>{conflict.updatedBy ?? "Unknown"}</strong><span>Last saved at</span><strong>{conflict.updatedAt ? formatConflictDate(conflict.updatedAt) : "Unknown"}</strong></div><div className="edit-actions"><button className="button button-quiet" onClick={() => void publish(true)}>Overwrite their changes</button><button className="button button-primary" onClick={() => void load()}>Discard my changes</button></div></div></div>}
+  </main>;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null; }
+function moveStep(steps: SetupStep[], index: number, delta: number): SetupStep[] { const next = [...steps]; const target = index + delta; if (target < 0 || target >= next.length) return next; [next[index], next[target]] = [next[target]!, next[index]!]; return next; }
+function rawStageChanges(current: unknown[], live: unknown[]): Array<{ key: string; label: string; from: string; to: string }> { return JSON.stringify(current) === JSON.stringify(live) ? [] : [{ key: "stages", label: "Agent stages", from: "Live instructions", to: "Edited instructions" }]; }
+function preservedStageLabel(stage: Record<string, unknown> | null): string {
+  switch (stage?.type) {
+    case "download": return "Download stage";
+    case "sleep": return `Sleep stage · ${Number(stage.sleep_ms ?? 10000) / 1000} s`;
+    case "reload": return "Reload stage";
+    default: return "Preserved stage";
+  }
+}
+function formatConflictDate(value: string): string { const date = new Date(value); return `${String(date.getDate()).padStart(2, "0")}.${String(date.getMonth() + 1).padStart(2, "0")}.${date.getFullYear()} at ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`; }
 
 function Describe(props: { name: string; url: string; goal: string; busy: boolean; onName(value: string): void; onUrl(value: string): void; onGoal(value: string): void; onContinue(): void }): JSX.Element {
   return <div className="setup-panel setup-panel-compact"><div><h2>Describe the job</h2><p>Start with the website and the result you want. You will demonstrate the task next.</p></div><p className="credential-warning">{signInNote}</p><label>Agent name<input aria-label="Agent name" value={props.name} onChange={(event) => props.onName(event.target.value)} autoComplete="off" /></label><label>Website address<input aria-label="Website address" value={props.url} onChange={(event) => props.onUrl(event.target.value)} placeholder="https://example.com" inputMode="url" autoComplete="off" /></label><label>What should the agent do?<textarea aria-label="What should the agent do?" value={props.goal} onChange={(event) => props.onGoal(event.target.value)} placeholder="For example: download the monthly statement for the selected month." /></label><div className="setup-actions"><button className="button button-primary" type="button" onClick={props.onContinue} disabled={props.busy}>Continue to demonstration</button></div></div>;
