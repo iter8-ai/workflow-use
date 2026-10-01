@@ -378,6 +378,20 @@ test("shows the running test's browser without letting the user interact with it
   expect(topmost).toBe("watch-only-shield");
 });
 
+test("a service failure after steps ran does not claim no steps were tried", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=service-failure-midrun`);
+  const setup = page.frameLocator("iframe");
+
+  await completeToTest(setup);
+  await setup.getByRole("button", { name: "Run test" }).click();
+
+  await expect(setup.getByText("Reiterate couldn’t run the test")).toBeVisible();
+  await expect(setup.getByRole("alert")).toContainText("stopped responding at step 2");
+  await expect(setup.getByRole("alert")).toContainText("Your steps do not need changing");
+  await expect(setup.getByText("None of your steps were tried", { exact: false })).toHaveCount(0);
+  await expect(setup.locator(".test-step.failed")).toHaveCount(0);
+});
+
 test("explains a service failure without blaming or marking a step", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=service-failure`);
   const setup = page.frameLocator("iframe");
@@ -946,6 +960,7 @@ function hostPage(url: string): string {
     else if (request.method === "testAgent") { window.__testArguments.push(request.params.arguments); exportSentAt = Date.now(); if (scenario === "email-cutoff" && window.__testArguments.length > 1) setTimeout(() => send({ id: "run-" + window.__testArguments.length }), 1000); else send({ id: "run-" + window.__testArguments.length }); }
     else if (request.method === "getTestRun") {
       if (scenario === "service-failure") send({ status: "failed", failure: { kind: "service", message: "The AI service did not respond." }, stoppedAtStep: null, screens: [] });
+      if (scenario === "service-failure-midrun") send({ status: "failed", failure: { kind: "service", message: "The AI service did not respond." }, stoppedAtStep: 2, screens: [] });
       else if (scenario === "unknown-failure") send({ status: "failed", error: "The test stopped, but its cause is unknown. Try again.", failure: { kind: "unknown", message: "The test stopped, but its cause is unknown. Try again." }, stoppedAtStep: 2, confirmation: null, files: [], screens: [screen] });
       else if (scenario === "step-failure") send({ status: "failed", failure: { kind: "steps", message: "The button was missing." }, stoppedAtStep: 2, screens: [{ ...screen, thought: "I opened Reports." }, screen] });
       else if (scenario === "select-failure" && window.__testArguments.length === 1) send({ status: "failed", failure: { kind: "steps", message: "The PDF option was missing." }, stoppedAtStep: 2, screens: [screen] });

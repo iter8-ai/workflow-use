@@ -772,7 +772,9 @@ function Test(props: {
     : failed ? "The test stopped" : passed ? "The agent completed every step"
     : emailRun ? "Waiting for the export email" : running ? "Test is running" : "Not tested yet";
   const serviceFailure = kind === "service";
-  const statusDetail = serviceFailure ? "The agent stopped before it opened the website because Reiterate’s AI service didn’t respond. None of your steps were tried. Run the test again in a few minutes. Your steps do not need changing."
+  const statusDetail = serviceFailure ? (stopped !== null
+      ? `Reiterate’s AI service stopped responding at step ${stopped + 1}. Run the test again in a few minutes. Your steps do not need changing.`
+      : "The agent stopped before it opened the website because Reiterate’s AI service didn’t respond. None of your steps were tried. Run the test again in a few minutes. Your steps do not need changing.")
     : emailRun && props.emailStatus === "rejected" ? `New Reiterate addresses only accept email from you. Allow ${props.emailFrom ?? "this sender"}, then run the test again.`
     : emailRun && props.emailStatus === "no_documents" ? "The email arrived without a file. Check the export settings and run the test again."
     : emailRun && props.emailStatus === "timeout" ? "The email didn’t arrive within three minutes. Check the export settings and run the test again."
