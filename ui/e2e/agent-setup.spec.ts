@@ -77,9 +77,11 @@ test("locks draft mutations after a lost schedule reply until the identical retr
   await setup.getByRole("button", { name: "Run test" }).click();
   await expect(setup.getByText("The agent completed every step")).toBeVisible();
   await setup.getByRole("button", { name: "Continue to schedule" }).click();
+  await expect.poll(() => page.evaluate(() => window.__scheduleRequests)).toHaveLength(1);
   await expect.poll(() => page.evaluate(() => window.__savedSchedule)).toBe("30 9 * * *");
   await page.clock.fastForward(45_001);
   await expect(setup.getByRole("alert")).toContainText("The request timed out.");
+  await expect(setup.getByRole("heading", { name: "Your agent is ready" })).toHaveCount(0);
   await expect(setup.getByRole("button", { name: "Run test again" })).toBeDisabled();
   await expect(setup.getByRole("button", { name: "Back to review" })).toBeDisabled();
   await setup.locator("summary").filter({ hasText: "Change" }).click();
@@ -164,6 +166,30 @@ test("invalidates changed criteria but retains a pass for identical choices and 
   await expect(setup.getByRole("button", { name: "Continue to schedule" })).toHaveCount(0);
 });
 
+test("retains the file criterion and passing test after unchanged stale custom text blurs", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=success`);
+  const setup = page.frameLocator("iframe");
+  await completeToTest(setup);
+  await setup.locator("summary").filter({ hasText: "Change" }).click();
+  await setup.getByLabel("Custom done-when text").fill("Export sent");
+  await setup.getByLabel("Custom done-when text").press("Tab");
+  await expect(setup.locator(".done-when > div").first()).toHaveText("“Export sent” appears on the page");
+  await setup.getByRole("button", { name: "A file is downloaded in the browser" }).click();
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await expect(setup.getByText("Test passed", { exact: true })).toBeVisible();
+  await setup.locator("summary").filter({ hasText: "Change" }).click();
+  await expect(setup.getByLabel("Custom done-when text")).toHaveValue("Export sent");
+  await setup.getByLabel("Custom done-when text").focus();
+  await setup.getByLabel("Custom done-when text").press("Tab");
+  await expect(setup.locator(".done-when > div").first()).toHaveText("A file is downloaded in the browser");
+  await expect(setup.getByText("Test passed", { exact: true })).toBeVisible();
+  await setup.getByRole("button", { name: "Continue to schedule" }).click();
+  await expect(setup.getByRole("heading", { name: "Your agent is ready" })).toBeVisible();
+  expect(await page.evaluate(() => window.__testArguments)).toHaveLength(1);
+  expect(await page.evaluate(() => window.__savedAgents[0].draft.doneWhen)).toEqual({ kind: "file" });
+  expect(await page.evaluate(() => window.__scheduleRequests[0].runId)).toBe("run-1");
+});
+
 test("preserves stopped-step evidence for the pinned host's unknown failure", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=unknown-failure`);
   const setup = page.frameLocator("iframe");
@@ -237,32 +263,6 @@ test("waits for a slow host schedule choice without timing out", async ({ page }
   await page.clock.fastForward(30_000);
   await expect(setup.getByRole("heading", { name: "Your agent is ready" })).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.__savedSchedule)).toBe("30 9 * * *");
-});
-
-test("retries the same schedule after the host saves it but loses its reply", async ({ page }) => {
-  await page.clock.install();
-  await page.goto(`${baseUrl}/host?scenario=lost-schedule-reply`);
-  const setup = page.frameLocator("iframe");
-
-  await completeToTest(setup);
-  await setup.getByRole("button", { name: "Run test" }).click();
-  await expect(setup.getByText("The agent completed every step")).toBeVisible();
-  await setup.getByRole("button", { name: "Continue to schedule" }).click();
-  await expect.poll(() => page.evaluate(() => window.__scheduleRequests)).toHaveLength(1);
-  await expect.poll(() => page.evaluate(() => window.__savedSchedule)).toBe("30 9 * * *");
-  await page.clock.fastForward(45_001);
-  await expect(setup.getByRole("alert")).toContainText("The request timed out. Retry to continue.");
-  await expect(setup.getByRole("heading", { name: "Your agent is ready" })).toHaveCount(0);
-
-  await setup.getByRole("button", { name: "Continue to schedule" }).click();
-  await expect(setup.getByRole("heading", { name: "Your agent is ready" })).toBeVisible();
-  expect(await page.evaluate(() => window.__chooseScheduleCalls)).toHaveLength(1);
-  const requests = await page.evaluate(() => window.__scheduleRequests);
-  expect(requests).toEqual([
-    { agentId: "agent-1", runId: "run-1", arguments: {}, cron: "30 9 * * *" },
-    { agentId: "agent-1", runId: "run-1", arguments: {}, cron: "30 9 * * *" },
-  ]);
-  expect(await page.evaluate(() => window.__scheduleArguments)).toEqual([{}]);
 });
 
 test("retries a rejected schedule save with the selected schedule", async ({ page }) => {

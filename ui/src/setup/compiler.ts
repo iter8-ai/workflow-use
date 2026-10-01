@@ -198,7 +198,7 @@ export function doneWhenOptions(
   return options;
 }
 
-/** Return the only email input when a later step clearly sends it. */
+/** Rewrite only an explicit export recipient followed by an email-send action. */
 export function findUnambiguousEmailStep(steps: SetupStep[]): number | null {
   const emailStepIndexes = steps.reduce<number[]>((indexes, step, index) => {
     if (step.type === "input" && emailValuePattern.test(step.value ?? "")) indexes.push(index);
@@ -206,7 +206,9 @@ export function findUnambiguousEmailStep(steps: SetupStep[]): number | null {
   }, []);
   if (emailStepIndexes.length !== 1) return null;
   const emailStepIndex = emailStepIndexes[0]!;
-  return steps.slice(emailStepIndex + 1).some((step) => step.type === "click" && /send|email|export/i.test(`${step.description} ${step.target ?? ""}`))
+  const emailStep = steps[emailStepIndex]!;
+  if (!/\b(?:export\s+(?:email|recipient)|(?:send|email)\s+(?:the\s+)?export\s+to)\b/i.test(`${emailStep.description} ${emailStep.target ?? ""}`)) return null;
+  return steps.slice(emailStepIndex + 1).some((step) => step.type === "click" && /\b(?:send|email)\s+(?:the\s+)?(?:export|email)\b/i.test(`${step.description} ${step.target ?? ""}`))
     ? emailStepIndex
     : null;
 }
