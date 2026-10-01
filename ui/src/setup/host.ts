@@ -15,7 +15,7 @@ export type TestRun = {
   files?: Array<{ name: string; url: string }>;
   /** Watch-only view of the running test's browser. */
   liveViewUrl?: string | null;
-  failure?: { kind: "service" | "signin" | "website" | "steps" | "result" | "check"; message: string } | null;
+  failure?: { kind: "service" | "signin" | "website" | "steps" | "result" | "check" | "unknown"; message: string } | null;
   stoppedAtStep?: number | null;
   confirmation?: string | null;
   screens?: Array<{ image: string; thought: string }>;
@@ -63,6 +63,8 @@ export type HostBridge = {
 };
 
 const requestTimeoutMs = 45_000;
+
+export class HostRequestTimeoutError extends Error {}
 
 export function createHostBridge(): HostBridge | null {
   const parentOrigin = parentOriginFromLocation();
@@ -121,7 +123,7 @@ export function createHostBridge(): HostBridge | null {
           if (request.onLateResult !== undefined) {
             timedOut.set(id, request.onLateResult);
           }
-          request.reject(new Error("The request timed out. Retry to continue."));
+          request.reject(new HostRequestTimeoutError("The request timed out. Retry to continue."));
         }, options?.timeoutMs ?? requestTimeoutMs);
         pending.set(id, {
           resolve: (result) => resolve(result as RequestMap[M]["result"]),

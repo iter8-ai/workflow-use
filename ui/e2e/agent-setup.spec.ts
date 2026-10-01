@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { expect, test, type FrameLocator } from "@playwright/test";
 
 const baseUrl = process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:4173";
@@ -53,6 +54,134 @@ test("takes a user through demonstration, review, testing, and host scheduling",
   await expect.poll(() => page.evaluate(() => window.__closeRequests)).toEqual([{ agentId: "agent-1" }]);
 });
 
+test("nginx response policies allow finished-run PNG evidence", async ({ page }) => {
+  const policies = [...readFileSync(new URL("../nginx.conf", import.meta.url), "utf8").matchAll(/add_header Content-Security-Policy "([^"]+)" always;/g)].map((match) => match[1]);
+  expect(policies).toHaveLength(5);
+  for (const policy of policies) {
+    await page.route(`${baseUrl}/policy`, (route) => route.fulfill({
+      contentType: "text/html", headers: { "Content-Security-Policy": policy },
+      body: '<img alt="Agent browser screen" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6S8sAAAAASUVORK5CYII=">',
+    }));
+    await page.goto(`${baseUrl}/policy`);
+    await expect.poll(() => page.getByAltText("Agent browser screen").evaluate((image: HTMLImageElement) => image.naturalWidth)).toBe(1);
+    expect(policy).toContain("script-src 'self'; style-src 'self'; frame-src https://browserbase.com https://*.browserbase.com;");
+    await page.unroute(`${baseUrl}/policy`);
+  }
+});
+
+test("locks draft mutations after a lost schedule reply until the identical retry succeeds", async ({ page }) => {
+  await page.clock.install();
+  await page.goto(`${baseUrl}/host?scenario=lost-schedule-reply`);
+  const setup = page.frameLocator("iframe");
+  await completeToTest(setup);
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await expect(setup.getByText("The agent completed every step")).toBeVisible();
+  await setup.getByRole("button", { name: "Continue to schedule" }).click();
+  await expect.poll(() => page.evaluate(() => window.__savedSchedule)).toBe("30 9 * * *");
+  await page.clock.fastForward(45_001);
+  await expect(setup.getByRole("alert")).toContainText("The request timed out.");
+  await expect(setup.getByRole("button", { name: "Run test again" })).toBeDisabled();
+  await expect(setup.getByRole("button", { name: "Back to review" })).toBeDisabled();
+  await setup.locator("summary").filter({ hasText: "Change" }).click();
+  await expect(setup.getByRole("button", { name: "A file is downloaded in the browser" })).toBeDisabled();
+  await expect(setup.getByLabel("Custom done-when text")).toBeDisabled();
+  await expect(setup.getByRole("button", { name: "Close setup" })).toBeEnabled();
+  await expect(setup.getByText("Test passed", { exact: true })).toBeVisible();
+  await setup.getByRole("button", { name: "Continue to schedule" }).click();
+  await expect(setup.getByRole("heading", { name: "Your agent is ready" })).toBeVisible();
+  expect(await page.evaluate(() => window.__chooseScheduleCalls)).toHaveLength(1);
+  expect(await page.evaluate(() => window.__testArguments)).toHaveLength(1);
+  expect(await page.evaluate(() => window.__scheduleRequests)).toEqual([
+    { agentId: "agent-1", runId: "run-1", arguments: {}, cron: "30 9 * * *" },
+    { agentId: "agent-1", runId: "run-1", arguments: {}, cron: "30 9 * * *" },
+  ]);
+  expect(await page.evaluate(() => window.__scheduleArguments)).toEqual([{}]);
+});
+
+test("locks the legacy inline schedule after a lost reply and retries the same cron", async ({ page }) => {
+  await page.clock.install();
+  await page.goto(`${baseUrl}/host?scenario=legacy-lost-schedule-reply`);
+  const setup = page.frameLocator("iframe");
+  await completeToTest(setup);
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await expect(setup.getByText("Test passed", { exact: true })).toBeVisible();
+  await setup.getByRole("button", { name: "Continue to schedule" }).click();
+  await setup.getByLabel("Schedule daily").check();
+  await setup.getByRole("button", { name: "Schedule agent" }).click();
+  await expect.poll(() => page.evaluate(() => window.__scheduleRequests)).toHaveLength(1);
+  await page.clock.fastForward(45_001);
+  await expect(setup.getByRole("alert")).toContainText("The request timed out.");
+  await expect(setup.getByRole("button", { name: "Back to test" })).toBeDisabled();
+  await expect(setup.getByLabel("Schedule daily")).toBeDisabled();
+  await expect(setup.getByLabel("Time of day")).toBeDisabled();
+  await setup.getByRole("button", { name: "Schedule agent" }).click();
+  await expect(setup.getByRole("heading", { name: "Your agent is ready" })).toBeVisible();
+  const requests = await page.evaluate(() => window.__scheduleRequests);
+  expect(requests).toHaveLength(2);
+  expect(requests[1]).toEqual(requests[0]);
+  expect(await page.evaluate(() => window.__scheduleArguments)).toEqual([{}]);
+});
+
+test("retains passing evidence when a rerun save is rejected by the host", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=rerun-save-rejection`);
+  const setup = page.frameLocator("iframe");
+  await completeToTest(setup);
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await expect(setup.getByText("Test passed", { exact: true })).toBeVisible();
+  await setup.getByRole("button", { name: "Run test again" }).click();
+  await expect(setup.getByRole("alert")).toContainText("This agent is scheduled. Edit it in agent settings.");
+  await expect(setup.getByText("Test passed", { exact: true })).toBeVisible();
+  await expect(setup.getByRole("button", { name: "Continue to schedule" })).toBeEnabled();
+  expect(await page.evaluate(() => window.__testArguments)).toHaveLength(1);
+});
+
+test("invalidates changed criteria but retains a pass for identical choices and custom blur", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=success`);
+  const setup = page.frameLocator("iframe");
+  await completeToTest(setup);
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await expect(setup.getByText("Test passed", { exact: true })).toBeVisible();
+  await setup.locator("summary").filter({ hasText: "Change" }).click();
+  await expect(setup.getByText("Suggested from your steps and from what the agent saw at the end of this test.", { exact: true })).toBeVisible();
+  await setup.getByRole("button", { name: "A file is downloaded in the browser" }).click();
+  await expect(setup.getByText("Test passed", { exact: true })).toBeVisible();
+  await expect(setup.getByRole("button", { name: "Continue to schedule" })).toBeVisible();
+  await setup.getByLabel("Custom done-when text").fill("Export sent");
+  await setup.getByLabel("Custom done-when text").press("Tab");
+  await expect(setup.getByText("Test passed", { exact: true })).toHaveCount(0);
+  await expect(setup.locator(".done-when.done")).toHaveCount(0);
+  await expect(setup.getByRole("button", { name: "Continue to schedule" })).toHaveCount(0);
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await expect(setup.getByText("Test passed", { exact: true })).toBeVisible();
+  await setup.locator("summary").filter({ hasText: "Change" }).click();
+  await setup.getByLabel("Custom done-when text").focus();
+  await setup.getByLabel("Custom done-when text").press("Tab");
+  await expect(setup.getByText("Test passed", { exact: true })).toBeVisible();
+  await expect(setup.getByRole("button", { name: "Continue to schedule" })).toBeVisible();
+  await setup.getByLabel("Custom done-when text").fill("Export delivered");
+  await setup.getByLabel("Custom done-when text").press("Tab");
+  await expect(setup.getByText("Test passed", { exact: true })).toHaveCount(0);
+  await expect(setup.getByRole("button", { name: "Continue to schedule" })).toHaveCount(0);
+});
+
+test("preserves stopped-step evidence for the pinned host's unknown failure", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=unknown-failure`);
+  const setup = page.frameLocator("iframe");
+  await completeToTest(setup);
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await expect(setup.getByRole("alert")).toContainText("The test stopped, but its cause is unknown. Try again.");
+  await expect(setup.getByText("2 of 3 reached", { exact: true })).toBeVisible();
+  await expect(setup.locator(".test-step.done")).toHaveCount(1);
+  await expect(setup.locator(".test-step.failed")).toHaveCount(1);
+  await expect(setup.locator(".test-step.notrun")).toHaveCount(1);
+  await expect(setup.getByText("Stopped here", { exact: false })).toBeVisible();
+  await expect(setup.getByLabel("Step 2 instruction")).toBeInViewport();
+  await setup.getByLabel("Step 2 instruction").fill("Find the export option");
+  await expect(setup.getByLabel("Step 2 instruction")).toBeFocused();
+  await expect(setup.getByText("None of your steps were tried", { exact: false })).toHaveCount(0);
+  await expect(setup.getByRole("button", { name: "Continue to schedule" })).toHaveCount(0);
+});
+
 test("offers done-when choices before the first test", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=success`);
   const setup = page.frameLocator("iframe");
@@ -60,6 +189,7 @@ test("offers done-when choices before the first test", async ({ page }) => {
   await completeToTest(setup);
   await setup.locator("summary").filter({ hasText: "Change" }).click();
   await expect(setup.getByRole("button", { name: "A file is downloaded in the browser" })).toBeVisible();
+  await expect(setup.getByText("Suggested from your steps.", { exact: true })).toBeVisible();
 });
 
 test("finishes a manual setup through the host without scheduling", async ({ page }) => {
@@ -410,7 +540,7 @@ test("uses custom text as the completion stage", async ({ page }) => {
   await setup.getByRole("button", { name: "Run test" }).click();
   await setup.getByLabel("Custom done-when text").fill("Export sent");
   await setup.getByLabel("Custom done-when text").press("Tab");
-  await setup.getByRole("button", { name: "Run test again" }).click();
+  await setup.getByRole("button", { name: /^Run test(?: again)?$/ }).click();
   await expect(setup.getByText("The agent completed every step")).toBeVisible();
   const saved = await page.evaluate(() => window.__savedAgents);
   expect(saved.at(-1).draft.doneWhen).toEqual({ kind: "text", value: "Export sent" });
@@ -427,7 +557,7 @@ test("keeps custom done-when editable after validation fails and requires a fres
   const customText = setup.getByLabel("Custom done-when text");
   await customText.fill("Password: secret123");
   await customText.press("Tab");
-  await setup.getByRole("button", { name: "Run test again" }).click();
+  await setup.getByRole("button", { name: /^Run test(?: again)?$/ }).click();
   await expect(setup.getByRole("alert").filter({ hasText: "Remove sign-in details" })).toBeVisible();
   await expect(customText).toBeVisible();
   await expect(customText).toHaveValue("Password: secret123");
@@ -435,10 +565,19 @@ test("keeps custom done-when editable after validation fails and requires a fres
   expect(await page.evaluate(() => window.__testArguments)).toHaveLength(1);
   expect(await page.evaluate(() => window.__savedAgents)).toHaveLength(1);
 
+  await setup.getByRole("button", { name: "Back to review" }).click();
+  await setup.getByRole("button", { name: "Continue to test" }).click();
+  await expect(setup.getByRole("heading", { name: "Test a fresh run" })).toBeVisible();
+  await setup.locator("summary").filter({ hasText: "Change" }).click();
+  await expect(customText).toHaveValue("Password: secret123");
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await expect(setup.getByRole("alert").filter({ hasText: "Remove sign-in details" })).toBeVisible();
+  expect(await page.evaluate(() => window.__savedAgents)).toHaveLength(1);
+
   await customText.fill("Export sent");
   await customText.press("Tab");
   await expect(setup.getByRole("button", { name: "Continue to schedule" })).toHaveCount(0);
-  await setup.getByRole("button", { name: "Run test again" }).click();
+  await setup.getByRole("button", { name: /^Run test(?: again)?$/ }).click();
   await expect(setup.getByText("The agent completed every step")).toBeVisible();
   await expect(setup.getByRole("button", { name: "Continue to schedule" })).toBeVisible();
   expect(await page.evaluate(() => window.__testArguments)).toHaveLength(2);
@@ -750,6 +889,7 @@ function hostPage(url: string): string {
 <style>html,body,iframe{margin:0;width:100%;height:100%;border:0}body{overflow:hidden}</style>
 <script>
   const scenario = new URLSearchParams(location.search).get("scenario");
+  const legacy = scenario === "legacy" || scenario === "legacy-lost-schedule-reply";
   window.__requestIds = [];
   window.__testArguments = [];
   window.__chooseScheduleCalls = [];
@@ -785,7 +925,7 @@ function hostPage(url: string): string {
       { id: "pass", type: "credential", description: "Enter the saved password in Password", target: "Password", value: "password" },
     ] : []),
     ...(scenario === "fixed-dates" ? [{ id: "first-day", type: "click", description: "Click 1 September 2026", target: "1 September 2026" }] : []),
-    ...(scenario === "step-failure" ? [{ id: "export", type: "click", description: "Find the export button", target: "Export" }] : []),
+    ...(["step-failure", "unknown-failure"].includes(scenario) ? [{ id: "export", type: "click", description: "Find the export button", target: "Export" }] : []),
     emailScenario
       ? { id: "send-export", type: "click", description: "Send the export", target: "Send export" }
       : { id: "download", type: "click", description: "Download the statement", target: "Download statement" }
@@ -798,14 +938,15 @@ function hostPage(url: string): string {
     const fail = (error) => event.source.postMessage({ type: "workflow-use:response", version: 1, id: request.id, error }, event.origin);
     if (request.method === "ready") {
       if (scenario === "delayed-ready") setTimeout(() => send({ schedule: true }), 300);
-      else send({ schedule: true, credentials: scenario !== "sign-in-unsupported", emailRoutes: scenario !== "legacy", chooseSchedule: scenario !== "legacy" && scenario !== "no-text" });
+      else send({ schedule: true, credentials: scenario !== "sign-in-unsupported", emailRoutes: !legacy, chooseSchedule: !legacy && scenario !== "no-text" });
     } else if (request.method === "requestCredentials") { window.__credentialRequests.push(request.params); send({ saved: request.params.kinds }); } else if (request.method === "startRecording") { window.__startUrls.push(request.params.url); if (recordingActive) { fail("Finish the current demonstration first."); return; } recordingActive = true; send({ id: "recording-1", status: "recording", liveViewUrl: "https://live.browserbase.com/session", steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
     else if (request.method === "getRecording" || request.method === "stopRecording") send({ id: "recording-1", status: request.method === "getRecording" && recordingActive ? "recording" : "stopped", liveViewUrl: "https://live.browserbase.com/session", steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null });
     else if (request.method === "cancelRecording") { recordingActive = false; send(undefined); }
-    else if (request.method === "saveAgent") { window.__savedAgents.push(request.params); send({ id: "agent-1" }); }
+    else if (request.method === "saveAgent") { if (window.__savedSchedule || scenario === "rerun-save-rejection" && window.__savedAgents.length > 0) fail("This agent is scheduled. Edit it in agent settings."); else { window.__savedAgents.push(request.params); send({ id: "agent-1" }); } }
     else if (request.method === "testAgent") { window.__testArguments.push(request.params.arguments); exportSentAt = Date.now(); if (scenario === "email-cutoff" && window.__testArguments.length > 1) setTimeout(() => send({ id: "run-" + window.__testArguments.length }), 1000); else send({ id: "run-" + window.__testArguments.length }); }
     else if (request.method === "getTestRun") {
       if (scenario === "service-failure") send({ status: "failed", failure: { kind: "service", message: "The AI service did not respond." }, stoppedAtStep: null, screens: [] });
+      else if (scenario === "unknown-failure") send({ status: "failed", error: "The test stopped, but its cause is unknown. Try again.", failure: { kind: "unknown", message: "The test stopped, but its cause is unknown. Try again." }, stoppedAtStep: 2, confirmation: null, files: [], screens: [screen] });
       else if (scenario === "step-failure") send({ status: "failed", failure: { kind: "steps", message: "The button was missing." }, stoppedAtStep: 2, screens: [{ ...screen, thought: "I opened Reports." }, screen] });
       else if (scenario === "select-failure" && window.__testArguments.length === 1) send({ status: "failed", failure: { kind: "steps", message: "The PDF option was missing." }, stoppedAtStep: 2, screens: [screen] });
       else if (scenario === "signin-failure" && window.__testArguments.length === 1) send({ status: "failed", failure: { kind: "signin", message: "The username field was missing." }, stoppedAtStep: 2, screens: [screen] });
@@ -837,7 +978,7 @@ function hostPage(url: string): string {
       else {
         window.__savedSchedule = request.params.cron;
         window.__scheduleArguments.push(request.params.arguments);
-        if (scenario !== "lost-schedule-reply") send(undefined);
+        if (scenario !== "lost-schedule-reply" && scenario !== "legacy-lost-schedule-reply") send(undefined);
       }
     }
     else if (request.method === "close") { window.__closeRequests.push(request.params); send(undefined); }

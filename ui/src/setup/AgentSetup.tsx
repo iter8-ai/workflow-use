@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { compileAgent, doneWhenOptions, findUnambiguousEmailStep, requiredCredentials, type CredentialKind, type DoneWhen, type SetupDraft, type SetupStep } from "./compiler";
-import { browserbaseLiveViewUrl, createHostBridge, type Recording, type TestRun } from "./host";
+import { browserbaseLiveViewUrl, createHostBridge, HostRequestTimeoutError, type Recording, type TestRun } from "./host";
 import "./setup.css";
 
 type Screen = "describe" | "demonstrate" | "review" | "test" | "schedule";
@@ -50,6 +50,7 @@ export default function AgentSetup() {
   const [emailFrom, setEmailFrom] = useState<string | null>(null);
   const [emailFiles, setEmailFiles] = useState<Array<{ name: string; url: string }>>([]);
   const [scheduleSaved, setScheduleSaved] = useState(false);
+  const [scheduleRecovery, setScheduleRecovery] = useState(false);
   const [scheduleAllowed, setScheduleAllowed] = useState(false);
   const [dailyTime, setDailyTime] = useState("09:00");
   const [cron, setCron] = useState(() => localTimeToUtcCron("09:00"));
@@ -339,7 +340,8 @@ export default function AgentSetup() {
   function continueToTest(): void {
     setError(null);
     try {
-      compileAgent(draft);
+      // Done when is edited on Test; validate it when saving/running, so users can return to correct it.
+      compileAgent({ ...draft, doneWhen: { kind: "file" } });
       if (!credentialsAllowed && requiredCredentials(steps).length > 0) {
         throw new Error("This Reiterate page is out of date and cannot save sign-in details. Reload Reiterate and set up the agent again.");
       }
@@ -388,10 +390,6 @@ export default function AgentSetup() {
       setError(errorMessage(compileError));
       return;
     }
-    setTestRun(null);
-    setEmailStatus(null);
-    setEmailFiles([]);
-    selectedScheduleRef.current = null;
     setBusy(true);
     try {
       if (!(await saveCredentials(requiredCredentials(nextSteps), false))) {
@@ -399,13 +397,16 @@ export default function AgentSetup() {
         return;
       }
       const saved = await bridge.request("saveAgent", { draft: { ...draft, steps: nextSteps, doneWhen: nextDoneWhen }, config, agentId: agentId ?? undefined });
+      // A lost schedule reply may leave the host scheduled. Keep that run/cron until save succeeds.
+      setTestRun(null);
+      setEmailStatus(null);
+      setEmailFrom(null);
+      setEmailFiles([]);
+      selectedScheduleRef.current = null;
       setAgentId(saved.id);
       const startedAt = new Date().toISOString();
       const started = await bridge.request("testAgent", { agentId: saved.id, arguments: {} });
       setTestRun({ id: started.id, status: "running", files: [], liveViewUrl: null, revision: nextRevision, screens: [], startedAt });
-      setEmailStatus(null);
-      setEmailFrom(null);
-      setEmailFiles([]);
     } catch (requestError) {
       setError(errorMessage(requestError));
     } finally {
@@ -428,7 +429,7 @@ export default function AgentSetup() {
         ? { ...step, value: route.address, description: step.description.replace(step.value ?? "", route.address) } : step);
       setSteps(nextSteps);
       setDoneWhen(nextDoneWhen);
-      setRevision((current) => current + 1);
+      invalidateTest();
       await runTest(nextDoneWhen, nextSteps, revision + 1);
     } catch (requestError) {
       setError(errorMessage(requestError));
@@ -461,9 +462,13 @@ export default function AgentSetup() {
   }
 
   function chooseDoneWhen(value: DoneWhen): void {
+    const unchanged = value.kind === "file" && doneWhen.kind === "file"
+      || value.kind === "text" && doneWhen.kind === "text" && value.value.trim() === doneWhen.value.trim()
+      || value.kind === "clicked" && doneWhen.kind === "clicked" && value.value === doneWhen.value
+      || value.kind === "email" && doneWhen.kind === "email" && value.address === doneWhen.address && value.channelId === doneWhen.channelId;
+    if (unchanged) return;
     setDoneWhen(value);
-    setRevision((current) => current + 1);
-    setNotice("Changes require a new test.");
+    invalidateTest();
   }
 
   async function schedule(): Promise<void> {
@@ -488,10 +493,12 @@ export default function AgentSetup() {
         cron: selected.cron.trim(),
       });
       setScheduleSaved(true);
+      setScheduleRecovery(false);
       setScreen("schedule");
       setCron(selected.cron);
       setNotice(null);
     } catch (requestError) {
+      if (requestError instanceof HostRequestTimeoutError && selectedScheduleRef.current !== null) setScheduleRecovery(true);
       setError(errorMessage(requestError));
     } finally {
       setBusy(false);
@@ -505,7 +512,11 @@ export default function AgentSetup() {
     try {
       if (cron.trim()) await bridge.request("scheduleAgent", { agentId, runId: testRun.id, arguments: {}, cron: cron.trim() });
       setScheduleSaved(true);
-    } catch (requestError) { setError(errorMessage(requestError)); }
+      setScheduleRecovery(false);
+    } catch (requestError) {
+      if (requestError instanceof HostRequestTimeoutError) setScheduleRecovery(true);
+      setError(errorMessage(requestError));
+    }
     finally { setBusy(false); }
   }
 
@@ -582,8 +593,8 @@ export default function AgentSetup() {
           {screen === "describe" && <Describe name={name} url={url} goal={goal} busy={busy || connecting} onName={(value) => setDraftField(setName, value)} onUrl={(value) => setDraftField(setUrl, value)} onGoal={(value) => setDraftField(setGoal, value)} onContinue={() => void startRecording()} />}
           {screen === "demonstrate" && <Demonstrate recording={recording} steps={steps} liveViewUrl={liveViewUrl} busy={busy} onStop={() => void stopRecording()} onReview={continueToReview} onReset={() => void reset()} />}
           {screen === "review" && <Review steps={steps} busy={busy} onUpdateStep={updateStep} onRemoveStep={removeStep} onBack={() => setScreen("demonstrate")} onContinue={continueToTest} />}
-          {screen === "test" && <Test steps={steps} url={url} emailRoutesAllowed={emailRoutesAllowed} textAllowed={chooseScheduleAllowed} doneWhen={doneWhen} emailStatus={emailStatus} emailFrom={emailFrom} emailFiles={emailFiles} canContinue={canContinue} onDoneWhen={chooseDoneWhen} onChooseEmail={() => void chooseEmailDoneWhen()} onAllowEmail={() => void allowEmailSender()} onChangeCredentials={() => void changeCredentials()} run={testRun} busy={busy} onRun={() => void runTest()} onSchedule={() => void schedule()} onBack={() => setScreen("review")} onEditStep={editTestStep} />}
-          {screen === "schedule" && !scheduleSaved && <div className="setup-panel"><h2>Schedule</h2><p>Your test passed. Scheduled runs repeat the tested steps.</p><p>Finish setup to run manually, or choose a daily schedule.</p>{scheduleAllowed && <><label className="result-check"><input type="checkbox" aria-label="Schedule daily" checked={cron !== ""} disabled={busy} onChange={(event) => setCron(event.target.checked ? localTimeToUtcCron(dailyTime) : "")} />Schedule daily</label>{cron !== "" && <label>Time of day<input type="time" aria-label="Time of day" value={dailyTime} disabled={busy} onChange={(event) => { setDailyTime(event.target.value); if (event.target.value) setCron(localTimeToUtcCron(event.target.value)); }} /><span className="field-note">Your local time. The schedule is stored in UTC.</span></label>}</>}<div className="setup-actions"><button className="button button-quiet" type="button" onClick={() => setScreen("test")} disabled={busy}>Back to test</button><button className="button button-primary" type="button" onClick={() => void saveInlineSchedule()} disabled={!canContinue || busy || (cron !== "" && dailyTime === "")}>{cron.trim() ? "Schedule agent" : "Finish setup"}</button></div></div>}
+          {screen === "test" && <Test steps={steps} url={url} scheduleRecovery={scheduleRecovery} emailRoutesAllowed={emailRoutesAllowed} textAllowed={chooseScheduleAllowed} doneWhen={doneWhen} emailStatus={emailStatus} emailFrom={emailFrom} emailFiles={emailFiles} canContinue={canContinue} onDoneWhen={chooseDoneWhen} onChooseEmail={() => void chooseEmailDoneWhen()} onAllowEmail={() => void allowEmailSender()} onChangeCredentials={() => void changeCredentials()} run={testRun} busy={busy} onRun={() => void runTest()} onSchedule={() => void schedule()} onBack={() => setScreen("review")} onEditStep={editTestStep} />}
+          {screen === "schedule" && !scheduleSaved && <div className="setup-panel"><h2>Schedule</h2><p>Your test passed. Scheduled runs repeat the tested steps.</p><p>Finish setup to run manually, or choose a daily schedule.</p>{scheduleAllowed && <><label className="result-check"><input type="checkbox" aria-label="Schedule daily" checked={cron !== ""} disabled={busy || scheduleRecovery} onChange={(event) => setCron(event.target.checked ? localTimeToUtcCron(dailyTime) : "")} />Schedule daily</label>{cron !== "" && <label>Time of day<input type="time" aria-label="Time of day" value={dailyTime} disabled={busy || scheduleRecovery} onChange={(event) => { setDailyTime(event.target.value); if (event.target.value) setCron(localTimeToUtcCron(event.target.value)); }} /><span className="field-note">Your local time. The schedule is stored in UTC.</span></label>}</>}<div className="setup-actions"><button className="button button-quiet" type="button" onClick={() => setScreen("test")} disabled={busy || scheduleRecovery}>Back to test</button><button className="button button-primary" type="button" onClick={() => void saveInlineSchedule()} disabled={!canContinue || busy || (cron !== "" && dailyTime === "")}>{cron.trim() ? "Schedule agent" : "Finish setup"}</button></div></div>}
           {scheduleSaved && <div className="setup-panel"><h2>Your agent is ready</h2><p>{cron.trim() ? "The schedule is saved. It will repeat the tested workflow." : "Run this agent manually whenever you need it."}</p><div className="setup-actions"><button className="button button-primary" type="button" onClick={() => void close()} disabled={busy}>Open agent</button></div></div>}
         </section>
       </div>
@@ -724,12 +735,12 @@ function Review(props: { steps: SetupStep[]; busy: boolean; onUpdateStep(id: str
 }
 
 function Test(props: {
-  steps: SetupStep[]; url: string; emailRoutesAllowed: boolean; textAllowed: boolean; doneWhen: DoneWhen;
+  steps: SetupStep[]; url: string; scheduleRecovery: boolean; emailRoutesAllowed: boolean; textAllowed: boolean; doneWhen: DoneWhen;
   onDoneWhen(value: DoneWhen): void; onChooseEmail(): void; onAllowEmail(): void; onChangeCredentials(): void; run: RunState | null; busy: boolean; emailStatus: "waiting" | "routed" | "rejected" | "no_documents" | "timeout" | null; emailFrom: string | null; emailFiles: Array<{ name: string; url: string }>; canContinue: boolean;
   onRun(): void; onSchedule(): void; onBack(): void; onEditStep(id: string, description: string): void;
 }): JSX.Element {
   const [screenIndex, setScreenIndex] = useState<number | null>(null);
-  const [customText, setCustomText] = useState("");
+  const [customText, setCustomText] = useState(props.doneWhen.kind === "text" ? props.doneWhen.value : "");
   const rowsRef = useRef<HTMLDivElement>(null);
   const optionsRef = useRef<HTMLDetailsElement>(null);
   const emailRun = props.doneWhen.kind === "email" && props.run?.status === "succeeded";
@@ -737,10 +748,10 @@ function Test(props: {
   const failed = props.run?.status === "failed" || emailProblem;
   const passed = props.run?.status === "succeeded" && (!emailRun || props.emailStatus === "routed");
   const running = props.run?.status === "running";
-  const locked = props.busy || running;
+  const locked = props.busy || running || props.scheduleRecovery;
   const stopped = props.run?.stoppedAtStep && Number.isInteger(props.run.stoppedAtStep) && props.run.stoppedAtStep > 0 && props.run.stoppedAtStep <= props.steps.length ? props.run.stoppedAtStep - 1 : null;
   const kind = props.run?.failure?.kind;
-  const failedStep = (kind === "steps" || kind === "signin" || kind === "website") && stopped !== null;
+  const failedStep = (kind === "steps" || kind === "signin" || kind === "website" || kind === "unknown") && stopped !== null;
   const completedSteps = props.run?.status === "succeeded" || kind === "result" || kind === "check";
   const options = doneWhenOptions(props.steps, props.run ? { confirmation: props.run.confirmation, failureKind: kind, files: props.run.files } : null, props.doneWhen)
     .filter((option) => (option.action !== "email" || props.emailRoutesAllowed) && (props.textAllowed || (option.doneWhen?.kind !== "text" && option.action !== "custom")));
@@ -774,7 +785,7 @@ function Test(props: {
   useEffect(() => { setScreenIndex(null); }, [props.run?.id]);
   useEffect(() => {
     if (running) return;
-    if (optionsRef.current) optionsRef.current.open = kind === "result" || kind === "check";
+    if (props.run?.id && optionsRef.current) optionsRef.current.open = kind === "result" || kind === "check";
     const target = failedStep ? rowsRef.current?.querySelectorAll<HTMLElement>(".test-step")[stopped!] : kind === "result" || kind === "check" ? rowsRef.current?.querySelector<HTMLElement>(".done-when") : null;
     const list = rowsRef.current;
     if (list && target) list.scrollTop += target.getBoundingClientRect().top - list.getBoundingClientRect().top - 16;
@@ -793,11 +804,11 @@ function Test(props: {
         {running ? <WatchOnlyBrowser url={props.run?.liveViewUrl ?? null} /> : currentScreen ? <><img src={currentScreen.image} alt="Agent browser screen" /><div className="test-caption"><b>Agent</b><span>{currentScreen.thought}</span><button type="button" className="button button-quiet" aria-label="Previous screen" onClick={() => setScreenIndex(Math.max(0, currentIndex - 1))} disabled={currentIndex <= 0}>‹</button><span>{currentIndex + 1} / {screens.length}</span><button type="button" className="button button-quiet" aria-label="Next screen" onClick={() => setScreenIndex(Math.min(screens.length - 1, currentIndex + 1))} disabled={currentIndex >= screens.length - 1}>›</button></div></> : <div className="empty-browser"><b>{serviceFailure ? "The agent has not opened the website." : passed ? "The agent finished the run." : "Run the test to watch the agent."}</b><span>{serviceFailure ? "Nothing ran in this browser." : "The agent’s browser appears here while it works through your steps."}</span></div>}
       </section>
       <aside className="test-rail" aria-label="Test steps"><header><h3>{props.run ? "Test result" : "Your steps"}</h3><span>{props.run ? `${completedSteps ? props.steps.length : failedStep ? stopped! + 1 : 0} of ${props.steps.length} reached` : `${props.steps.length} steps`}</span></header>
-        <div className={`run-status ${failed ? "bad" : passed ? "good" : ""}`} role={failed ? "alert" : "status"}><small>{serviceFailure ? "Reiterate problem · not your steps" : kind === "steps" ? "Step needs clearer wording" : kind === "signin" ? "Sign-in problem" : kind === "result" ? "No file came back" : kind === "check" ? "Done-when check not met" : emailProblem ? props.emailStatus === "rejected" ? "Email not accepted" : "Email not received" : passed ? "Test passed" : running ? "Test running" : emailRun ? "Waiting for email" : failed ? "Test failed" : "Not tested yet"}</small><strong>{statusText}</strong><p>{props.run ? statusDetail : "Run the test to watch the agent work through these steps in a fresh browser."}</p>{!serviceFailure && props.run?.failure?.message && kind !== "result" && kind !== "check" && <blockquote><b>The agent said</b>{props.run.failure.message}</blockquote>}{emailRun && props.emailStatus === "rejected" && props.emailFrom && <button type="button" className="button button-primary" onClick={props.onAllowEmail} disabled={props.busy}>Accept emails from {props.emailFrom}</button>}{kind === "signin" && <button type="button" className="button button-quiet" onClick={props.onChangeCredentials} disabled={locked}>Change sign-in details</button>}</div>
+        <div className={`run-status ${failed ? "bad" : passed ? "good" : ""}`} role={failed ? "alert" : "status"}><small>{serviceFailure ? "Reiterate problem · not your steps" : kind === "steps" ? "Step needs clearer wording" : kind === "signin" ? "Sign-in problem" : kind === "result" ? "No file came back" : kind === "check" ? "Done-when check not met" : emailProblem ? props.emailStatus === "rejected" ? "Email not accepted" : "Email not received" : passed ? "Test passed" : running ? "Test running" : emailRun ? "Waiting for email" : failed ? "Test failed" : "Not tested yet"}</small><strong>{statusText}</strong><p>{props.run ? statusDetail : "Run the test to watch the agent work through these steps in a fresh browser."}</p>{!serviceFailure && props.run?.failure?.message && kind !== "result" && kind !== "check" && <blockquote><b>The agent said</b>{props.run.failure.message}</blockquote>}{emailRun && props.emailStatus === "rejected" && props.emailFrom && <button type="button" className="button button-primary" onClick={props.onAllowEmail} disabled={locked}>Accept emails from {props.emailFrom}</button>}{kind === "signin" && <button type="button" className="button button-quiet" onClick={props.onChangeCredentials} disabled={locked}>Change sign-in details</button>}</div>
         <div className="test-steps" ref={rowsRef} tabIndex={0} aria-label="Test steps list">{props.steps.map((step, index) => { const done = completedSteps || (failedStep && index < stopped!); const isFailed = failedStep && index === stopped; const relativeDate = lastMonthRewrite(step.description); return <div key={step.id} className={`test-step ${done ? "done" : isFailed ? "failed" : props.run?.status === "failed" && !serviceFailure && failedStep && index > stopped! ? "notrun" : serviceFailure ? "notrun" : ""}`}><span>{done ? "✓" : isFailed ? "!" : index + 1}</span><div>{isFailed ? <textarea aria-label={`Step ${index + 1} instruction`} disabled={locked} value={step.description} onChange={(event) => props.onEditStep(step.id, event.target.value)} /> : step.description}{step.type === "credential" && <small>Uses the {credentialLabel(step.value)} saved in Reiterate, stored encrypted. <button type="button" className="text-button" onClick={props.onChangeCredentials} disabled={locked}>Change</button></small>}{isFailed && <small>Stopped here · <button type="button" className="text-button" onClick={() => setScreenIndex(null)}>Show screen</button></small>}{relativeDate && <small>Fixed date: every run picks this day <button type="button" className="date-chip" disabled={locked} onClick={() => props.onEditStep(step.id, relativeDate)}>Use last month</button></small>}</div></div> })}
-          <div className={`done-when ${passed ? "done" : kind === "result" || kind === "check" || emailProblem ? "failed" : ""}`}><b>Done when</b><div>{props.doneWhen.kind === "file" ? "A file is downloaded in the browser" : props.doneWhen.kind === "text" ? `“${props.doneWhen.value}” appears on the page` : props.doneWhen.kind === "email" ? `The export arrives at ${props.doneWhen.address}` : `The agent clicks “${props.doneWhen.value}”`}</div>{files.map((file) => { const link = safeFileUrl(file.url); return link && <a href={link} target="_blank" rel="noreferrer" key={`${file.name}:${file.url}`}>↓ {file.name}</a>; })}{!running && <details className="done-options" ref={optionsRef}><summary>Change</summary><p>Suggested from your steps and from what the agent saw at the end of this test.</p>{options.map((option) => <div key={option.label}><button type="button" className={option.doneWhen && JSON.stringify(option.doneWhen) === JSON.stringify(props.doneWhen) ? "selected" : ""} disabled={locked} onClick={() => choose(option)}><strong>{option.label}</strong><span className="option-badges">{option.recommended && <em>Recommended</em>}{option.strength && <em className={option.strength}>{option.strength === "strong" ? "Strong evidence" : option.strength === "medium" ? "Some evidence" : "Weak evidence"}</em>}</span><small>{option.why}</small></button>{option.action === "custom" && <input aria-label="Custom done-when text" disabled={locked} maxLength={200} placeholder="For example: Export sent" value={customText} onChange={(event) => setCustomText(event.target.value)} onBlur={() => { if (customText.trim()) props.onDoneWhen({ kind: "text", value: customText.trim() }); }} />}</div>)}</details>}</div>
+          <div className={`done-when ${passed ? "done" : kind === "result" || kind === "check" || emailProblem ? "failed" : ""}`}><b>Done when</b><div>{props.doneWhen.kind === "file" ? "A file is downloaded in the browser" : props.doneWhen.kind === "text" ? `“${props.doneWhen.value}” appears on the page` : props.doneWhen.kind === "email" ? `The export arrives at ${props.doneWhen.address}` : `The agent clicks “${props.doneWhen.value}”`}</div>{files.map((file) => { const link = safeFileUrl(file.url); return link && <a href={link} target="_blank" rel="noreferrer" key={`${file.name}:${file.url}`}>↓ {file.name}</a>; })}{!running && <details className="done-options" ref={optionsRef}><summary>Change</summary><p>{props.run === null ? "Suggested from your steps." : "Suggested from your steps and from what the agent saw at the end of this test."}</p>{options.map((option) => <div key={option.label}><button type="button" className={option.doneWhen && JSON.stringify(option.doneWhen) === JSON.stringify(props.doneWhen) ? "selected" : ""} disabled={locked} onClick={() => choose(option)}><strong>{option.label}</strong><span className="option-badges">{option.recommended && <em>Recommended</em>}{option.strength && <em className={option.strength}>{option.strength === "strong" ? "Strong evidence" : option.strength === "medium" ? "Some evidence" : "Weak evidence"}</em>}</span><small>{option.why}</small></button>{option.action === "custom" && <input aria-label="Custom done-when text" disabled={locked} maxLength={200} placeholder="For example: Export sent" value={customText} onChange={(event) => setCustomText(event.target.value)} onBlur={() => { if (customText.trim()) props.onDoneWhen({ kind: "text", value: customText.trim() }); }} />}</div>)}</details>}</div>
         </div>
-        <footer><button type="button" className="text-button" onClick={props.onBack} disabled={locked}>Back to review</button><span /><button type="button" className={`button ${props.canContinue ? "button-quiet" : "button-primary"}`} onClick={props.onRun} disabled={props.busy || running}>{running ? "Running…" : props.run ? "Run test again" : "Run test"}</button>{props.canContinue && <button type="button" className="button button-primary" onClick={props.onSchedule}>Continue to schedule</button>}</footer>
+        <footer><button type="button" className="text-button" onClick={props.onBack} disabled={locked}>Back to review</button><span /><button type="button" className={`button ${props.canContinue ? "button-quiet" : "button-primary"}`} onClick={props.onRun} disabled={locked}>{running ? "Running…" : props.run ? "Run test again" : "Run test"}</button>{props.canContinue && <button type="button" className="button button-primary" onClick={props.onSchedule}>Continue to schedule</button>}</footer>
       </aside>
     </div>
   </div>;
