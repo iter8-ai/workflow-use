@@ -15,10 +15,14 @@ export type TestRun = {
   files?: Array<{ name: string; url: string }>;
   /** Watch-only view of the running test's browser. */
   liveViewUrl?: string | null;
+  failure?: { kind: "service" | "signin" | "website" | "steps" | "result" | "check" | "unknown"; message: string } | null;
+  stoppedAtStep?: number | null;
+  confirmation?: string | null;
+  screens?: Array<{ image: string; thought: string }>;
 };
 
 type RequestMap = {
-  ready: { params: Record<string, never>; result: { schedule: boolean; credentials?: boolean } };
+  ready: { params: Record<string, never>; result: { schedule: boolean; credentials?: boolean; emailRoutes?: boolean; chooseSchedule?: boolean } };
   // The host collects and stores the values; only the saved kinds come back.
   requestCredentials: { params: { kinds: CredentialKind[]; replace?: boolean }; result: { saved: CredentialKind[] } };
   startRecording: { params: { url: string }; result: Recording };
@@ -28,6 +32,10 @@ type RequestMap = {
   saveAgent: { params: { draft: SetupDraft; config: unknown; agentId?: string }; result: { id: string } };
   testAgent: { params: { agentId: string; arguments: Record<string, never> }; result: { id: string } };
   getTestRun: { params: { agentId: string; runId: string }; result: TestRun };
+  createEmailRoute: { params: { name: string }; result: { channelId: string; address: string } };
+  getEmailArrival: { params: { channelId: string; since: string }; result: { status: "waiting" | "routed" | "rejected" | "no_documents"; from?: string; files?: Array<{ name: string; url: string }> } };
+  allowEmailSender: { params: { channelId: string; sender: string }; result: undefined };
+  chooseSchedule: { params: { cron: string }; result: { cron: string } | null };
   scheduleAgent: { params: { agentId: string; runId: string; arguments: Record<string, never>; cron: string }; result: undefined };
   close: { params: { agentId?: string }; result: undefined };
 };
@@ -55,6 +63,8 @@ export type HostBridge = {
 };
 
 const requestTimeoutMs = 45_000;
+
+export class HostRequestTimeoutError extends Error {}
 
 export function createHostBridge(): HostBridge | null {
   const parentOrigin = parentOriginFromLocation();
@@ -113,7 +123,7 @@ export function createHostBridge(): HostBridge | null {
           if (request.onLateResult !== undefined) {
             timedOut.set(id, request.onLateResult);
           }
-          request.reject(new Error("The request timed out. Retry to continue."));
+          request.reject(new HostRequestTimeoutError("The request timed out. Retry to continue."));
         }, options?.timeoutMs ?? requestTimeoutMs);
         pending.set(id, {
           resolve: (result) => resolve(result as RequestMap[M]["result"]),

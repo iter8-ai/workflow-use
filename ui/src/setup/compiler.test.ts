@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { compileAgent, requiredCredentials, type SetupDraft } from "./compiler";
+import { compileAgent, doneWhenOptions, findUnambiguousEmailStep, requiredCredentials, type SetupDraft } from "./compiler";
 
 const baseDraft = (): SetupDraft => ({
   name: "Download monthly statement",
@@ -268,4 +268,80 @@ test("rejects credential values in URL paths but allows sign-in paths", () => {
 
 test("requires no credentials for a public demonstration", () => {
   assert.deepEqual(requiredCredentials(baseDraft().steps), []);
+});
+
+test("compiles each done-when kind to the contracted stage list", () => {
+  const draft = baseDraft();
+  assert.deepEqual(compileAgent(draft).stages.map((stage) => stage.type), ["agent", "download"]);
+  draft.doneWhen = { kind: "text", value: "Export sent" };
+  assert.deepEqual(compileAgent(draft).stages.slice(1), [{ type: "expect_text", text: "Export sent" }]);
+  draft.doneWhen = { kind: "email", address: "tenant+agent@reiterate.com", channelId: "channel-1" };
+  assert.deepEqual(compileAgent(draft).stages.map((stage) => stage.type), ["agent"]);
+  draft.doneWhen = { kind: "clicked", value: "Export payments" };
+  assert.deepEqual(compileAgent(draft).stages.map((stage) => stage.type), ["agent"]);
+});
+
+test("offers the Reiterate email route first for an emailed export", () => {
+  const steps = [
+    { id: "email", type: "input" as const, description: "Enter Send export to", target: "Send export to", value: "jaan@example.com" },
+    { id: "send", type: "click" as const, description: "Send the export by email", target: "Export payments" },
+  ];
+  const options = doneWhenOptions(steps, { confirmation: "Export sent to jaan@example.com", failureKind: "result", files: [] }, { kind: "file" });
+  assert.equal(options[0]?.label, "Send the export to Reiterate instead");
+  assert.equal(options[0]?.strength, "strong");
+  assert.equal(options[0]?.recommended, true);
+  assert.equal(options.at(-2)?.label, "A file is downloaded in the browser");
+  assert.equal(options.at(-1)?.label, "Other text appears on the page");
+});
+
+test("offers email routing only when a later step sends the entered address", () => {
+  const input = { id: "email", type: "input" as const, description: "Enter export recipient", target: "Send export to", value: "jaan@example.com" };
+  const click = { id: "click", type: "click" as const, description: "Send the export by email", target: "Send export" };
+  assert.equal(doneWhenOptions([input], null, { kind: "file" }).some((option) => option.action === "email"), false);
+  assert.equal(doneWhenOptions([click, input], null, { kind: "file" }).some((option) => option.action === "email"), false);
+  assert.equal(doneWhenOptions([input, click], null, { kind: "file" }).some((option) => option.action === "email"), true);
+});
+
+test("does not rewrite an unrelated email or treat a CSV download as email delivery", () => {
+  const download = { id: "download", type: "click" as const, description: "Download CSV", target: "Export CSV" };
+  const send = { id: "send", type: "click" as const, description: "Send the export by email", target: "Send export" };
+  for (const target of ["Billing email", "Login email", "Account email", "Contact email"]) {
+    const input = { id: "address", type: "input" as const, description: `Enter ${target}`, target, value: "billing@example.test" };
+    for (const action of [download, send]) {
+      const steps = [input, action];
+      assert.equal(findUnambiguousEmailStep(steps), null, target);
+      assert.equal(doneWhenOptions(steps, null, { kind: "file" }).some((option) => option.action === "email"), false, target);
+    }
+  }
+  const recipient = { id: "recipient", type: "input" as const, description: "Enter export recipient", target: "Send export to", value: "recipient@example.test" };
+  for (const action of [download, { ...send, description: "Open email settings", target: "Email settings" }, { ...send, description: "Send billing update", target: "Send billing update" }]) {
+    assert.equal(findUnambiguousEmailStep([recipient, action]), null);
+  }
+  assert.equal(findUnambiguousEmailStep([recipient, send]), 0);
+  const emailDoneWhen = { kind: "email" as const, address: "tenant+agent@reiterate.com", channelId: "channel-1" };
+  assert.equal(doneWhenOptions([recipient, send], null, emailDoneWhen)[0]?.doneWhen, emailDoneWhen);
+  assert.deepEqual(compileAgent({ ...baseDraft(), steps: [recipient, send], doneWhen: emailDoneWhen }).stages.map((stage) => stage.type), ["agent"]);
+});
+
+test("suppresses email routing when multiple email inputs could be rewritten", () => {
+  const steps = [
+    { id: "billing", type: "input" as const, description: "Enter billing contact", target: "Billing email", value: "billing@example.com" },
+    { id: "recipient", type: "input" as const, description: "Enter export recipient", target: "Send export to", value: "recipient@example.com" },
+    { id: "send", type: "click" as const, description: "Send the export", target: "Send export" },
+  ];
+  assert.equal(doneWhenOptions(steps, null, { kind: "file" }).some((option) => option.action === "email"), false);
+});
+
+test("prefers a stable confirmation prefix and grades exact dynamic text lower", () => {
+  const options = doneWhenOptions([], { confirmation: "Download started: payments-september.csv" }, { kind: "file" });
+  assert.deepEqual(options.slice(0, 2).map((option) => [option.label, option.strength, option.recommended]), [
+    ["“Download started” appears on the page", "strong", true],
+    ["“Download started: payments-september.csv” appears on the page", "medium", false],
+  ]);
+});
+
+test("rejects credentials in custom done-when text", () => {
+  const draft = baseDraft();
+  draft.doneWhen = { kind: "text", value: "Password: secret123" };
+  assert.throws(() => compileAgent(draft), /Remove sign-in details/);
 });
