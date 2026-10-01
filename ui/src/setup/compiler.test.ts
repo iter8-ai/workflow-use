@@ -291,7 +291,7 @@ test("offers the Reiterate email route first for an emailed export", () => {
   assert.equal(options[0]?.strength, "strong");
   assert.equal(options[0]?.recommended, true);
   assert.equal(options.at(-2)?.label, "A file is downloaded in the browser");
-  assert.equal(options.at(-1)?.label, "Other text appears on the page");
+  assert.equal(options.at(-1)?.label, "Describe what success looks like");
 });
 
 test("offers email routing only when a later step sends the entered address", () => {
@@ -375,4 +375,47 @@ test("replaces demonstrated steps from the selected index", () => {
   const replacement = [{ id: "new", type: "click" as const, description: "New action", target: "New" }];
 
   assert.deepEqual(replaceStepsFrom(steps, 1, replacement), [steps[0], replacement[0]]);
+});
+
+test("described success criteria stay in the agent prompt with the evidence contract", () => {
+  const compiled = compileAgent({ ...baseDraft(), doneWhen: { kind: "described", value: "  Export {month} was emailed to me  " } });
+  assert.deepEqual(compiled.stages.map((stage) => stage.type), ["agent"]);
+  const stage = compiled.stages[0];
+  assert.equal(stage?.type, "agent");
+  const prompt = stage.prompt;
+  assert.ok(prompt.includes("Success criterion (written by the user): Export {{month}} was emailed to me"));
+  assert.ok(prompt.indexOf("Success criterion") > prompt.indexOf("Demonstrated intent"));
+  assert.ok(prompt.includes('Return status completed only when this criterion is visibly met on the current screen, and put the on-screen evidence you relied on in confirmation (short, factual). If you finished the steps but the criterion is not met, return status failed with reason starting exactly "Success criterion not met: " followed by what you saw instead, and step null.'));
+});
+
+test("described criteria require 1 to 300 trimmed characters", () => {
+  for (const value of ["", "   ", "x".repeat(301)]) {
+    assert.throws(() => compileAgent({ ...baseDraft(), doneWhen: { kind: "described", value } }), /1 to 300 characters/);
+  }
+  assert.doesNotThrow(() => compileAgent({ ...baseDraft(), doneWhen: { kind: "described", value: ` ${"x".repeat(300)} ` } }));
+});
+
+test("described criteria reject disclosed credentials", () => {
+  for (const value of ["Password: secret123", "verification code 482913"]) {
+    assert.throws(() => compileAgent({ ...baseDraft(), doneWhen: { kind: "described", value } }), /Remove sign-in details/);
+  }
+});
+
+test("offers described confirmation after exact text and replaces the custom text option", () => {
+  const options = doneWhenOptions(baseDraft().steps, { confirmation: "Export sent" }, { kind: "file" });
+  const exact = options.findIndex((option) => option.doneWhen?.kind === "text");
+  assert.deepEqual(options[exact + 1], {
+    label: "“Export sent” is shown (checked by the agent)", doneWhen: { kind: "described", value: "Export sent" }, strength: "medium", why: "The agent judges it in context, so small wording changes still pass.",
+  });
+  assert.deepEqual(options.at(-1), { label: "Describe what success looks like", strength: "medium", why: "Write it in your own words; the agent checks it on the screen at the end of each run.", action: "custom" });
+  assert.ok(!options.some((option) => option.label === "Other text appears on the page"));
+  assert.equal(new Set(options.map((option) => option.label)).size, options.length);
+});
+
+
+test("does not treat described confirmation evidence as verbatim page text", () => {
+  const confirmation = "The green toast says Export sent";
+  const options = doneWhenOptions(baseDraft().steps, { confirmation }, { kind: "described", value: "The export was emailed to me" });
+  assert.equal(options.some((option) => option.doneWhen?.kind === "text"), false);
+  assert.ok(options.some((option) => option.doneWhen?.kind === "described" && option.doneWhen.value === confirmation));
 });

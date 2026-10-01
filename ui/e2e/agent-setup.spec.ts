@@ -86,7 +86,7 @@ test("locks draft mutations after a lost schedule reply until the identical retr
   await expect(setup.getByRole("button", { name: "Back to review" })).toBeDisabled();
   await setup.locator("summary").filter({ hasText: "Change" }).click();
   await expect(setup.getByRole("button", { name: "A file is downloaded in the browser" })).toBeDisabled();
-  await expect(setup.getByLabel("Custom done-when text")).toBeDisabled();
+  await expect(setup.getByLabel("Success criterion")).toBeDisabled();
   await expect(setup.getByRole("button", { name: "Close setup" })).toBeEnabled();
   await expect(setup.getByText("Test passed", { exact: true })).toBeVisible();
   await setup.getByRole("button", { name: "Continue to schedule" }).click();
@@ -148,20 +148,20 @@ test("invalidates changed criteria but retains a pass for identical choices and 
   await setup.getByRole("button", { name: "A file is downloaded in the browser" }).click();
   await expect(setup.getByText("Test passed", { exact: true })).toBeVisible();
   await expect(setup.getByRole("button", { name: "Continue to schedule" })).toBeVisible();
-  await setup.getByLabel("Custom done-when text").fill("Export sent");
-  await setup.getByLabel("Custom done-when text").press("Tab");
+  await setup.getByLabel("Success criterion").fill("Export sent");
+  await setup.getByLabel("Success criterion").press("Tab");
   await expect(setup.getByText("Test passed", { exact: true })).toHaveCount(0);
   await expect(setup.locator(".done-when.done")).toHaveCount(0);
   await expect(setup.getByRole("button", { name: "Continue to schedule" })).toHaveCount(0);
   await setup.getByRole("button", { name: "Run test" }).click();
   await expect(setup.getByText("Test passed", { exact: true })).toBeVisible();
   await setup.locator("summary").filter({ hasText: "Change" }).click();
-  await setup.getByLabel("Custom done-when text").focus();
-  await setup.getByLabel("Custom done-when text").press("Tab");
+  await setup.getByLabel("Success criterion").focus();
+  await setup.getByLabel("Success criterion").press("Tab");
   await expect(setup.getByText("Test passed", { exact: true })).toBeVisible();
   await expect(setup.getByRole("button", { name: "Continue to schedule" })).toBeVisible();
-  await setup.getByLabel("Custom done-when text").fill("Export delivered");
-  await setup.getByLabel("Custom done-when text").press("Tab");
+  await setup.getByLabel("Success criterion").fill("Export delivered");
+  await setup.getByLabel("Success criterion").press("Tab");
   await expect(setup.getByText("Test passed", { exact: true })).toHaveCount(0);
   await expect(setup.getByRole("button", { name: "Continue to schedule" })).toHaveCount(0);
 });
@@ -171,14 +171,14 @@ test("reselects retained custom text after switching to the file criterion", asy
   const setup = page.frameLocator("iframe");
   await completeToTest(setup);
   await setup.locator("summary").filter({ hasText: "Change" }).click();
-  await setup.getByLabel("Custom done-when text").fill("Export sent");
-  await setup.getByLabel("Custom done-when text").press("Tab");
+  await setup.getByLabel("Success criterion").fill("Export sent");
+  await setup.getByLabel("Success criterion").press("Tab");
   await setup.getByRole("button", { name: "A file is downloaded in the browser" }).click();
-  await expect(setup.getByLabel("Custom done-when text")).toHaveValue("Export sent");
-  await setup.getByRole("button", { name: "Other text appears on the page" }).click();
-  await expect(setup.locator(".done-when > div").first()).toHaveText("“Export sent” appears on the page");
+  await expect(setup.getByLabel("Success criterion")).toHaveValue("Export sent");
+  await setup.getByRole("button", { name: "Describe what success looks like" }).click();
+  await expect(setup.locator(".done-when > div").first()).toHaveText("The agent confirms: Export sent");
   await setup.getByRole("button", { name: "Run test" }).click();
-  await expect.poll(() => page.evaluate(() => window.__savedAgents[0]?.draft.doneWhen)).toEqual({ kind: "text", value: "Export sent" });
+  await expect.poll(() => page.evaluate(() => window.__savedAgents[0]?.draft.doneWhen)).toEqual({ kind: "described", value: "Export sent" });
 });
 
 test("reselects retained custom text on unchanged blur after switching to file", async ({ page }) => {
@@ -186,17 +186,17 @@ test("reselects retained custom text on unchanged blur after switching to file",
   const setup = page.frameLocator("iframe");
   await completeToTest(setup);
   await setup.locator("summary").filter({ hasText: "Change" }).click();
-  await setup.getByLabel("Custom done-when text").fill("Export sent");
-  await setup.getByLabel("Custom done-when text").press("Tab");
-  await expect(setup.locator(".done-when > div").first()).toHaveText("“Export sent” appears on the page");
+  await setup.getByLabel("Success criterion").fill("Export sent");
+  await setup.getByLabel("Success criterion").press("Tab");
+  await expect(setup.locator(".done-when > div").first()).toHaveText("The agent confirms: Export sent");
   await setup.getByRole("button", { name: "A file is downloaded in the browser" }).click();
   await setup.getByRole("button", { name: "Run test" }).click();
   await expect(setup.getByText("Test passed", { exact: true })).toBeVisible();
   await setup.locator("summary").filter({ hasText: "Change" }).click();
-  await expect(setup.getByLabel("Custom done-when text")).toHaveValue("Export sent");
-  await setup.getByLabel("Custom done-when text").focus();
-  await setup.getByLabel("Custom done-when text").press("Tab");
-  await expect(setup.locator(".done-when > div").first()).toHaveText("“Export sent” appears on the page");
+  await expect(setup.getByLabel("Success criterion")).toHaveValue("Export sent");
+  await setup.getByLabel("Success criterion").focus();
+  await setup.getByLabel("Success criterion").press("Tab");
+  await expect(setup.locator(".done-when > div").first()).toHaveText("The agent confirms: Export sent");
   await expect(setup.getByText("Test passed", { exact: true })).toHaveCount(0);
   await expect(setup.getByRole("button", { name: "Continue to schedule" })).toHaveCount(0);
   expect(await page.evaluate(() => window.__testArguments)).toHaveLength(1);
@@ -575,19 +575,45 @@ test("waits for email and blocks scheduling when the email has no files", async 
   await expect(setup.getByRole("button", { name: "Continue to schedule" })).toHaveCount(0);
 });
 
-test("uses custom text as the completion stage", async ({ page }) => {
-  await page.goto(`${baseUrl}/host?scenario=text-result`);
+test("passes a described criterion with the agent's on-screen evidence", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=described-success`);
   const setup = page.frameLocator("iframe");
-
   await completeToTest(setup);
+  await setup.getByText("Change", { exact: true }).click();
+  const criterion = setup.getByLabel("Success criterion");
+  await expect(criterion).toHaveAttribute("rows", "2");
+  await expect(criterion).toHaveAttribute("maxlength", "300");
+  await expect(criterion).toHaveAttribute("placeholder", "For example: a message says the export was emailed to me");
+  await criterion.fill("A message says the export was emailed to me");
+  await criterion.press("Tab");
+  await expect(setup.locator(".done-when > div").first()).toHaveText("The agent confirms: A message says the export was emailed to me");
   await setup.getByRole("button", { name: "Run test" }).click();
-  await setup.getByLabel("Custom done-when text").fill("Export sent");
-  await setup.getByLabel("Custom done-when text").press("Tab");
-  await setup.getByRole("button", { name: /^Run test(?: again)?$/ }).click();
-  await expect(setup.getByText("The agent completed every step")).toBeVisible();
+  await expect(setup.getByText("Test passed", { exact: true })).toBeVisible();
+  await expect(setup.getByText("Agent saw: The green toast says Export sent", { exact: true })).toBeVisible();
   const saved = await page.evaluate(() => window.__savedAgents);
-  expect(saved.at(-1).draft.doneWhen).toEqual({ kind: "text", value: "Export sent" });
-  expect(saved.at(-1).config.stages.at(-1)).toEqual({ type: "expect_text", text: "Export sent" });
+  expect(saved.at(-1).draft.doneWhen).toEqual({ kind: "described", value: "A message says the export was emailed to me" });
+  expect(saved.at(-1).config.stages.map((stage: { type: string }) => stage.type)).toEqual(["agent"]);
+  await setup.getByText("Change", { exact: true }).click();
+  await expect(setup.getByRole("button", { name: /appears on the page/ })).toHaveCount(0);
+  await expect(setup.getByRole("button", { name: /The green toast says Export sent.*checked by the agent/ })).toBeVisible();
+  await page.screenshot({ path: "e2e-artifacts/free-text/described-success.png" });
+});
+
+test("presents an unmet described criterion as a check without blaming a step", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=described-failure`);
+  const setup = page.frameLocator("iframe");
+  await completeToTest(setup);
+  await setup.getByText("Change", { exact: true }).click();
+  await setup.getByLabel("Success criterion").fill("The export was emailed to me");
+  await setup.getByLabel("Success criterion").press("Tab");
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await expect(setup.getByText("The success criterion wasn’t met", { exact: true })).toBeVisible();
+  await expect(setup.getByRole("alert")).toContainText("the page still shows Export pending");
+  await expect(setup.locator(".test-step.failed")).toHaveCount(0);
+  await expect(setup.getByText(/Rewrite/i)).toHaveCount(0);
+  await expect(setup.locator(".done-options")).toHaveAttribute("open", "");
+  await expect(setup.getByRole("button", { name: "Continue to schedule" })).toHaveCount(0);
+  await page.screenshot({ path: "e2e-artifacts/free-text/described-failure.png" });
 });
 
 test("keeps custom done-when editable after validation fails and requires a fresh test", async ({ page }) => {
@@ -597,7 +623,7 @@ test("keeps custom done-when editable after validation fails and requires a fres
   await completeToTest(setup);
   await setup.getByRole("button", { name: "Run test" }).click();
   await expect(setup.getByText("Every step ran, but no file was downloaded")).toBeVisible();
-  const customText = setup.getByLabel("Custom done-when text");
+  const customText = setup.getByLabel("Success criterion");
   await customText.fill("Password: secret123");
   await customText.press("Tab");
   await setup.getByRole("button", { name: /^Run test(?: again)?$/ }).click();
@@ -626,7 +652,7 @@ test("keeps custom done-when editable after validation fails and requires a fres
   expect(await page.evaluate(() => window.__testArguments)).toHaveLength(2);
   const saved = await page.evaluate(() => window.__savedAgents);
   expect(saved).toHaveLength(2);
-  expect(saved.at(-1).draft.doneWhen).toEqual({ kind: "text", value: "Export sent" });
+  expect(saved.at(-1).draft.doneWhen).toEqual({ kind: "described", value: "Export sent" });
 });
 
 test("legacy host hides new done-when options and uses its inline schedule", async ({ page }) => {
@@ -636,7 +662,7 @@ test("legacy host hides new done-when options and uses its inline schedule", asy
   await completeToTest(setup);
   await setup.getByRole("button", { name: "Run test" }).click();
   await expect(setup.getByRole("button", { name: /Send the export to Reiterate instead/ })).toHaveCount(0);
-  await expect(setup.getByLabel("Custom done-when text")).toHaveCount(0);
+  await expect(setup.getByLabel("Success criterion")).toHaveCount(1);
   await setup.getByRole("button", { name: "Continue to schedule" }).click();
   await expect(setup.getByRole("heading", { name: "Schedule" })).toBeVisible();
   await setup.getByLabel("Schedule daily").check();
@@ -694,8 +720,9 @@ test("hides text completion when the host supports email but not the updated sch
   await setup.getByRole("button", { name: "Run test" }).click();
   await expect(setup.getByText("The agent completed every step")).toBeVisible();
   await setup.getByText("Change", { exact: true }).click();
-  await expect(setup.getByLabel("Custom done-when text")).toHaveCount(0);
-  await expect(setup.getByRole("button", { name: /Export sent/ })).toHaveCount(0);
+  await expect(setup.getByLabel("Success criterion")).toHaveCount(1);
+  await expect(setup.getByRole("button", { name: /Export sent.*appears on the page/ })).toHaveCount(0);
+  await expect(setup.getByRole("button", { name: /Export sent.*checked by the agent/ })).toBeVisible();
   await expect(setup.getByRole("button", { name: /The agent clicks/ })).toBeVisible();
 });
 
@@ -1275,6 +1302,7 @@ function hostPage(url: string): string {
     else if (request.method === "getTestRun") {
       if (scenario === "service-failure") send({ status: "failed", failure: { kind: "service", message: "The AI service did not respond." }, stoppedAtStep: null, screens: [] });
       if (scenario === "service-failure-midrun") send({ status: "failed", failure: { kind: "service", message: "The AI service did not respond." }, stoppedAtStep: 2, screens: [] });
+      else if (scenario === "described-failure") send({ status: "failed", failure: { kind: "steps", message: "Success criterion not met: the page still shows Export pending" }, stoppedAtStep: 2, screens: [screen] });
       else if (scenario === "unknown-failure") send({ status: "failed", error: "The test stopped, but its cause is unknown. Try again.", failure: { kind: "unknown", message: "The test stopped, but its cause is unknown. Try again." }, stoppedAtStep: 2, confirmation: null, files: [], screens: [screen] });
       else if (scenario === "step-failure") send({ status: "failed", failure: { kind: "steps", message: "The button was missing." }, stoppedAtStep: 2, screens: [{ ...screen, thought: "I opened Reports." }, screen] });
       else if (scenario === "select-failure" && window.__testArguments.length === 1) send({ status: "failed", failure: { kind: "steps", message: "The PDF option was missing." }, stoppedAtStep: 2, screens: [screen] });
@@ -1282,7 +1310,7 @@ function hostPage(url: string): string {
       else if ((emailScenario || scenario === "text-result") && window.__testArguments.length === 1) send({ status: "failed", failure: { kind: "result", message: "No file was downloaded." }, stoppedAtStep: null, screens: [screen] });
       else if (scenario === "failed" || (scenario === "edit-fail-pass" && testAttempts === 1)) send({ status: "failed", error: "The website rejected the request." });
       else if (scenario === "watch") send({ status: "running", liveViewUrl: "https://www.browserbase.com/devtools-fullscreen/inspector.html" });
-      else send({ status: "succeeded", files: emailScenario ? [] : [{ name: "statement.pdf", url: "https://files.example.test/statement.pdf" }], screens: [screen], confirmation: "Export sent" });
+      else send({ status: "succeeded", files: emailScenario || scenario === "described-success" ? [] : [{ name: "statement.pdf", url: "https://files.example.test/statement.pdf" }], screens: [screen], confirmation: scenario === "described-success" ? "The green toast says Export sent" : "Export sent" });
     } else if (request.method === "createEmailRoute") { window.__createdRoutes.push(request.params); send({ channelId: "route-1", address: "reports+agent@reiterate.com" }); }
     else if (request.method === "getEmailArrival") {
       window.__emailArrivals.push(request.params);

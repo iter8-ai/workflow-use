@@ -28,6 +28,7 @@ export type SetupDraft = {
 export type DoneWhen =
   | { kind: "file" }
   | { kind: "text"; value: string }
+  | { kind: "described"; value: string }
   | { kind: "email"; address: string; channelId: string }
   | { kind: "clicked"; value: string };
 
@@ -135,6 +136,10 @@ export function compileAgent(draft: SetupDraft): CompiledAgent {
     task,
     "Demonstrated intent:",
     instructions,
+    ...(draft.doneWhen?.kind === "described" ? [
+      `Success criterion (written by the user): ${escapeLiteral(draft.doneWhen.value.trim())}`,
+      'Return status completed only when this criterion is visibly met on the current screen, and put the on-screen evidence you relied on in confirmation (short, factual). If you finished the steps but the criterion is not met, return status failed with reason starting exactly "Success criterion not met: " followed by what you saw instead, and step null.',
+    ] : []),
   ].join("\n\n");
 
   return {
@@ -155,10 +160,14 @@ function validateDraft(draft: SetupDraft): void {
   requireText(draft.name, "Agent name");
   requireMaximumLength(draft.name, maximumNameLength, "Agent name");
   requireText(draft.goal, "Agent goal");
-  rejectCredentialDisclosure(draft.name, draft.goal, draft.doneWhen?.kind === "text" ? draft.doneWhen.value : undefined);
+  rejectCredentialDisclosure(draft.name, draft.goal, draft.doneWhen?.kind === "text" || draft.doneWhen?.kind === "described" ? draft.doneWhen.value : undefined);
   validateUrl(draft.url, "Setup URL");
   if (draft.doneWhen?.kind === "text" && (draft.doneWhen.value.trim().length === 0 || draft.doneWhen.value.trim().length > 200)) {
     throw new Error("Done-when text must be 1 to 200 characters.");
+  }
+
+  if (draft.doneWhen?.kind === "described" && (draft.doneWhen.value.trim().length === 0 || draft.doneWhen.value.trim().length > 300)) {
+    throw new Error("Success criterion must be 1 to 300 characters.");
   }
 
   if (draft.steps.length === 0) {
@@ -212,18 +221,19 @@ export function doneWhenOptions(
     options.push({ label: "Send the export to Reiterate instead", strength: "strong", why: "Reiterate saves the attached file in File library, so workflows can use it.", recommended: true, action: "email" });
   }
   const confirmation = lastRun?.confirmation?.trim();
-  if (confirmation) {
+  if (confirmation && doneWhen.kind !== "described") {
     const colon = confirmation.indexOf(":");
     const stable = colon > 0 && /\b(?:\d{4}|\d{1,2}\s+[A-Z][a-z]+|[\w.+-]+@[\w.-]+|[\w.-]+\.(?:csv|xlsx?|pdf|zip))\b/i.test(confirmation.slice(colon + 1))
       ? confirmation.slice(0, colon).trim() : null;
     if (stable) options.push({ label: `“${stable}” appears on the page`, strength: "strong", why: "The changing date, file name, or address is left out.", recommended: options.length === 0, doneWhen: { kind: "text", value: stable } });
     options.push({ label: `“${confirmation}” appears on the page`, strength: stable || options.length > 0 ? "medium" : "strong", why: "The website showed this confirmation at the end of the test.", recommended: options.length === 0, doneWhen: { kind: "text", value: confirmation } });
   }
+  if (confirmation) options.push({ label: `“${confirmation}” is shown (checked by the agent)`, strength: "medium", why: "The agent judges it in context, so small wording changes still pass.", doneWhen: { kind: "described", value: confirmation } });
   const last = steps.at(-1);
   if (last?.type === "click" && last.target) options.push({ label: `The agent clicks “${last.target}”`, strength: "weak", why: "This proves the click, but not the website result.", doneWhen: { kind: "clicked", value: last.target } });
   options.push({ label: "A file is downloaded in the browser", strength: "strong", why: "Reiterate saves the downloaded file.", doneWhen: { kind: "file" } });
-  options.push({ label: "Other text appears on the page", strength: "medium", why: "Enter the text the website shows when the task works.", action: "custom" });
-  return options;
+  options.push({ label: "Describe what success looks like", strength: "medium", why: "Write it in your own words; the agent checks it on the screen at the end of each run.", action: "custom" });
+  return options.filter((option, index) => options.findIndex((candidate) => candidate.label === option.label) === index);
 }
 
 /** Rewrite only an explicit export recipient followed by an email-send action. */
