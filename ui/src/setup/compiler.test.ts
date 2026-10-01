@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { compileAgent, requiredCredentials, type SetupDraft } from "./compiler";
+import { compileAgent, doneWhenOptions, requiredCredentials, type SetupDraft } from "./compiler";
 
 const baseDraft = (): SetupDraft => ({
   name: "Download monthly statement",
@@ -268,4 +268,50 @@ test("rejects credential values in URL paths but allows sign-in paths", () => {
 
 test("requires no credentials for a public demonstration", () => {
   assert.deepEqual(requiredCredentials(baseDraft().steps), []);
+});
+
+test("compiles each done-when kind to the contracted stage list", () => {
+  const draft = baseDraft();
+  assert.deepEqual(compileAgent(draft).stages.map((stage) => stage.type), ["agent", "download"]);
+  draft.doneWhen = { kind: "text", value: "Export sent" };
+  assert.deepEqual(compileAgent(draft).stages.slice(1), [{ type: "expect_text", text: "Export sent", timeout_ms: 10_000 }]);
+  draft.doneWhen = { kind: "email", address: "tenant+agent@reiterate.com", channelId: "channel-1" };
+  assert.deepEqual(compileAgent(draft).stages.map((stage) => stage.type), ["agent"]);
+  draft.doneWhen = { kind: "clicked", value: "Export payments" };
+  assert.deepEqual(compileAgent(draft).stages.map((stage) => stage.type), ["agent"]);
+});
+
+test("offers the Reiterate email route first for an emailed export", () => {
+  const steps = [
+    { id: "email", type: "input" as const, description: "Enter Send export to", target: "Send export to", value: "jaan@example.com" },
+    { id: "send", type: "click" as const, description: "Click Export payments", target: "Export payments" },
+  ];
+  const options = doneWhenOptions(steps, { confirmation: "Export sent to jaan@example.com", failureKind: "result", files: [] }, { kind: "file" });
+  assert.equal(options[0]?.label, "Send the export to Reiterate instead");
+  assert.equal(options[0]?.strength, "strong");
+  assert.equal(options[0]?.recommended, true);
+  assert.equal(options.at(-2)?.label, "A file is downloaded in the browser");
+  assert.equal(options.at(-1)?.label, "Other text appears on the page");
+});
+
+test("offers email routing only when a later step sends the entered address", () => {
+  const input = { id: "email", type: "input" as const, description: "Enter contact address", target: "Contact", value: "jaan@example.com" };
+  const click = { id: "click", type: "click" as const, description: "Click Export payments", target: "Export payments" };
+  assert.equal(doneWhenOptions([input], null, { kind: "file" }).some((option) => option.action === "email"), false);
+  assert.equal(doneWhenOptions([click, input], null, { kind: "file" }).some((option) => option.action === "email"), false);
+  assert.equal(doneWhenOptions([input, click], null, { kind: "file" }).some((option) => option.action === "email"), true);
+});
+
+test("prefers a stable confirmation prefix and grades exact dynamic text lower", () => {
+  const options = doneWhenOptions([], { confirmation: "Download started: payments-september.csv" }, { kind: "file" });
+  assert.deepEqual(options.slice(0, 2).map((option) => [option.label, option.strength, option.recommended]), [
+    ["“Download started” appears on the page", "strong", true],
+    ["“Download started: payments-september.csv” appears on the page", "medium", false],
+  ]);
+});
+
+test("rejects credentials in custom done-when text", () => {
+  const draft = baseDraft();
+  draft.doneWhen = { kind: "text", value: "Password: secret123" };
+  assert.throws(() => compileAgent(draft), /Remove sign-in details/);
 });

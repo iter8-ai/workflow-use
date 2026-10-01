@@ -22,6 +22,22 @@ export type SetupDraft = {
   goal: string;
   steps: SetupStep[];
   inputs: SetupInput[];
+  doneWhen?: DoneWhen;
+};
+
+export type DoneWhen =
+  | { kind: "file" }
+  | { kind: "text"; value: string }
+  | { kind: "email"; address: string; channelId: string }
+  | { kind: "clicked"; value: string };
+
+export type DoneWhenOption = {
+  label: string;
+  strength?: "strong" | "medium" | "weak";
+  why: string;
+  recommended?: boolean;
+  doneWhen?: DoneWhen;
+  action?: "email" | "custom";
 };
 
 type AgentStage = {
@@ -34,7 +50,9 @@ type DownloadStage = {
   type: "download";
 };
 
-type WorkflowStage = AgentStage | DownloadStage;
+type ExpectTextStage = { type: "expect_text"; text: string; timeout_ms: number };
+
+type WorkflowStage = AgentStage | DownloadStage | ExpectTextStage;
 
 type CompiledAgent = {
   url: string;
@@ -93,7 +111,12 @@ export function compileAgent(draft: SetupDraft): CompiledAgent {
     url: draft.url,
     prompt: task,
     options: { version: 1, engine: "computer" },
-    stages: [{ type: "agent", prompt, step_limit: 64 }, { type: "download" }],
+    stages: [
+      { type: "agent", prompt, step_limit: 64 },
+      ...(draft.doneWhen?.kind === "text"
+        ? [{ type: "expect_text" as const, text: draft.doneWhen.value.trim(), timeout_ms: 10_000 }]
+        : draft.doneWhen === undefined || draft.doneWhen.kind === "file" ? [{ type: "download" as const }] : []),
+    ],
     parameters: {},
   };
 }
@@ -102,8 +125,11 @@ function validateDraft(draft: SetupDraft): void {
   requireText(draft.name, "Agent name");
   requireMaximumLength(draft.name, maximumNameLength, "Agent name");
   requireText(draft.goal, "Agent goal");
-  rejectCredentialDisclosure(draft.name, draft.goal);
+  rejectCredentialDisclosure(draft.name, draft.goal, draft.doneWhen?.kind === "text" ? draft.doneWhen.value : undefined);
   validateUrl(draft.url, "Setup URL");
+  if (draft.doneWhen?.kind === "text" && (draft.doneWhen.value.trim().length === 0 || draft.doneWhen.value.trim().length > 200)) {
+    throw new Error("Done-when text must be 1 to 200 characters.");
+  }
 
   if (draft.steps.length === 0) {
     throw new Error("Add at least one demonstrated step before creating the agent.");
@@ -139,6 +165,35 @@ function validateDraft(draft: SetupDraft): void {
       throw new Error("Reusable inputs are not supported in this release.");
     }
   }
+}
+
+/** Candidate checks ordered by the strength of evidence in the finished run. */
+export function doneWhenOptions(
+  steps: SetupStep[],
+  lastRun: { confirmation?: string | null; failureKind?: string | null; files?: Array<{ name: string; url: string }> } | null,
+  doneWhen: DoneWhen,
+): DoneWhenOption[] {
+  const options: DoneWhenOption[] = [];
+  const emailStepIndex = steps.findIndex((step) => step.type === "input" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(step.value ?? ""));
+  const sendsEmail = emailStepIndex >= 0 && steps.slice(emailStepIndex + 1).some((step) => step.type === "click" && /send|email|export/i.test(`${step.description} ${step.target ?? ""}`));
+  if (doneWhen.kind === "email") {
+    options.push({ label: `The export arrives at ${doneWhen.address}`, strength: "strong", why: "Reiterate saves the attached file in File library.", recommended: true, doneWhen });
+  } else if (sendsEmail) {
+    options.push({ label: "Send the export to Reiterate instead", strength: "strong", why: "Reiterate saves the attached file in File library, so workflows can use it.", recommended: true, action: "email" });
+  }
+  const confirmation = lastRun?.confirmation?.trim();
+  if (confirmation) {
+    const colon = confirmation.indexOf(":");
+    const stable = colon > 0 && /\b(?:\d{4}|\d{1,2}\s+[A-Z][a-z]+|[\w.+-]+@[\w.-]+|[\w.-]+\.(?:csv|xlsx?|pdf|zip))\b/i.test(confirmation.slice(colon + 1))
+      ? confirmation.slice(0, colon).trim() : null;
+    if (stable) options.push({ label: `“${stable}” appears on the page`, strength: "strong", why: "The changing date, file name, or address is left out.", recommended: options.length === 0, doneWhen: { kind: "text", value: stable } });
+    options.push({ label: `“${confirmation}” appears on the page`, strength: stable || options.length > 0 ? "medium" : "strong", why: "The website showed this confirmation at the end of the test.", recommended: options.length === 0, doneWhen: { kind: "text", value: confirmation } });
+  }
+  const last = steps.at(-1);
+  if (last?.type === "click" && last.target) options.push({ label: `The agent clicks “${last.target}”`, strength: "weak", why: "This proves the click, but not the website result.", doneWhen: { kind: "clicked", value: last.target } });
+  options.push({ label: "A file is downloaded in the browser", strength: "strong", why: "Reiterate saves the downloaded file.", doneWhen: { kind: "file" } });
+  options.push({ label: "Other text appears on the page", strength: "medium", why: "Enter the text the website shows when the task works.", action: "custom" });
+  return options;
 }
 
 function validateStep(step: SetupStep): void {
@@ -304,4 +359,3 @@ function continuation(description: string, literalValue: string | undefined): st
   const escaped = escapeLiteral(withoutLiteral.trim());
   return escaped.length === 0 ? "complete the demonstrated task" : escaped[0]!.toLowerCase() + escaped.slice(1);
 }
-
