@@ -52,6 +52,29 @@ export function requiredCredentials(steps: SetupStep[]): CredentialKind[] {
   return credentialKinds.filter((kind) => steps.some((step) => step.type === "credential" && step.value === kind));
 }
 
+export type DraftChange = { key: string; label: string; from: string; to: string };
+
+export function draftChanges(draft: SetupDraft, live: SetupDraft): DraftChange[] {
+  const changes: DraftChange[] = [];
+  if (draft.url !== live.url) changes.push({ key: "url", label: "Website address", from: live.url, to: draft.url });
+  if (draft.goal !== live.goal) changes.push({ key: "goal", label: "Goal", from: live.goal, to: draft.goal });
+  const sameOrder = draft.steps.length === live.steps.length && draft.steps.every((step, index) => step.id === live.steps[index]?.id);
+  if (!sameOrder) {
+    changes.push({ key: "steps", label: "Steps", from: `${live.steps.length} steps`, to: `${draft.steps.length} steps` });
+  } else {
+    draft.steps.forEach((step, index) => {
+      const original = live.steps[index]!;
+      if (step.description !== original.description) changes.push({ key: `step:${step.id}:description`, label: `Step ${index + 1} instruction`, from: original.description, to: step.description });
+      if ((step.expectedOutcome ?? "") !== (original.expectedOutcome ?? "")) changes.push({ key: `step:${step.id}:outcome`, label: `Step ${index + 1} expected outcome`, from: original.expectedOutcome ?? "", to: step.expectedOutcome ?? "" });
+    });
+  }
+  return changes;
+}
+
+export function replaceStepsFrom(steps: SetupStep[], index: number, replacement: SetupStep[]): SetupStep[] {
+  return [...steps.slice(0, index), ...replacement];
+}
+
 // A credential word followed by an assigned value, or directly by a token containing a
 // digit or symbol (e.g. "password correct-horse-9", "code 482913"). Sign-in wording
 // ("Enter the password and log in") and $placeholders stay allowed.
@@ -304,4 +327,3 @@ function continuation(description: string, literalValue: string | undefined): st
   const escaped = escapeLiteral(withoutLiteral.trim());
   return escaped.length === 0 ? "complete the demonstrated task" : escaped[0]!.toLowerCase() + escaped.slice(1);
 }
-

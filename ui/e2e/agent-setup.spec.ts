@@ -378,6 +378,108 @@ test("captures the controlled setup states for visual review", async ({ page }) 
   await page.screenshot({ path: "e2e-artifacts/test.png" });
 });
 
+test("loads and edits an existing agent through the host contract", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit`);
+  const setup = page.frameLocator("iframe");
+  await expect(setup.getByRole("heading", { name: "Edit web agent" })).toBeVisible();
+  await expect(setup.getByText("Live v3")).toBeVisible();
+  await setup.getByLabel("Step 1 description").fill("Open the updated reports section");
+  await expect(setup.getByText("Step 1 instruction")).toBeVisible();
+});
+
+test("tests a draft, checks the result, and shows the scheduled publish notice", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-schedule`);
+  const setup = page.frameLocator("iframe");
+  await expect(setup.getByRole("heading", { name: "Edit web agent" })).toBeVisible();
+  await setup.getByLabel("Step 1 description").fill("Open the updated reports section");
+  await setup.getByRole("button", { name: "Test draft" }).click();
+  await expect(setup.getByText("Test completed")).toBeVisible();
+  await setup.getByLabel("I checked the result").check();
+  await setup.getByRole("button", { name: "Publish changes" }).click();
+  await expect(setup.getByText("Timers will use v4 at the next run time.")).toBeVisible();
+});
+
+test("shows the conflict modal and supports overwrite or discard", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-conflict`);
+  const setup = page.frameLocator("iframe");
+  await expect(setup.getByRole("heading", { name: "Edit web agent" })).toBeVisible();
+  await setup.getByLabel("Step 1 description").fill("Changed locally");
+  await setup.getByRole("button", { name: "Test draft" }).click();
+  await expect(setup.getByText("Test completed")).toBeVisible();
+  await setup.getByLabel("I checked the result").check();
+  await setup.getByRole("button", { name: "Publish changes" }).click();
+  await setup.getByRole("button", { name: "Publish", exact: true }).click();
+  await expect(setup.getByRole("heading", { name: "Agent change conflict" })).toBeVisible();
+  await expect(setup.getByText("teammate@example.test", { exact: true })).toBeVisible();
+  await expect(setup.getByText("01.10.2026 at 10:00", { exact: true })).toBeVisible();
+  await expect(setup.getByRole("button", { name: "Overwrite their changes" })).toBeVisible();
+  await expect(setup.getByRole("button", { name: "Discard my changes" })).toBeVisible();
+  await setup.getByRole("button", { name: "Overwrite their changes" }).click();
+  await expect(setup.getByRole("heading", { name: "Edit web agent" })).toBeVisible();
+
+  await page.goto(`${baseUrl}/host?scenario=edit-conflict`);
+  const discarded = page.frameLocator("iframe");
+  await expect(discarded.getByRole("heading", { name: "Edit web agent" })).toBeVisible();
+  await discarded.getByLabel("Step 1 description").fill("Discarded locally");
+  await discarded.getByRole("button", { name: "Test draft" }).click();
+  await expect(discarded.getByText("Test completed")).toBeVisible();
+  await discarded.getByLabel("I checked the result").check();
+  await discarded.getByRole("button", { name: "Publish changes" }).click();
+  await discarded.getByRole("button", { name: "Publish", exact: true }).click();
+  await expect(discarded.getByRole("heading", { name: "Agent change conflict" })).toBeVisible();
+  await discarded.getByRole("button", { name: "Discard my changes" }).click();
+  await expect(discarded.getByLabel("Step 1 description")).toHaveValue("Open the reports section");
+  await expect(discarded.getByRole("heading", { name: "Publish changes?" })).toHaveCount(0);
+});
+
+test("retries a failed draft test and then enables checked publish", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-fail-pass`);
+  const setup = page.frameLocator("iframe");
+  await expect(setup.getByRole("heading", { name: "Edit web agent" })).toBeVisible();
+  await setup.getByLabel("Step 1 description").fill("Retry the updated reports section");
+  await setup.getByRole("button", { name: "Test draft" }).click();
+  await expect(setup.getByText("Test failed")).toBeVisible();
+  await setup.getByRole("button", { name: "Run test again" }).click();
+  await expect(setup.getByText("Test completed")).toBeVisible();
+  await setup.getByLabel("I checked the result").check();
+  await expect(setup.getByRole("button", { name: "Publish changes" })).toBeEnabled();
+});
+
+test("keeps raw stages and internal agents safe", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-raw`);
+  const setup = page.frameLocator("iframe");
+  await expect(setup.getByRole("heading", { name: "Advanced instructions" })).toBeVisible();
+  await setup.getByLabel("Agent stage prompt").fill("Updated legacy prompt");
+  await expect(setup.getByText("Agent stages")).toBeVisible();
+  await setup.getByRole("button", { name: "Test draft" }).click();
+  await expect(setup.getByText("Test completed")).toBeVisible();
+  const rawSaved = await page.evaluate(() => window.__savedAgents);
+  expect(JSON.stringify(rawSaved)).toContain("Updated legacy prompt");
+  expect(JSON.stringify(rawSaved)).toContain('"type":"download"');
+  await page.goto(`${baseUrl}/host?scenario=edit-internal`);
+  const internal = page.frameLocator("iframe");
+  await expect(internal.getByText("Read-only internal agent")).toBeVisible();
+  await expect(internal.getByLabel("Agent name")).toBeDisabled();
+  await expect(internal.getByRole("button", { name: "Publish changes" })).toBeDisabled();
+});
+
+test("renames without creating a version and re-demonstrates from a selected step", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit`);
+  const setup = page.frameLocator("iframe");
+  await expect(setup.getByRole("heading", { name: "Edit web agent" })).toBeVisible();
+  await setup.getByLabel("Agent name").fill("Renamed report agent");
+  await setup.getByLabel("Agent name").blur();
+  const redemonstrateFrom = setup.getByLabel("Re-demonstrate from step");
+  await redemonstrateFrom.selectOption({ value: "1" });
+  await expect(redemonstrateFrom).toHaveValue("1");
+  await setup.getByRole("button", { name: "Start re-demonstration" }).click();
+  await setup.getByRole("button", { name: "Finish re-demonstration" }).click();
+  await expect(setup.getByLabel("Step 1 description")).toHaveValue("Open the reports section");
+  await expect(setup.getByLabel("Step 2 description")).toHaveValue("Download the refreshed statement");
+  await expect.poll(() => page.evaluate(() => window.__renameRequests)).toEqual(["Renamed report agent"]);
+  await expect.poll(() => page.evaluate(() => window.__publishRequests)).toEqual([]);
+});
+
 async function describeAndDemonstrate(setup: FrameLocator): Promise<void> {
   await setup.getByLabel("Agent name").fill("Download monthly statement");
   await setup.getByLabel("Website address").fill("https://portal.example.test/reports");
@@ -411,7 +513,18 @@ function hostPage(url: string): string {
   window.__savedAgents = [];
   window.__credentialRequests = [];
   window.__startUrls = [];
+  window.__renameRequests = [];
+  window.__publishRequests = [];
   let recordingActive = false;
+  let publishedConflict = false;
+  let testAttempts = 0;
+  const edit = scenario.startsWith("edit");
+  const editSteps = [
+    { id: "open-reports", type: "click", description: "Open the reports section", target: "Reports", expectedOutcome: "The reports list is visible" },
+    { id: "download", type: "click", description: "Download the statement", target: "Download statement" },
+  ];
+  const redemonstrationSteps = [{ id: "download-refreshed", type: "click", description: "Download the refreshed statement", target: "Download statement" }];
+  const internal = scenario === "edit-internal";
   const signIn = scenario === "sign-in" || scenario === "sign-in-unsupported";
   const steps = [
     { id: "open-reports", type: "click", description: "Open the reports section", target: "Reports", expectedOutcome: "The reports list is visible" },
@@ -434,15 +547,24 @@ function hostPage(url: string): string {
     const send = (result) => event.source.postMessage({ type: "workflow-use:response", version: 1, id: request.id, result }, event.origin);
     const fail = (error) => event.source.postMessage({ type: "workflow-use:response", version: 1, id: request.id, error }, event.origin);
     if (request.method === "ready") {
-      if (scenario === "delayed-ready") setTimeout(() => send({ schedule: true }), 300);
-      else send({ schedule: true, credentials: scenario !== "sign-in-unsupported" });
-    } else if (request.method === "requestCredentials") { window.__credentialRequests.push(request.params); send({ saved: request.params.kinds }); } else if (request.method === "startRecording") { window.__startUrls.push(request.params.url); if (recordingActive) { fail("Finish the current demonstration first."); return; } recordingActive = true; send({ id: "recording-1", status: "recording", liveViewUrl: "https://live.browserbase.com/session", steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
-    else if (request.method === "getRecording" || request.method === "stopRecording") send({ id: "recording-1", status: "stopped", liveViewUrl: "https://live.browserbase.com/session", steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null });
+      if (scenario === "delayed-ready") setTimeout(() => send({ schedule: true, mode: "create", credentials: true }), 300);
+      else send({ schedule: true, mode: edit ? "edit" : "create", credentials: scenario !== "sign-in-unsupported" });
+    } else if (request.method === "loadAgent") {
+      send({ agentId: "agent-1", name: "Monthly report agent", url: "https://portal.example.test/reports", goal: "Download the monthly report.", steps: scenario === "edit-raw" ? null : editSteps, stages: [{ type: "agent", prompt: "Open reports", step_limit: 16 }, { type: "download" }], liveConfigId: "config-3", version: 3, internal, schedule: scenario === "edit-schedule" ? "Daily 09:00 UTC" : null, nextRunAt: scenario === "edit-schedule" ? "2026-10-02T09:00:00Z" : null });
+    } else if (request.method === "renameAgent") { window.__renameRequests.push(request.params.name); send(null);
+    } else if (request.method === "saveDraft") { window.__savedAgents.push(request.params); send({ draftId: "draft-1" });
+    } else if (request.method === "publishDraft") {
+      window.__publishRequests.push(request.params);
+      if (scenario === "edit-conflict" && !request.params.overwrite && !publishedConflict) { publishedConflict = true; send({ conflict: { updatedBy: "teammate@example.test", updatedAt: "2026-10-01T10:00:00Z" } }); }
+      else send({ version: 4 });
+    } else if (request.method === "requestCredentials") { window.__credentialRequests.push(request.params); send({ saved: request.params.kinds }); } else if (request.method === "startRecording") { window.__startUrls.push(request.params.url); if (recordingActive) { fail("Finish the current demonstration first."); return; } recordingActive = true; send({ id: "recording-1", status: "recording", liveViewUrl: "https://live.browserbase.com/session", steps: scenario.startsWith("edit") ? [] : steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
+    else if (request.method === "getRecording") send({ id: "recording-1", status: "stopped", liveViewUrl: "https://live.browserbase.com/session", steps: [], expiresAt: "2026-09-11T12:00:00Z", blockedReason: null });
+    else if (request.method === "stopRecording") { recordingActive = false; send({ id: "recording-1", status: "stopped", liveViewUrl: "https://live.browserbase.com/session", steps: scenario.startsWith("edit") ? redemonstrationSteps : steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
     else if (request.method === "cancelRecording") { recordingActive = false; send(undefined); }
     else if (request.method === "saveAgent") { window.__savedAgents.push(request.params); send({ id: "agent-1" }); }
-    else if (request.method === "testAgent") { window.__testArguments.push(request.params.arguments); send({ id: "run-1" }); }
+    else if (request.method === "testAgent") { testAttempts += 1; window.__testArguments.push(request.params.arguments); send({ id: "run-1" }); }
     else if (request.method === "getTestRun") {
-      if (scenario === "failed") send({ status: "failed", error: "The website rejected the request." });
+      if (scenario === "failed" || (scenario === "edit-fail-pass" && testAttempts === 1)) send({ status: "failed", error: "The website rejected the request." });
       else if (scenario === "watch") send({ status: "running", liveViewUrl: "https://www.browserbase.com/devtools-fullscreen/inspector.html" });
       else send({ status: "succeeded", files: [{ name: "statement.pdf", url: "https://files.example.test/statement.pdf" }] });
     } else if (request.method === "scheduleAgent") { window.__savedSchedule = request.params.cron; window.__scheduleArguments.push(request.params.arguments); send(undefined); }

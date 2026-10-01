@@ -17,8 +17,22 @@ export type TestRun = {
   liveViewUrl?: string | null;
 };
 
+export type EditAgent = {
+  agentId: string;
+  name: string;
+  url: string;
+  goal: string;
+  steps: SetupStep[] | null;
+  stages: unknown[];
+  liveConfigId: string;
+  version: number;
+  internal: boolean;
+  schedule: string | null;
+  nextRunAt: string | null;
+};
+
 type RequestMap = {
-  ready: { params: Record<string, never>; result: { schedule: boolean; credentials?: boolean } };
+  ready: { params: Record<string, never>; result: { schedule: boolean; credentials?: boolean; mode: "create" | "edit" } };
   // The host collects and stores the values; only the saved kinds come back.
   requestCredentials: { params: { kinds: CredentialKind[]; replace?: boolean }; result: { saved: CredentialKind[] } };
   startRecording: { params: { url: string }; result: Recording };
@@ -26,9 +40,13 @@ type RequestMap = {
   stopRecording: { params: { id: string }; result: Recording };
   cancelRecording: { params: { id: string }; result: undefined };
   saveAgent: { params: { draft: SetupDraft; config: unknown; agentId?: string }; result: { id: string } };
+  loadAgent: { params: Record<string, never>; result: EditAgent };
+  renameAgent: { params: { name: string }; result: null };
+  saveDraft: { params: { draft: SetupDraft; config: unknown }; result: { draftId: string } };
   testAgent: { params: { agentId: string; arguments: Record<string, never> }; result: { id: string } };
   getTestRun: { params: { agentId: string; runId: string }; result: TestRun };
   scheduleAgent: { params: { agentId: string; runId: string; arguments: Record<string, never>; cron: string }; result: undefined };
+  publishDraft: { params: { overwrite: boolean }; result: { version: number } | { conflict: { updatedBy: string | null; updatedAt: string | null } } };
   close: { params: { agentId?: string }; result: undefined };
 };
 

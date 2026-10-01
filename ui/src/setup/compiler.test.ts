@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { compileAgent, requiredCredentials, type SetupDraft } from "./compiler";
+import { compileAgent, draftChanges, replaceStepsFrom, requiredCredentials, type SetupDraft } from "./compiler";
 
 const baseDraft = (): SetupDraft => ({
   name: "Download monthly statement",
@@ -268,4 +268,35 @@ test("rejects credential values in URL paths but allows sign-in paths", () => {
 
 test("requires no credentials for a public demonstration", () => {
   assert.deepEqual(requiredCredentials(baseDraft().steps), []);
+});
+
+test("reports editable draft changes against the live setup", () => {
+  const live = baseDraft();
+  const draft = { ...live, goal: "Download the latest monthly statement.", steps: [...live.steps, {
+    id: "archive",
+    type: "click" as const,
+    description: "Open the archive",
+    target: "Archive",
+  }] };
+
+  assert.deepEqual(draftChanges(draft, live), [
+    { key: "goal", label: "Goal", from: live.goal, to: draft.goal },
+    { key: "steps", label: "Steps", from: "2 steps", to: "3 steps" },
+  ]);
+});
+
+test("reports the changed step so it can be reverted independently", () => {
+  const live = baseDraft();
+  const draft = { ...live, steps: live.steps.map((step, index) => index === 0 ? { ...step, description: "Open the updated reports section" } : step) };
+
+  assert.deepEqual(draftChanges(draft, live), [
+    { key: "step:open-reports:description", label: "Step 1 instruction", from: "Open the reports section", to: "Open the updated reports section" },
+  ]);
+});
+
+test("replaces demonstrated steps from the selected index", () => {
+  const steps = baseDraft().steps;
+  const replacement = [{ id: "new", type: "click" as const, description: "New action", target: "New" }];
+
+  assert.deepEqual(replaceStepsFrom(steps, 1, replacement), [steps[0], replacement[0]]);
 });
