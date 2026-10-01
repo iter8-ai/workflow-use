@@ -302,6 +302,15 @@ test("offers email routing only when a later step sends the entered address", ()
   assert.equal(doneWhenOptions([input, click], null, { kind: "file" }).some((option) => option.action === "email"), true);
 });
 
+test("suppresses email routing when multiple email inputs could be rewritten", () => {
+  const steps = [
+    { id: "billing", type: "input" as const, description: "Enter billing contact", target: "Billing email", value: "billing@example.com" },
+    { id: "recipient", type: "input" as const, description: "Enter export recipient", target: "Send export to", value: "recipient@example.com" },
+    { id: "send", type: "click" as const, description: "Send the export", target: "Send export" },
+  ];
+  assert.equal(doneWhenOptions(steps, null, { kind: "file" }).some((option) => option.action === "email"), false);
+});
+
 test("prefers a stable confirmation prefix and grades exact dynamic text lower", () => {
   const options = doneWhenOptions([], { confirmation: "Download started: payments-september.csv" }, { kind: "file" });
   assert.deepEqual(options.slice(0, 2).map((option) => [option.label, option.strength, option.recommended]), [

@@ -53,6 +53,15 @@ test("takes a user through demonstration, review, testing, and host scheduling",
   await expect.poll(() => page.evaluate(() => window.__closeRequests)).toEqual([{ agentId: "agent-1" }]);
 });
 
+test("offers done-when choices before the first test", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=success`);
+  const setup = page.frameLocator("iframe");
+
+  await completeToTest(setup);
+  await setup.locator("summary").filter({ hasText: "Change" }).click();
+  await expect(setup.getByRole("button", { name: "A file is downloaded in the browser" })).toBeVisible();
+});
+
 test("finishes a manual setup through the host without scheduling", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=manual-schedule`);
   const setup = page.frameLocator("iframe");
@@ -362,6 +371,24 @@ test("accepts a rejected export sender, reruns, and shows the routed file", asyn
   expect(saved.at(-1).draft.steps[1].value).toBe("reports+agent@reiterate.com");
   expect(saved.at(-1).config.stages.map((stage: { type: string }) => stage.type)).toEqual(["agent"]);
   await page.screenshot({ path: "e2e-artifacts/test-email-passed.png" });
+});
+
+test("does not offer or apply email routing when multiple email inputs exist", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=email-ambiguous`);
+  const setup = page.frameLocator("iframe");
+
+  await completeToTest(setup);
+  await setup.locator("summary").filter({ hasText: "Change" }).click();
+  await expect(setup.getByRole("button", { name: /Send the export to Reiterate instead/ })).toHaveCount(0);
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await expect(setup.getByText("Every step ran, but no file was downloaded")).toBeVisible();
+  await expect(setup.getByRole("button", { name: /Send the export to Reiterate instead/ })).toHaveCount(0);
+  expect(await page.evaluate(() => window.__createdRoutes)).toEqual([]);
+  const saved = await page.evaluate(() => window.__savedAgents);
+  expect(saved.at(-1).draft.steps).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: "billing", value: "billing@example.test" }),
+    expect.objectContaining({ id: "recipient", value: "recipient@example.test" }),
+  ]));
 });
 
 test("waits for email and blocks scheduling when the email has no files", async ({ page }) => {
@@ -742,7 +769,10 @@ function hostPage(url: string): string {
   const screen = { image: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6S8sAAAAASUVORK5CYII=", thought: "I looked for the export button." };
   const steps = [
     { id: "open-reports", type: "click", description: "Open the reports section", target: "Reports", expectedOutcome: "The reports list is visible" },
-    ...(emailScenario ? [{ id: "email-address", type: "input", description: "Enter the export email", target: "Email address", value: "me@example.test" }] : []),
+    ...(scenario === "email-ambiguous" ? [
+      { id: "billing", type: "input", description: "Enter billing contact", target: "Billing email", value: "billing@example.test" },
+      { id: "recipient", type: "input", description: "Enter export recipient", target: "Send export to", value: "recipient@example.test" },
+    ] : emailScenario ? [{ id: "email-address", type: "input", description: "Enter the export email", target: "Email address", value: "me@example.test" }] : []),
     ...(scenario === "form-entry" ? [
       { id: "choose-month", type: "input", description: "Fill in Statement month", target: "Statement month", value: "September 2026" },
       { id: "choose-format", type: "select_change", description: "Choose PDF in Format", target: "Format", value: "PDF" },

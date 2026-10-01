@@ -40,6 +40,8 @@ export type DoneWhenOption = {
   action?: "email" | "custom";
 };
 
+const emailValuePattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 type AgentStage = {
   type: "agent";
   prompt: string;
@@ -174,8 +176,8 @@ export function doneWhenOptions(
   doneWhen: DoneWhen,
 ): DoneWhenOption[] {
   const options: DoneWhenOption[] = [];
-  const emailStepIndex = steps.findIndex((step) => step.type === "input" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(step.value ?? ""));
-  const sendsEmail = emailStepIndex >= 0 && steps.slice(emailStepIndex + 1).some((step) => step.type === "click" && /send|email|export/i.test(`${step.description} ${step.target ?? ""}`));
+  const emailStepIndex = findUnambiguousEmailStep(steps);
+  const sendsEmail = emailStepIndex !== null;
   if (doneWhen.kind === "email") {
     options.push({ label: `The export arrives at ${doneWhen.address}`, strength: "strong", why: "Reiterate saves the attached file in File library.", recommended: true, doneWhen });
   } else if (sendsEmail) {
@@ -194,6 +196,19 @@ export function doneWhenOptions(
   options.push({ label: "A file is downloaded in the browser", strength: "strong", why: "Reiterate saves the downloaded file.", doneWhen: { kind: "file" } });
   options.push({ label: "Other text appears on the page", strength: "medium", why: "Enter the text the website shows when the task works.", action: "custom" });
   return options;
+}
+
+/** Return the only email input when a later step clearly sends it. */
+export function findUnambiguousEmailStep(steps: SetupStep[]): number | null {
+  const emailStepIndexes = steps.reduce<number[]>((indexes, step, index) => {
+    if (step.type === "input" && emailValuePattern.test(step.value ?? "")) indexes.push(index);
+    return indexes;
+  }, []);
+  if (emailStepIndexes.length !== 1) return null;
+  const emailStepIndex = emailStepIndexes[0]!;
+  return steps.slice(emailStepIndex + 1).some((step) => step.type === "click" && /send|email|export/i.test(`${step.description} ${step.target ?? ""}`))
+    ? emailStepIndex
+    : null;
 }
 
 function validateStep(step: SetupStep): void {
