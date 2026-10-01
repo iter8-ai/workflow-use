@@ -58,16 +58,21 @@ export function draftChanges(draft: SetupDraft, live: SetupDraft): DraftChange[]
   const changes: DraftChange[] = [];
   if (draft.url !== live.url) changes.push({ key: "url", label: "Website address", from: live.url, to: draft.url });
   if (draft.goal !== live.goal) changes.push({ key: "goal", label: "Goal", from: live.goal, to: draft.goal });
-  const sameOrder = draft.steps.length === live.steps.length && draft.steps.every((step, index) => step.id === live.steps[index]?.id);
-  if (!sameOrder) {
-    changes.push({ key: "steps", label: "Steps", from: `${live.steps.length} steps`, to: `${draft.steps.length} steps` });
-  } else {
-    draft.steps.forEach((step, index) => {
-      const original = live.steps[index]!;
-      if (step.description !== original.description) changes.push({ key: `step:${step.id}:description`, label: `Step ${index + 1} instruction`, from: original.description, to: step.description });
-      if ((step.expectedOutcome ?? "") !== (original.expectedOutcome ?? "")) changes.push({ key: `step:${step.id}:outcome`, label: `Step ${index + 1} expected outcome`, from: original.expectedOutcome ?? "", to: step.expectedOutcome ?? "" });
-    });
+  const added = draft.steps.filter((step) => !live.steps.some((original) => original.id === step.id));
+  const removed = live.steps.filter((step) => !draft.steps.some((current) => current.id === step.id));
+  for (const step of added) changes.push({ key: `added:${step.id}`, label: "Step added", from: "", to: step.description });
+  for (const step of removed) changes.push({ key: `removed:${step.id}`, label: "Step removed", from: step.description, to: "" });
+  const currentOrder = draft.steps.filter((step) => live.steps.some((original) => original.id === step.id));
+  const liveOrder = live.steps.filter((step) => draft.steps.some((current) => current.id === step.id));
+  if (currentOrder.some((step, index) => step.id !== liveOrder[index]?.id)) {
+    changes.push({ key: "steps", label: "Step order changed", from: liveOrder.map((step) => step.description).join(" → "), to: currentOrder.map((step) => step.description).join(" → ") });
   }
+  draft.steps.forEach((step, index) => {
+    const original = live.steps.find((item) => item.id === step.id);
+    if (!original) return;
+    if (step.description !== original.description) changes.push({ key: `step:${step.id}:description`, label: `Step ${index + 1} instruction`, from: original.description, to: step.description });
+    if ((step.expectedOutcome ?? "") !== (original.expectedOutcome ?? "")) changes.push({ key: `step:${step.id}:outcome`, label: `Step ${index + 1} expected outcome`, from: original.expectedOutcome ?? "", to: step.expectedOutcome ?? "" });
+  });
   return changes;
 }
 

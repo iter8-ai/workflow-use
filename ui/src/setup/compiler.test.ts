@@ -281,7 +281,7 @@ test("reports editable draft changes against the live setup", () => {
 
   assert.deepEqual(draftChanges(draft, live), [
     { key: "goal", label: "Goal", from: live.goal, to: draft.goal },
-    { key: "steps", label: "Steps", from: "2 steps", to: "3 steps" },
+    { key: "added:archive", label: "Step added", from: "", to: "Open the archive" },
   ]);
 });
 

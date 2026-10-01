@@ -204,6 +204,12 @@ test("assumes https for a website address typed without a scheme", async ({ page
 test.describe("in a time zone ahead of UTC", () => {
   test.use({ timezoneId: "Asia/Kolkata" });
 
+  test("formats the edit header's next run in local time", async ({ page }) => {
+    await page.goto(`${baseUrl}/host?scenario=edit-schedule`);
+    const setup = page.frameLocator("iframe");
+    await expect(setup.getByText("Daily 09:00 UTC · next run 02.10.2026 at 14:30", { exact: true })).toBeVisible();
+  });
+
   test("schedules the daily run at the user's local time", async ({ page }) => {
     await page.goto(`${baseUrl}/host?scenario=success`);
     const setup = page.frameLocator("iframe");
@@ -378,6 +384,15 @@ test("captures the controlled setup states for visual review", async ({ page }) 
   await page.screenshot({ path: "e2e-artifacts/test.png" });
 });
 
+test("clears a load error after successfully retrying", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-load-error`);
+  const setup = page.frameLocator("iframe");
+  await expect(setup.getByRole("alert")).toContainText("Loading failed. Try again.");
+  await setup.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(setup.getByRole("heading", { name: "Edit web agent" })).toBeVisible();
+  await expect(setup.getByRole("alert")).toHaveCount(0);
+});
+
 test("loads and edits an existing agent through the host contract", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=edit`);
   const setup = page.frameLocator("iframe");
@@ -387,7 +402,94 @@ test("loads and edits an existing agent through the host contract", async ({ pag
   await expect(setup.getByText("Step 1 instruction")).toBeVisible();
 });
 
+test("keeps the editor cards in the main column and Changes in a sticky rail", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(`${baseUrl}/host?scenario=edit-schedule`);
+  const setup = page.frameLocator("iframe");
+  await expect(setup.getByText("Daily 09:00 UTC · next run 02.10.2026 at 09:00", { exact: true })).toBeVisible();
+  const details = await setup.getByRole("heading", { name: "Details", exact: true }).boundingBox();
+  const steps = await setup.getByRole("heading", { name: "Steps", exact: true }).boundingBox();
+  const changes = await setup.getByRole("heading", { name: "Changes", exact: true }).boundingBox();
+  expect(details).not.toBeNull();
+  expect(steps?.x).toBe(details?.x);
+  expect(changes?.y).toBe(details?.y);
+  expect(changes!.x).toBeGreaterThan(steps!.x + 500);
+  await expect(setup.getByRole("button", { name: "Publish changes" })).toBeInViewport();
+  await expect(setup.locator(".edit-rail")).toHaveCSS("position", "sticky");
+  await page.screenshot({ path: "e2e-artifacts/edit-loaded.png" });
+});
+
+test("only renames when the trimmed name changes and remembers the saved name", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit`);
+  const setup = page.frameLocator("iframe");
+  const name = setup.getByLabel("Agent name");
+  await expect(name).toHaveValue("Monthly report agent");
+  await name.focus();
+  await name.blur();
+  await name.fill("  Monthly report agent  ");
+  await name.blur();
+  await expect(name).toHaveValue("Monthly report agent");
+  expect(await page.evaluate(() => window.__renameRequests)).toEqual([]);
+  await name.fill("  Renamed report agent  ");
+  await name.blur();
+  await expect.poll(() => page.evaluate(() => window.__renameRequests)).toEqual(["Renamed report agent"]);
+  await expect(name).toBeEnabled();
+  await name.focus();
+  await name.blur();
+  expect(await page.evaluate(() => window.__renameRequests)).toEqual(["Renamed report agent"]);
+  expect(await page.evaluate(() => window.__publishRequests)).toEqual([]);
+});
+
+test("requires a fresh draft test after a successful rename", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByLabel("Step 1 description").fill("Updated reports section");
+  await setup.getByRole("button", { name: "Test draft" }).click();
+  await expect(setup.getByText("Test completed")).toBeVisible();
+  await setup.getByLabel("I checked the result").check();
+  await expect(setup.getByRole("button", { name: "Publish changes" })).toBeEnabled();
+  await setup.getByLabel("Agent name").fill("Renamed report agent");
+  await setup.getByLabel("Agent name").blur();
+  await expect(setup.getByText("Test completed")).toHaveCount(0);
+  await expect(setup.getByRole("button", { name: "Publish changes" })).toBeDisabled();
+});
+
+test("shows rename errors beside the name and permits retry", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-rename-error`);
+  const setup = page.frameLocator("iframe");
+  const name = setup.getByLabel("Agent name");
+  await name.fill("Renamed report agent");
+  await name.blur();
+  await expect(setup.locator(".edit-header").getByRole("alert")).toHaveText("Rename failed. Try again.");
+  await expect(name).toHaveAttribute("aria-invalid", "true");
+  await name.focus();
+  await name.blur();
+  await expect(setup.locator(".edit-header").getByRole("alert")).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => window.__renameRequests)).toEqual(["Renamed report agent", "Renamed report agent"]);
+});
+
+test("labels reordered, added and removed steps and reverts each change", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit`);
+  const setup = page.frameLocator("iframe");
+  const rail = setup.locator(".edit-rail");
+  await setup.getByRole("button", { name: "Move step 1 down" }).click();
+  await expect(rail.getByText("Step order changed", { exact: true })).toBeVisible();
+  await expect(rail.getByText("2 steps → 2 steps", { exact: true })).toHaveCount(0);
+  await rail.getByRole("button", { name: "Revert" }).click();
+  await expect(setup.getByLabel("Step 1 description")).toHaveValue("Open the reports section");
+  await setup.getByRole("button", { name: "Insert step", exact: true }).click();
+  await expect(rail.getByText("Step added", { exact: true })).toBeVisible();
+  await rail.getByRole("button", { name: "Revert" }).click();
+  await expect(setup.getByLabel("Step 3 description")).toHaveCount(0);
+  await setup.getByRole("button", { name: "Remove step 1", exact: true }).click();
+  await expect(rail.getByText("Step removed", { exact: true })).toBeVisible();
+  await rail.getByRole("button", { name: "Revert" }).click();
+  await expect(setup.getByLabel("Step 1 description")).toHaveValue("Open the reports section");
+  await expect(rail.getByText("No changes yet.")).toBeVisible();
+});
+
 test("tests a draft, checks the result, and shows the scheduled publish notice", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(`${baseUrl}/host?scenario=edit-schedule`);
   const setup = page.frameLocator("iframe");
   await expect(setup.getByRole("heading", { name: "Edit web agent" })).toBeVisible();
@@ -395,11 +497,18 @@ test("tests a draft, checks the result, and shows the scheduled publish notice",
   await setup.getByRole("button", { name: "Test draft" }).click();
   await expect(setup.getByText("Test completed")).toBeVisible();
   await setup.getByLabel("I checked the result").check();
+  const label = await setup.locator(".result-check").boundingBox();
+  expect(label!.height).toBeLessThan(25);
+  const check = await setup.getByLabel("I checked the result").boundingBox();
+  const publish = await setup.getByRole("button", { name: "Publish changes" }).boundingBox();
+  expect(Math.abs(check!.y + check!.height / 2 - publish!.y - publish!.height / 2)).toBeLessThan(2);
+  await page.screenshot({ path: "e2e-artifacts/edit-tested.png" });
   await setup.getByRole("button", { name: "Publish changes" }).click();
   await expect(setup.getByText("Timers will use v4 at the next run time.")).toBeVisible();
 });
 
 test("shows the conflict modal and supports overwrite or discard", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(`${baseUrl}/host?scenario=edit-conflict`);
   const setup = page.frameLocator("iframe");
   await expect(setup.getByRole("heading", { name: "Edit web agent" })).toBeVisible();
@@ -410,10 +519,12 @@ test("shows the conflict modal and supports overwrite or discard", async ({ page
   await setup.getByRole("button", { name: "Publish changes" }).click();
   await setup.getByRole("button", { name: "Publish", exact: true }).click();
   await expect(setup.getByRole("heading", { name: "Agent change conflict" })).toBeVisible();
+  await expect(setup.getByRole("dialog")).toHaveCount(1);
   await expect(setup.getByText("teammate@example.test", { exact: true })).toBeVisible();
   await expect(setup.getByText("01.10.2026 at 10:00", { exact: true })).toBeVisible();
   await expect(setup.getByRole("button", { name: "Overwrite their changes" })).toBeVisible();
   await expect(setup.getByRole("button", { name: "Discard my changes" })).toBeVisible();
+  await page.screenshot({ path: "e2e-artifacts/edit-conflict.png" });
   await setup.getByRole("button", { name: "Overwrite their changes" }).click();
   await expect(setup.getByRole("heading", { name: "Edit web agent" })).toBeVisible();
 
@@ -445,17 +556,53 @@ test("retries a failed draft test and then enables checked publish", async ({ pa
   await expect(setup.getByRole("button", { name: "Publish changes" })).toBeEnabled();
 });
 
+test("reviews raw agent Details changes and enables publishing without editing stages", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-raw`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByLabel("Website address").fill("https://portal.example.test/new-reports");
+  await setup.getByLabel("What should the agent do?").fill("Download the updated report.");
+  const rail = setup.locator(".edit-rail");
+  await expect(rail.getByText("Website address", { exact: true })).toBeVisible();
+  await expect(rail.getByText("Goal", { exact: true })).toBeVisible();
+  await setup.getByRole("button", { name: "Test draft" }).click();
+  await expect(setup.getByText("Test completed")).toBeVisible();
+  await setup.getByLabel("I checked the result").check();
+  await expect(setup.getByRole("button", { name: "Publish changes" })).toBeEnabled();
+  await rail.locator(".change-item").filter({ hasText: "Website address" }).getByRole("button", { name: "Revert" }).click();
+  await expect(setup.getByLabel("Website address")).toHaveValue("https://portal.example.test/reports");
+  await rail.getByRole("button", { name: "Revert" }).click();
+  await expect(rail.getByText("No changes yet.")).toBeVisible();
+});
+
+test("keeps a published raw agent editable when its stored setup has empty steps", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-raw-empty`);
+  const setup = page.frameLocator("iframe");
+  await expect(setup.getByRole("heading", { name: "Advanced instructions" })).toBeVisible();
+  await expect(setup.getByText("Sleep stage · 5 s", { exact: true })).toBeVisible();
+  await setup.getByLabel("Agent stage prompt").fill("Updated legacy prompt after reopening");
+  await setup.getByRole("button", { name: "Test draft" }).click();
+  await expect(setup.getByText("Test completed")).toBeVisible();
+  await setup.getByLabel("I checked the result").check();
+  await expect(setup.getByRole("button", { name: "Publish changes" })).toBeEnabled();
+});
+
 test("keeps raw stages and internal agents safe", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(`${baseUrl}/host?scenario=edit-raw`);
   const setup = page.frameLocator("iframe");
   await expect(setup.getByRole("heading", { name: "Advanced instructions" })).toBeVisible();
+  for (const label of ["Download stage", "Sleep stage · 5 s", "Reload stage"]) {
+    await expect(setup.locator(".raw-preserved").filter({ hasText: label })).toHaveText(`${label}unchanged`);
+  }
+  await expect(setup.locator("pre.raw-preserved")).toHaveCount(0);
+  await page.screenshot({ path: "e2e-artifacts/edit-raw.png" });
   await setup.getByLabel("Agent stage prompt").fill("Updated legacy prompt");
   await expect(setup.getByText("Agent stages")).toBeVisible();
   await setup.getByRole("button", { name: "Test draft" }).click();
   await expect(setup.getByText("Test completed")).toBeVisible();
   const rawSaved = await page.evaluate(() => window.__savedAgents);
   expect(JSON.stringify(rawSaved)).toContain("Updated legacy prompt");
-  expect(JSON.stringify(rawSaved)).toContain('"type":"download"');
+  expect(rawSaved[0].config.stages.slice(1)).toEqual([{ type: "download" }, { type: "sleep", sleep_ms: 5000 }, { type: "reload" }]);
   await page.goto(`${baseUrl}/host?scenario=edit-internal`);
   const internal = page.frameLocator("iframe");
   await expect(internal.getByText("Read-only internal agent")).toBeVisible();
@@ -473,11 +620,18 @@ test("renames without creating a version and re-demonstrates from a selected ste
   await redemonstrateFrom.selectOption({ value: "1" });
   await expect(redemonstrateFrom).toHaveValue("1");
   await setup.getByRole("button", { name: "Start re-demonstration" }).click();
+  await expect(setup.getByTitle("Virtual browser")).toBeVisible();
+  await expect(setup.getByTitle("Virtual browser")).toHaveAttribute("src", "https://live.browserbase.com/session");
   await setup.getByRole("button", { name: "Finish re-demonstration" }).click();
   await expect(setup.getByLabel("Step 1 description")).toHaveValue("Open the reports section");
   await expect(setup.getByLabel("Step 2 description")).toHaveValue("Download the refreshed statement");
   await expect.poll(() => page.evaluate(() => window.__renameRequests)).toEqual(["Renamed report agent"]);
   await expect.poll(() => page.evaluate(() => window.__publishRequests)).toEqual([]);
+  await expect(setup.getByRole("button", { name: "Start re-demonstration" })).toBeEnabled();
+  await setup.getByRole("button", { name: "Start re-demonstration" }).click();
+  await expect(setup.getByTitle("Virtual browser")).toBeVisible();
+  await setup.getByRole("button", { name: "Finish re-demonstration" }).click();
+  await expect(setup.getByRole("alert")).toHaveCount(0);
 });
 
 async function describeAndDemonstrate(setup: FrameLocator): Promise<void> {
@@ -516,8 +670,10 @@ function hostPage(url: string): string {
   window.__renameRequests = [];
   window.__publishRequests = [];
   let recordingActive = false;
+  let recordingExists = false;
   let publishedConflict = false;
   let testAttempts = 0;
+  let loadAttempts = 0;
   const edit = scenario.startsWith("edit");
   const editSteps = [
     { id: "open-reports", type: "click", description: "Open the reports section", target: "Reports", expectedOutcome: "The reports list is visible" },
@@ -550,17 +706,19 @@ function hostPage(url: string): string {
       if (scenario === "delayed-ready") setTimeout(() => send({ schedule: true, mode: "create", credentials: true }), 300);
       else send({ schedule: true, mode: edit ? "edit" : "create", credentials: scenario !== "sign-in-unsupported" });
     } else if (request.method === "loadAgent") {
-      send({ agentId: "agent-1", name: "Monthly report agent", url: "https://portal.example.test/reports", goal: "Download the monthly report.", steps: scenario === "edit-raw" ? null : editSteps, stages: [{ type: "agent", prompt: "Open reports", step_limit: 16 }, { type: "download" }], liveConfigId: "config-3", version: 3, internal, schedule: scenario === "edit-schedule" ? "Daily 09:00 UTC" : null, nextRunAt: scenario === "edit-schedule" ? "2026-10-02T09:00:00Z" : null });
-    } else if (request.method === "renameAgent") { window.__renameRequests.push(request.params.name); send(null);
+      loadAttempts += 1;
+      if (scenario === "edit-load-error" && loadAttempts === 1) { fail("Loading failed. Try again."); return; }
+      send({ agentId: "agent-1", name: "Monthly report agent", url: "https://portal.example.test/reports", goal: "Download the monthly report.", steps: scenario === "edit-raw" ? null : scenario === "edit-raw-empty" ? [] : editSteps, stages: [{ type: "agent", prompt: "Open reports", step_limit: 16 }, { type: "download" }, { type: "sleep", sleep_ms: 5000 }, { type: "reload" }], liveConfigId: "config-3", version: 3, internal, schedule: scenario === "edit-schedule" ? "Daily 09:00 UTC" : null, nextRunAt: scenario === "edit-schedule" ? "2026-10-02T09:00:00Z" : null });
+    } else if (request.method === "renameAgent") { window.__renameRequests.push(request.params.name); if (scenario === "edit-rename-error" && window.__renameRequests.length === 1) fail("Rename failed. Try again."); else send(null);
     } else if (request.method === "saveDraft") { window.__savedAgents.push(request.params); send({ draftId: "draft-1" });
     } else if (request.method === "publishDraft") {
       window.__publishRequests.push(request.params);
       if (scenario === "edit-conflict" && !request.params.overwrite && !publishedConflict) { publishedConflict = true; send({ conflict: { updatedBy: "teammate@example.test", updatedAt: "2026-10-01T10:00:00Z" } }); }
       else send({ version: 4 });
-    } else if (request.method === "requestCredentials") { window.__credentialRequests.push(request.params); send({ saved: request.params.kinds }); } else if (request.method === "startRecording") { window.__startUrls.push(request.params.url); if (recordingActive) { fail("Finish the current demonstration first."); return; } recordingActive = true; send({ id: "recording-1", status: "recording", liveViewUrl: "https://live.browserbase.com/session", steps: scenario.startsWith("edit") ? [] : steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
-    else if (request.method === "getRecording") send({ id: "recording-1", status: "stopped", liveViewUrl: "https://live.browserbase.com/session", steps: [], expiresAt: "2026-09-11T12:00:00Z", blockedReason: null });
+    } else if (request.method === "requestCredentials") { window.__credentialRequests.push(request.params); send({ saved: request.params.kinds }); } else if (request.method === "startRecording") { window.__startUrls.push(request.params.url); if (edit ? recordingExists : recordingActive) { fail("Finish the current demonstration first."); return; } recordingActive = true; recordingExists = true; send({ id: "recording-1", status: "recording", liveViewUrl: "https://live.browserbase.com/session", steps: scenario.startsWith("edit") ? [] : steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
+    else if (request.method === "getRecording") send({ id: "recording-1", status: recordingActive ? "recording" : "stopped", liveViewUrl: "https://live.browserbase.com/session", steps: [], expiresAt: "2026-09-11T12:00:00Z", blockedReason: null });
     else if (request.method === "stopRecording") { recordingActive = false; send({ id: "recording-1", status: "stopped", liveViewUrl: "https://live.browserbase.com/session", steps: scenario.startsWith("edit") ? redemonstrationSteps : steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
-    else if (request.method === "cancelRecording") { recordingActive = false; send(undefined); }
+    else if (request.method === "cancelRecording") { recordingActive = false; recordingExists = false; send(undefined); }
     else if (request.method === "saveAgent") { window.__savedAgents.push(request.params); send({ id: "agent-1" }); }
     else if (request.method === "testAgent") { testAttempts += 1; window.__testArguments.push(request.params.arguments); send({ id: "run-1" }); }
     else if (request.method === "getTestRun") {

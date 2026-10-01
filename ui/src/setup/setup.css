@@ -35,6 +35,7 @@ select {
 .setup-header h1,
 .setup-panel h2,
 .setup-panel h3,
+.edit-card h2,
 .close-confirmation h2 {
   margin: 0;
   color: #17182b;
@@ -690,29 +691,39 @@ select {
 .edit-version { border: 1px solid #d6cdf6; border-radius: 999px; background: #eeeaff; color: #4e38a0; padding: 4px 9px; font-size: .75rem; font-weight: 750; }
 .edit-schedule { color: #69708a; font-size: .78rem; }
 .edit-layout { width: min(1480px, 100%); margin: 0 auto; padding: 30px clamp(24px, 4vw, 64px) 56px; }
-.edit-layout, .edit-main { display: grid; gap: 18px; }
-.edit-layout { grid-template-columns: minmax(0, 1fr); }
-.edit-main { grid-template-columns: minmax(0, 1fr) 350px; align-items: start; }
+.edit-layout, .edit-grid, .edit-main { display: grid; gap: 18px; }
+.edit-grid { grid-template-columns: minmax(0, 1fr) 320px; align-items: start; }
+.edit-main { min-width: 0; }
 .edit-card { display: grid; gap: 14px; padding: 20px; border: 1px solid #e4e5ee; border-radius: 8px; background: #fff; }
+.edit-rename-error { margin: 4px 0 0; color: #922e3d; font-size: .82rem; }
 .edit-card h2 { margin: 0; color: #17182b; font-size: 1rem; }
 .edit-card > label, .raw-stage label { display: grid; gap: 6px; color: #69708a; font-size: .78rem; font-weight: 650; }
 .edit-card input, .edit-card textarea, .raw-stage textarea { width: 100%; border: 1px solid #c8cad8; border-radius: 6px; padding: 9px; color: #17233d; background: #fff; }
-.edit-card textarea, .raw-stage textarea { min-height: 75px; resize: vertical; }
+.edit-card input, .edit-card textarea { font-size: .875rem; font-weight: 400; }
+.edit-card textarea, .raw-stage textarea { min-height: 64px; resize: vertical; }
+.edit-card p { margin: 0; color: #5f667c; font-size: .875rem; }
 .edit-steps { display: grid; gap: 10px; }
 .edit-step { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 12px; border: 1px solid #e4e5ee; border-radius: 7px; }
 .edit-step > b { display: grid; width: 25px; height: 25px; place-items: center; border-radius: 50%; background: #eeeaff; color: #4e38a0; }
-.edit-step > div:nth-child(2) { display: grid; gap: 8px; }
-.edit-step label { display: grid; gap: 4px; color: #69708a; font-size: .72rem; }
+.edit-step > div:nth-child(2) { display: grid; gap: 8px; min-width: 0; }
+.edit-step textarea { min-height: 38px; field-sizing: content; }
+.edit-step-controls { display: flex; gap: 4px; }
+.edit-step-controls .icon-button { width: 26px; height: 28px; border: 1px solid #e4e5ee; }
+.edit-actions .result-check { font-size: .82rem; color: #5f667c; white-space: nowrap; }
+.edit-actions .result-check input { width: 17px; height: 17px; padding: 0; flex-shrink: 0; }
+.edit-step label { display: grid; }
+.edit-field-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .edit-actions, .redemo-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
-.redemo-controls { padding-top: 10px; border-top: 1px solid #ececf2; }
 .redemo-controls label { display: flex; align-items: center; gap: 8px; color: #69708a; font-size: .75rem; }
 .redemo-controls select { border: 1px solid #c8cad8; border-radius: 5px; padding: 6px; background: #fff; }
 .edit-rail { position: sticky; top: 18px; }
 .change-item { display: grid; gap: 4px; padding: 9px 0 9px 10px; border-left: 3px solid #6546c9; font-size: .76rem; }
 .change-item span { color: #69708a; overflow-wrap: anywhere; }
 .text-button { justify-self: start; border: 0; padding: 0; color: #6546c9; background: transparent; font-size: .74rem; font-weight: 700; cursor: pointer; }
+.edit-recording { height: 560px; overflow: hidden; border: 1px solid #e4e5ee; border-radius: 8px; }
 .raw-stage { display: grid; gap: 12px; }
-.raw-preserved { max-height: 130px; overflow: auto; margin: 0; padding: 10px; border: 1px solid #e4e5ee; border-radius: 5px; background: #fbfbfd; color: #69708a; font-size: .72rem; }
+.raw-preserved { display: flex; justify-content: space-between; gap: 10px; padding: 10px; border: 1px solid #e4e5ee; border-radius: 5px; background: #fbfbfd; color: #363b50; font-size: .82rem; }
+.raw-unchanged { color: #69708a; font-size: .75rem; }
 .edit-modal { position: fixed; inset: 0; z-index: 5; display: grid; place-items: center; padding: 20px; background: rgb(23 35 61 / 22%); }
 .edit-modal-card { width: min(520px, 100%); display: grid; gap: 14px; padding: 24px; border-radius: 9px; background: #fff; box-shadow: 0 12px 35px rgb(23 35 61 / 20%); }
 .edit-modal-card h2 { margin: 0; color: #17182b; }
@@ -720,7 +731,7 @@ select {
 .conflict-rows { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; padding: 12px 0; border-top: 1px solid #ececf2; border-bottom: 1px solid #ececf2; color: #69708a; font-size: .76rem; }
 .conflict-rows strong { color: #17233d; }
 
-@media (max-width: 900px) { .edit-main { grid-template-columns: 1fr; } .edit-rail { position: static; } }
+@media (max-width: 900px) { .edit-grid { grid-template-columns: 1fr; } .edit-rail { position: static; } }
 
 .field-note {
   color: #5f667c;
