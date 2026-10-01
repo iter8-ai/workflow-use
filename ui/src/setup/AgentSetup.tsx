@@ -466,7 +466,7 @@ export default function AgentSetup() {
 
   function chooseDoneWhen(value: DoneWhen): void {
     const unchanged = value.kind === "file" && doneWhen.kind === "file"
-      || value.kind === "text" && doneWhen.kind === "text" && value.value.trim() === doneWhen.value.trim()
+      || (value.kind === "text" || value.kind === "described") && value.kind === doneWhen.kind && value.value.trim() === doneWhen.value.trim()
       || value.kind === "clicked" && doneWhen.kind === "clicked" && value.value === doneWhen.value
       || value.kind === "email" && doneWhen.kind === "email" && value.address === doneWhen.address && value.channelId === doneWhen.channelId;
     if (unchanged) return;
@@ -892,7 +892,7 @@ function Test(props: {
   onRun(): void; onSchedule(): void; onBack(): void; onEditStep(id: string, description: string): void;
 }): JSX.Element {
   const [screenIndex, setScreenIndex] = useState<number | null>(null);
-  const [customText, setCustomText] = useState(props.doneWhen.kind === "text" ? props.doneWhen.value : "");
+  const [customText, setCustomText] = useState(props.doneWhen.kind === "described" ? props.doneWhen.value : "");
   const rowsRef = useRef<HTMLDivElement>(null);
   const optionsRef = useRef<HTMLDetailsElement>(null);
   const emailRun = props.doneWhen.kind === "email" && props.run?.status === "succeeded";
@@ -902,11 +902,13 @@ function Test(props: {
   const running = props.run?.status === "running";
   const locked = props.busy || running || props.scheduleRecovery;
   const stopped = props.run?.stoppedAtStep && Number.isInteger(props.run.stoppedAtStep) && props.run.stoppedAtStep > 0 && props.run.stoppedAtStep <= props.steps.length ? props.run.stoppedAtStep - 1 : null;
-  const kind = props.run?.failure?.kind;
+  const failureMessage = props.run?.failure?.message ?? props.run?.error;
+  const criterionNotMet = props.run?.status === "failed" && failureMessage?.startsWith("Success criterion not met: ");
+  const kind = criterionNotMet ? "check" : props.run?.failure?.kind;
   const failedStep = (kind === "steps" || kind === "signin" || kind === "website" || kind === "unknown") && stopped !== null;
   const completedSteps = props.run?.status === "succeeded" || kind === "result" || kind === "check";
   const options = doneWhenOptions(props.steps, props.run ? { confirmation: props.run.confirmation, failureKind: kind, files: props.run.files } : null, props.doneWhen)
-    .filter((option) => (option.action !== "email" || props.emailRoutesAllowed) && (props.textAllowed || (option.doneWhen?.kind !== "text" && option.action !== "custom")));
+    .filter((option) => (option.action !== "email" || props.emailRoutesAllowed) && (props.textAllowed || option.doneWhen?.kind !== "text"));
   const screens = props.run?.screens ?? [];
   const currentIndex = screenIndex === null ? screens.length - 1 : Math.min(screenIndex, screens.length - 1);
   const currentScreen = screens[currentIndex];
@@ -919,6 +921,7 @@ function Test(props: {
     : kind === "signin" ? "The website didn’t accept the sign-in"
     : kind === "steps" && stopped !== null ? `Stuck at step ${stopped + 1}`
     : kind === "result" ? "Every step ran, but no file was downloaded"
+    : criterionNotMet ? "The success criterion wasn’t met"
     : kind === "check" ? "The website result wasn’t confirmed"
     : failed ? "The test stopped" : passed ? "The agent completed every step"
     : emailRun ? "Waiting for the export email" : running ? "Test is running" : "Not tested yet";
@@ -930,9 +933,11 @@ function Test(props: {
     : emailRun && props.emailStatus === "no_documents" ? "The email arrived without a file. Check the export settings and run the test again."
     : emailRun && props.emailStatus === "timeout" ? "The email didn’t arrive within three minutes. Check the export settings and run the test again."
     : emailRun && props.emailStatus === "waiting" ? `Waiting for the export at ${props.doneWhen.kind === "email" ? props.doneWhen.address : "Reiterate"}.`
+    : criterionNotMet ? failureMessage!.slice("Success criterion not met: ".length)
     : kind === "steps" ? "The steps before it worked. Rewrite the highlighted step below, then run the test again."
     : kind === "signin" ? "Check the saved sign-in details, then run the test again."
     : kind === "result" ? "Choose how Reiterate knows the run worked under Done when."
+    : passed && props.doneWhen.kind === "described" && props.run?.confirmation ? `Agent saw: ${props.run.confirmation}`
     : props.run?.status === "succeeded" && !emailRun && files.length === 0 ? "Reiterate doesn’t keep a file from this run, so workflows can’t use its output."
     : running ? "Watch the browser while the agent works through your steps."
     : props.run?.failure?.message ?? (failed ? props.run?.error : props.run?.confirmation) ?? "";
@@ -947,7 +952,7 @@ function Test(props: {
   }, [props.run?.id, running, failedStep, stopped, kind, completedSteps]);
   const choose = (option: typeof options[number]): void => {
     if (option.action === "email") return props.onChooseEmail();
-    if (option.action === "custom") { if (customText.trim()) props.onDoneWhen({ kind: "text", value: customText.trim() }); return; }
+    if (option.action === "custom") { if (customText.trim()) props.onDoneWhen({ kind: "described", value: customText.trim() }); return; }
     if (option.doneWhen) props.onDoneWhen(option.doneWhen);
   };
   return <div className="setup-workbench">
@@ -960,7 +965,7 @@ function Test(props: {
       <aside className="test-rail" aria-label="Test steps"><header><h3>{props.run ? "Test result" : "Your steps"}</h3><span>{props.run ? `${completedSteps ? props.steps.length : failedStep ? stopped! + 1 : 0} of ${props.steps.length} reached` : `${props.steps.length} steps`}</span></header>
         <div className={`run-status ${failed ? "bad" : passed ? "good" : ""}`} role={failed ? "alert" : "status"}><small>{serviceFailure ? "Reiterate problem · not your steps" : kind === "steps" ? "Step needs clearer wording" : kind === "signin" ? "Sign-in problem" : kind === "result" ? "No file came back" : kind === "check" ? "Done-when check not met" : emailProblem ? props.emailStatus === "rejected" ? "Email not accepted" : "Email not received" : passed ? "Test passed" : running ? "Test running" : emailRun ? "Waiting for email" : failed ? "Test failed" : "Not tested yet"}</small><strong>{statusText}</strong><p>{props.run ? statusDetail : "Run the test to watch the agent work through these steps in a fresh browser."}</p>{!serviceFailure && props.run?.failure?.message && kind !== "result" && kind !== "check" && <blockquote><b>The agent said</b>{props.run.failure.message}</blockquote>}{emailRun && props.emailStatus === "rejected" && props.emailFrom && <button type="button" className="button button-primary" onClick={props.onAllowEmail} disabled={locked}>Accept emails from {props.emailFrom}</button>}{kind === "signin" && <button type="button" className="button button-quiet" onClick={props.onChangeCredentials} disabled={locked}>Change sign-in details</button>}</div>
         <div className="test-steps" ref={rowsRef} tabIndex={0} aria-label="Test steps list">{props.steps.map((step, index) => { const done = completedSteps || (failedStep && index < stopped!); const isFailed = failedStep && index === stopped; const relativeDate = lastMonthRewrite(step.description); return <div key={step.id} className={`test-step ${done ? "done" : isFailed ? "failed" : props.run?.status === "failed" && !serviceFailure && failedStep && index > stopped! ? "notrun" : serviceFailure ? "notrun" : ""}`}><span>{done ? "✓" : isFailed ? "!" : index + 1}</span><div>{isFailed ? <textarea aria-label={`Step ${index + 1} instruction`} disabled={locked} value={step.description} onChange={(event) => props.onEditStep(step.id, event.target.value)} /> : step.description}{step.type === "credential" && <small>Uses the {credentialLabel(step.value)} saved in Reiterate, stored encrypted. <button type="button" className="text-button" onClick={props.onChangeCredentials} disabled={locked}>Change</button></small>}{isFailed && <small>Stopped here · <button type="button" className="text-button" onClick={() => setScreenIndex(null)}>Show screen</button></small>}{relativeDate && <small>Fixed date: every run picks this day <button type="button" className="date-chip" disabled={locked} onClick={() => props.onEditStep(step.id, relativeDate)}>Use last month</button></small>}</div></div> })}
-          <div className={`done-when ${passed ? "done" : kind === "result" || kind === "check" || emailProblem ? "failed" : ""}`}><b>Done when</b><div>{props.doneWhen.kind === "file" ? "A file is downloaded in the browser" : props.doneWhen.kind === "text" ? `“${props.doneWhen.value}” appears on the page` : props.doneWhen.kind === "email" ? `The export arrives at ${props.doneWhen.address}` : `The agent clicks “${props.doneWhen.value}”`}</div>{files.map((file) => { const link = safeFileUrl(file.url); return link && <a href={link} target="_blank" rel="noreferrer" key={`${file.name}:${file.url}`}>↓ {file.name}</a>; })}{!running && <details className="done-options" ref={optionsRef}><summary>Change</summary><p>{props.run === null ? "Suggested from your steps." : "Suggested from your steps and from what the agent saw at the end of this test."}</p>{options.map((option) => <div key={option.label}><button type="button" className={option.doneWhen && JSON.stringify(option.doneWhen) === JSON.stringify(props.doneWhen) ? "selected" : ""} disabled={locked} onClick={() => choose(option)}><strong>{option.label}</strong><span className="option-badges">{option.recommended && <em>Recommended</em>}{option.strength && <em className={option.strength}>{option.strength === "strong" ? "Strong evidence" : option.strength === "medium" ? "Some evidence" : "Weak evidence"}</em>}</span><small>{option.why}</small></button>{option.action === "custom" && <input aria-label="Custom done-when text" disabled={locked} maxLength={200} placeholder="For example: Export sent" value={customText} onChange={(event) => setCustomText(event.target.value)} onBlur={() => { if (customText.trim()) props.onDoneWhen({ kind: "text", value: customText.trim() }); }} />}</div>)}</details>}</div>
+          <div className={`done-when ${passed ? "done" : kind === "result" || kind === "check" || emailProblem ? "failed" : ""}`}><b>Done when</b><div>{props.doneWhen.kind === "file" ? "A file is downloaded in the browser" : props.doneWhen.kind === "described" ? `The agent confirms: ${props.doneWhen.value}` : props.doneWhen.kind === "text" ? `“${props.doneWhen.value}” appears on the page` : props.doneWhen.kind === "email" ? `The export arrives at ${props.doneWhen.address}` : `The agent clicks “${props.doneWhen.value}”`}</div>{files.map((file) => { const link = safeFileUrl(file.url); return link && <a href={link} target="_blank" rel="noreferrer" key={`${file.name}:${file.url}`}>↓ {file.name}</a>; })}{!running && <details className="done-options" ref={optionsRef}><summary>Change</summary><p>{props.run === null ? "Suggested from your steps." : "Suggested from your steps and from what the agent saw at the end of this test."}</p>{options.map((option) => <div key={option.label}><button type="button" className={option.doneWhen && JSON.stringify(option.doneWhen) === JSON.stringify(props.doneWhen) ? "selected" : ""} disabled={locked} onClick={() => choose(option)}><strong>{option.label}</strong><span className="option-badges">{option.recommended && <em>Recommended</em>}{option.strength && <em className={option.strength}>{option.strength === "strong" ? "Strong evidence" : option.strength === "medium" ? "Some evidence" : "Weak evidence"}</em>}</span><small>{option.why}</small></button>{option.action === "custom" && <textarea rows={2} aria-label="Success criterion" disabled={locked} maxLength={300} placeholder="For example: a message says the export was emailed to me" value={customText} onChange={(event) => setCustomText(event.target.value)} onBlur={() => { if (customText.trim()) props.onDoneWhen({ kind: "described", value: customText.trim() }); }} />}</div>)}</details>}</div>
         </div>
         <footer><button type="button" className="text-button" onClick={props.onBack} disabled={locked}>Back to review</button><span /><button type="button" className={`button ${props.canContinue ? "button-quiet" : "button-primary"}`} onClick={props.onRun} disabled={locked}>{running ? "Running…" : props.run ? "Run test again" : "Run test"}</button>{props.canContinue && <button type="button" className="button button-primary" onClick={props.onSchedule}>Continue to schedule</button>}</footer>
       </aside>

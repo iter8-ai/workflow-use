@@ -857,7 +857,7 @@ select {
 .test-rail > footer .text-button { font-size: .8rem; }
 .done-options summary { width: fit-content; color: #5236ad; cursor: pointer; font-weight: 650; }
 .done-options button { width: 100%; }
-.done-options input { width: 100%; padding: 7px; border: 1px solid #c8cad7; border-radius: 6px; }
+.done-options textarea { width: 100%; padding: 7px; border: 1px solid #c8cad7; border-radius: 6px; }
 .option-badges { display: flex; gap: 5px; }
 .done-options em.strong { color: #1d6b4a; border-color: #b8dcc9; background: #edf7f2; }
 .done-options em.medium { color: #684b16; border-color: #dfc680; background: #fff9e9; }
