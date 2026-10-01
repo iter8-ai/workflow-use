@@ -166,7 +166,22 @@ test("invalidates changed criteria but retains a pass for identical choices and 
   await expect(setup.getByRole("button", { name: "Continue to schedule" })).toHaveCount(0);
 });
 
-test("retains the file criterion and passing test after unchanged stale custom text blurs", async ({ page }) => {
+test("reselects retained custom text after switching to the file criterion", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=success`);
+  const setup = page.frameLocator("iframe");
+  await completeToTest(setup);
+  await setup.locator("summary").filter({ hasText: "Change" }).click();
+  await setup.getByLabel("Custom done-when text").fill("Export sent");
+  await setup.getByLabel("Custom done-when text").press("Tab");
+  await setup.getByRole("button", { name: "A file is downloaded in the browser" }).click();
+  await expect(setup.getByLabel("Custom done-when text")).toHaveValue("Export sent");
+  await setup.getByRole("button", { name: "Other text appears on the page" }).click();
+  await expect(setup.locator(".done-when > div").first()).toHaveText("“Export sent” appears on the page");
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await expect.poll(() => page.evaluate(() => window.__savedAgents[0]?.draft.doneWhen)).toEqual({ kind: "text", value: "Export sent" });
+});
+
+test("reselects retained custom text on unchanged blur after switching to file", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=success`);
   const setup = page.frameLocator("iframe");
   await completeToTest(setup);
@@ -181,13 +196,11 @@ test("retains the file criterion and passing test after unchanged stale custom t
   await expect(setup.getByLabel("Custom done-when text")).toHaveValue("Export sent");
   await setup.getByLabel("Custom done-when text").focus();
   await setup.getByLabel("Custom done-when text").press("Tab");
-  await expect(setup.locator(".done-when > div").first()).toHaveText("A file is downloaded in the browser");
-  await expect(setup.getByText("Test passed", { exact: true })).toBeVisible();
-  await setup.getByRole("button", { name: "Continue to schedule" }).click();
-  await expect(setup.getByRole("heading", { name: "Your agent is ready" })).toBeVisible();
+  await expect(setup.locator(".done-when > div").first()).toHaveText("“Export sent” appears on the page");
+  await expect(setup.getByText("Test passed", { exact: true })).toHaveCount(0);
+  await expect(setup.getByRole("button", { name: "Continue to schedule" })).toHaveCount(0);
   expect(await page.evaluate(() => window.__testArguments)).toHaveLength(1);
   expect(await page.evaluate(() => window.__savedAgents[0].draft.doneWhen)).toEqual({ kind: "file" });
-  expect(await page.evaluate(() => window.__scheduleRequests[0].runId)).toBe("run-1");
 });
 
 test("preserves stopped-step evidence for the pinned host's unknown failure", async ({ page }) => {
@@ -515,6 +528,22 @@ test("accepts a rejected export sender, reruns, and shows the routed file", asyn
   expect(saved.at(-1).draft.steps[1].value).toBe("reports+agent@reiterate.com");
   expect(saved.at(-1).config.stages.map((stage: { type: string }) => stage.type)).toEqual(["agent"]);
   await page.screenshot({ path: "e2e-artifacts/test-email-passed.png" });
+});
+
+test("rewrites recipient checks with the Reiterate route on the same step", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=email-recipient-check`);
+  const setup = page.frameLocator("iframe");
+  await completeToTest(setup);
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await setup.getByRole("button", { name: /Send the export to Reiterate instead/ }).click();
+  await expect.poll(() => page.evaluate(() => window.__savedAgents.length)).toBe(2);
+  const saved = await page.evaluate(() => window.__savedAgents.at(-1));
+  expect(saved.draft.steps[0].expectedOutcome).toBe("Support contact me@example.test is visible");
+  expect(saved.draft.steps[1]).toMatchObject({
+    value: "reports+agent@reiterate.com",
+    expectedOutcome: "The recipient is reports+agent@reiterate.com; confirm reports+agent@reiterate.com appears in the field",
+  });
+  expect(saved.config.stages[0].prompt).toContain("check that: The recipient is reports+agent@reiterate.com; confirm reports+agent@reiterate.com appears in the field");
 });
 
 test("does not offer or apply email routing when multiple email inputs exist", async ({ page }) => {
@@ -922,11 +951,11 @@ function hostPage(url: string): string {
   const emailScenario = scenario?.startsWith("email-");
   const screen = { image: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6S8sAAAAASUVORK5CYII=", thought: "I looked for the export button." };
   const steps = [
-    { id: "open-reports", type: "click", description: "Open the reports section", target: "Reports", expectedOutcome: "The reports list is visible" },
+    { id: "open-reports", type: "click", description: "Open the reports section", target: "Reports", expectedOutcome: scenario === "email-recipient-check" ? "Support contact me@example.test is visible" : "The reports list is visible" },
     ...(scenario === "email-ambiguous" ? [
       { id: "billing", type: "input", description: "Enter billing contact", target: "Billing email", value: "billing@example.test" },
       { id: "recipient", type: "input", description: "Enter export recipient", target: "Send export to", value: "recipient@example.test" },
-    ] : emailScenario ? [{ id: "email-address", type: "input", description: "Enter the export email", target: "Email address", value: "me@example.test" }] : []),
+    ] : emailScenario ? [{ id: "email-address", type: "input", description: "Enter the export email", target: "Email address", value: "me@example.test", ...(scenario === "email-recipient-check" ? { expectedOutcome: "The recipient is me@example.test; confirm me@example.test appears in the field" } : {}) }] : []),
     ...(scenario === "form-entry" ? [
       { id: "choose-month", type: "input", description: "Fill in Statement month", target: "Statement month", value: "September 2026" },
       { id: "choose-format", type: "select_change", description: "Choose PDF in Format", target: "Format", value: "PDF" },
