@@ -411,3 +411,11 @@ test("offers described confirmation after exact text and replaces the custom tex
   assert.ok(!options.some((option) => option.label === "Other text appears on the page"));
   assert.equal(new Set(options.map((option) => option.label)).size, options.length);
 });
+
+
+test("does not treat described confirmation evidence as verbatim page text", () => {
+  const confirmation = "The green toast says Export sent";
+  const options = doneWhenOptions(baseDraft().steps, { confirmation }, { kind: "described", value: "The export was emailed to me" });
+  assert.equal(options.some((option) => option.doneWhen?.kind === "text"), false);
+  assert.ok(options.some((option) => option.doneWhen?.kind === "described" && option.doneWhen.value === confirmation));
+});

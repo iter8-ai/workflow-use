@@ -221,7 +221,7 @@ export function doneWhenOptions(
     options.push({ label: "Send the export to Reiterate instead", strength: "strong", why: "Reiterate saves the attached file in File library, so workflows can use it.", recommended: true, action: "email" });
   }
   const confirmation = lastRun?.confirmation?.trim();
-  if (confirmation) {
+  if (confirmation && doneWhen.kind !== "described") {
     const colon = confirmation.indexOf(":");
     const stable = colon > 0 && /\b(?:\d{4}|\d{1,2}\s+[A-Z][a-z]+|[\w.+-]+@[\w.-]+|[\w.-]+\.(?:csv|xlsx?|pdf|zip))\b/i.test(confirmation.slice(colon + 1))
       ? confirmation.slice(0, colon).trim() : null;

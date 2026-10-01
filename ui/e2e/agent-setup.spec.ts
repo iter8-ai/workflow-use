@@ -589,10 +589,14 @@ test("passes a described criterion with the agent's on-screen evidence", async (
   await expect(setup.locator(".done-when > div").first()).toHaveText("The agent confirms: A message says the export was emailed to me");
   await setup.getByRole("button", { name: "Run test" }).click();
   await expect(setup.getByText("Test passed", { exact: true })).toBeVisible();
-  await expect(setup.getByText("Agent saw: Export sent", { exact: true })).toBeVisible();
+  await expect(setup.getByText("Agent saw: The green toast says Export sent", { exact: true })).toBeVisible();
   const saved = await page.evaluate(() => window.__savedAgents);
   expect(saved.at(-1).draft.doneWhen).toEqual({ kind: "described", value: "A message says the export was emailed to me" });
   expect(saved.at(-1).config.stages.map((stage: { type: string }) => stage.type)).toEqual(["agent"]);
+  await setup.getByText("Change", { exact: true }).click();
+  await expect(setup.getByRole("button", { name: /appears on the page/ })).toHaveCount(0);
+  await expect(setup.getByRole("button", { name: /The green toast says Export sent.*checked by the agent/ })).toBeVisible();
+  await page.screenshot({ path: "e2e-artifacts/free-text/described-success.png" });
 });
 
 test("presents an unmet described criterion as a check without blaming a step", async ({ page }) => {
@@ -609,6 +613,7 @@ test("presents an unmet described criterion as a check without blaming a step", 
   await expect(setup.getByText(/Rewrite/i)).toHaveCount(0);
   await expect(setup.locator(".done-options")).toHaveAttribute("open", "");
   await expect(setup.getByRole("button", { name: "Continue to schedule" })).toHaveCount(0);
+  await page.screenshot({ path: "e2e-artifacts/free-text/described-failure.png" });
 });
 
 test("keeps custom done-when editable after validation fails and requires a fresh test", async ({ page }) => {
@@ -1305,7 +1310,7 @@ function hostPage(url: string): string {
       else if ((emailScenario || scenario === "text-result") && window.__testArguments.length === 1) send({ status: "failed", failure: { kind: "result", message: "No file was downloaded." }, stoppedAtStep: null, screens: [screen] });
       else if (scenario === "failed" || (scenario === "edit-fail-pass" && testAttempts === 1)) send({ status: "failed", error: "The website rejected the request." });
       else if (scenario === "watch") send({ status: "running", liveViewUrl: "https://www.browserbase.com/devtools-fullscreen/inspector.html" });
-      else send({ status: "succeeded", files: emailScenario || scenario === "described-success" ? [] : [{ name: "statement.pdf", url: "https://files.example.test/statement.pdf" }], screens: [screen], confirmation: "Export sent" });
+      else send({ status: "succeeded", files: emailScenario || scenario === "described-success" ? [] : [{ name: "statement.pdf", url: "https://files.example.test/statement.pdf" }], screens: [screen], confirmation: scenario === "described-success" ? "The green toast says Export sent" : "Export sent" });
     } else if (request.method === "createEmailRoute") { window.__createdRoutes.push(request.params); send({ channelId: "route-1", address: "reports+agent@reiterate.com" }); }
     else if (request.method === "getEmailArrival") {
       window.__emailArrivals.push(request.params);
