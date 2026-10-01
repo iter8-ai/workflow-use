@@ -388,6 +388,7 @@ test("clears a load error after successfully retrying", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=edit-load-error`);
   const setup = page.frameLocator("iframe");
   await expect(setup.getByRole("alert")).toContainText("Loading failed. Try again.");
+  await page.evaluate(() => { window.__loadAvailable = true; });
   await setup.getByRole("button", { name: "Retry", exact: true }).click();
   await expect(setup.getByRole("heading", { name: "Edit web agent" })).toBeVisible();
   await expect(setup.getByRole("alert")).toHaveCount(0);
@@ -673,7 +674,7 @@ function hostPage(url: string): string {
   let recordingExists = false;
   let publishedConflict = false;
   let testAttempts = 0;
-  let loadAttempts = 0;
+  window.__loadAvailable = scenario !== "edit-load-error";
   const edit = scenario.startsWith("edit");
   const editSteps = [
     { id: "open-reports", type: "click", description: "Open the reports section", target: "Reports", expectedOutcome: "The reports list is visible" },
@@ -706,8 +707,7 @@ function hostPage(url: string): string {
       if (scenario === "delayed-ready") setTimeout(() => send({ schedule: true, mode: "create", credentials: true }), 300);
       else send({ schedule: true, mode: edit ? "edit" : "create", credentials: scenario !== "sign-in-unsupported" });
     } else if (request.method === "loadAgent") {
-      loadAttempts += 1;
-      if (scenario === "edit-load-error" && loadAttempts === 1) { fail("Loading failed. Try again."); return; }
+      if (!window.__loadAvailable) { fail("Loading failed. Try again."); return; }
       send({ agentId: "agent-1", name: "Monthly report agent", url: "https://portal.example.test/reports", goal: "Download the monthly report.", steps: scenario === "edit-raw" ? null : scenario === "edit-raw-empty" ? [] : editSteps, stages: [{ type: "agent", prompt: "Open reports", step_limit: 16 }, { type: "download" }, { type: "sleep", sleep_ms: 5000 }, { type: "reload" }], liveConfigId: "config-3", version: 3, internal, schedule: scenario === "edit-schedule" ? "Daily 09:00 UTC" : null, nextRunAt: scenario === "edit-schedule" ? "2026-10-02T09:00:00Z" : null });
     } else if (request.method === "renameAgent") { window.__renameRequests.push(request.params.name); if (scenario === "edit-rename-error" && window.__renameRequests.length === 1) fail("Rename failed. Try again."); else send(null);
     } else if (request.method === "saveDraft") { window.__savedAgents.push(request.params); send({ draftId: "draft-1" });
