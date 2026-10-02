@@ -1409,9 +1409,10 @@ function hostPage(url: string): string {
       else if (scenario === "select-failure" && window.__testArguments.length === 1) send({ status: "failed", failure: { kind: "steps", message: "The PDF option was missing." }, stoppedAtStep: 2, screens: [screen] });
       else if (scenario === "signin-failure" && window.__testArguments.length === 1) send({ status: "failed", failure: { kind: "signin", message: "The username field was missing." }, stoppedAtStep: 2, screens: [screen] });
       else if ((emailScenario || scenario === "text-result") && window.__testArguments.length === 1) send({ status: "failed", failure: { kind: "result", message: "No file was downloaded." }, stoppedAtStep: null, screens: [screen] });
+      else if (scenario === "agent-notes") send({ status: "succeeded", files: [{ name: "statement.pdf", url: "https://files.example.test/statement.pdf" }], screens: agentNoteScreens, confirmation: "Download started: statement.pdf" });
       else if (scenario === "failed" || (scenario === "edit-fail-pass" && testAttempts === 1)) send({ status: "failed", error: "The website rejected the request." });
       else if (scenario === "watch") send({ status: "running", liveViewUrl: "https://www.browserbase.com/devtools-fullscreen/inspector.html" });
-      else send({ status: "succeeded", files: emailScenario || scenario === "described-success" ? [] : [{ name: "statement.pdf", url: "https://files.example.test/statement.pdf" }], screens: scenario === "agent-notes" ? agentNoteScreens : [screen], confirmation: scenario === "described-success" ? "The green toast says Export sent" : "Export sent" });
+      else send({ status: "succeeded", files: emailScenario || scenario === "described-success" ? [] : [{ name: "statement.pdf", url: "https://files.example.test/statement.pdf" }], screens: [screen], confirmation: scenario === "described-success" ? "The green toast says Export sent" : "Export sent" });
     } else if (request.method === "createEmailRoute") { window.__createdRoutes.push(request.params); send({ channelId: "route-1", address: "reports+agent@reiterate.com" }); }
     else if (request.method === "getEmailArrival") {
       window.__emailArrivals.push(request.params);
