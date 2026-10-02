@@ -21,8 +21,6 @@ test("takes a user through demonstration, review, testing, and host scheduling",
 
   await expect(setup.getByRole("heading", { name: "Set up your agent" })).toBeVisible();
   await expect(setup.getByText("Reiterate saves the username and password you type there, encrypted", { exact: false })).toBeVisible();
-  await expect(setup.getByRole("link", { name: "Source code" })).toHaveAttribute("href", "https://github.com/iter8-ai/workflow-use");
-  await expect(setup.getByRole("link", { name: "AGPL-3.0 license" })).toHaveAttribute("href", "https://github.com/iter8-ai/workflow-use/blob/main/LICENSE");
   await setup.getByLabel("Agent name").fill("Download monthly statement");
   await setup.getByLabel("Website address").fill("https://portal.example.test/reports");
   await setup.getByLabel("What should the agent do?").fill("Download the selected monthly statement.");
@@ -937,6 +935,44 @@ test("fits a ten-step review on one desktop screen", async ({ page }) => {
   await page.screenshot({ path: "e2e-artifacts/review-ten-steps.png" });
   await page.setViewportSize({ width: 480, height: 900 });
   await page.screenshot({ path: "e2e-artifacts/review-narrow.png" });
+});
+
+test("uses one top bar and the same title row on every stage", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`${baseUrl}/host?scenario=success`);
+  const setup = page.frameLocator("iframe");
+  // The repository is public; the page carries no source or license footer.
+  await expect(setup.locator("footer")).toHaveCount(0);
+  await expect(setup.getByRole("link", { name: /source code|license/i })).toHaveCount(0);
+
+  const expectStage = async (title: string) => {
+    await expect(setup.locator(".stage-title h2")).toHaveText(title);
+    const layout = await setup.locator("body").evaluate(() => {
+      const box = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
+      const header = box(".setup-topbar"), progress = box(".setup-progress"), back = box(".setup-topbar .setup-nav"), close = box(".setup-close"), heading = box(".stage-title h2");
+      return { headers: document.querySelectorAll("header.setup-header").length, headerHeight: header.height, centreOffset: Math.abs(progress.left + progress.width / 2 - (header.left + header.width / 2)), backLeft: back.left, closeRight: innerWidth - close.right, sameRow: Math.abs(back.top - close.top) < 2 && Math.abs(back.top - progress.top) < 8, headingFont: getComputedStyle(document.querySelector(".stage-title h2")!).font, headingLeft: heading.left, headingTop: heading.top - header.bottom, descriptionGap: box(".stage-title p").top - heading.bottom, descriptionLeft: box(".stage-title p").left - heading.left };
+    });
+    expect(layout.headers).toBe(1);
+    expect(layout.headerHeight).toBeLessThan(56);
+    expect(layout.centreOffset).toBeLessThan(2);
+    expect(layout.sameRow).toBe(true);
+    expect(layout.backLeft).toBeLessThan(40);
+    expect(layout.closeRight).toBeLessThan(40);
+    return { font: layout.headingFont, left: Math.round(layout.headingLeft), top: Math.round(layout.headingTop), descriptionGap: Math.round(layout.descriptionGap), descriptionLeft: Math.round(layout.descriptionLeft) };
+  };
+
+  const formats = [await expectStage("Describe the job")];
+  await setup.getByLabel("Agent name").fill("Download monthly statement");
+  await setup.getByLabel("Website address").fill("https://portal.example.test/reports");
+  await setup.getByLabel("What should the agent do?").fill("Download the selected monthly statement.");
+  await setup.getByRole("button", { name: "Continue to demonstration" }).click();
+  await setup.getByRole("button", { name: "Finish demonstration" }).click();
+  formats.push(await expectStage("Demonstrate the task"));
+  await setup.getByRole("button", { name: "Continue to review" }).click();
+  formats.push(await expectStage("Review the draft"));
+  await setup.getByRole("button", { name: "Continue to test" }).click();
+  formats.push(await expectStage("Test a fresh run"));
+  for (const format of formats) expect(format).toEqual(formats[0]);
 });
 
 test("captures the controlled setup states for visual review", async ({ page }) => {
