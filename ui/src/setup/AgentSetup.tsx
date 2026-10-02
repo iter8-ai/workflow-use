@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { compileAgent, doneWhenOptions, draftChanges, findUnambiguousEmailStep, replaceStepsFrom, requiredCredentials, type CredentialKind, type DoneWhen, type SetupDraft, type SetupStep } from "./compiler";
 import { browserbaseLiveViewUrl, createHostBridge, HostRequestTimeoutError, type EditAgent as EditAgentData, type HostBridge, type Recording, type TestRun } from "./host";
+import { AgentScreenBar } from "./AgentScreenBar";
+import { parseAgentThought } from "./agentThought";
+import { HelpTip } from "./HelpTip";
 import "./setup.css";
 
 type Screen = "describe" | "demonstrate" | "review" | "test" | "schedule";
@@ -1081,6 +1084,7 @@ function Test(props: {
   const screens = props.run?.screens ?? [];
   const currentIndex = screenIndex === null ? screens.length - 1 : Math.min(screenIndex, screens.length - 1);
   const currentScreen = screens[currentIndex];
+  const currentThought = useMemo(() => parseAgentThought(currentScreen?.thought ?? ""), [currentScreen?.thought]);
   const files = props.doneWhen.kind === "email" ? props.emailFiles : props.run?.files ?? [];
   const statusText = props.emailStatus === "rejected" && emailRun ? `The export arrived from ${props.emailFrom ?? "an external sender"}`
     : props.emailStatus === "no_documents" && emailRun ? "The email arrived without a file"
@@ -1125,11 +1129,11 @@ function Test(props: {
     if (option.doneWhen) props.onDoneWhen(option.doneWhen);
   };
   return <div className="setup-workbench">
-    <div className="stage-title"><h2>Test a fresh run</h2><p>Reiterate runs your steps in a new browser. Watch it work, and if it stops, fix the step in the list.</p></div>
+    <div className="stage-title stage-title-inline"><h2>Verify agent can follow the process</h2><HelpTip label="How the test works">Reiterate runs your steps in a new browser. Watch it work, and if it stops, fix the step in the list.</HelpTip></div>
     <div className="workbench-grid">
       <section className="test-browser" aria-label="Agent browser">
         <div className="test-browser-bar"><span aria-hidden="true">● ● ●</span><div>{props.run ? props.url : "about:blank"}</div><b>{running ? "Live · view only" : props.run ? "Finished run" : "Not started"}</b></div>
-        {running ? <WatchOnlyBrowser url={props.run?.liveViewUrl ?? null} /> : currentScreen ? <><img src={currentScreen.image} alt="Agent browser screen" /><div className="test-caption"><b>Agent</b><span>{currentScreen.thought}</span><button type="button" className="button button-quiet" aria-label="Previous screen" onClick={() => setScreenIndex(Math.max(0, currentIndex - 1))} disabled={currentIndex <= 0}>‹</button><span>{currentIndex + 1} / {screens.length}</span><button type="button" className="button button-quiet" aria-label="Next screen" onClick={() => setScreenIndex(Math.min(screens.length - 1, currentIndex + 1))} disabled={currentIndex >= screens.length - 1}>›</button></div></> : <div className="empty-browser"><b>{serviceFailure ? "The agent has not opened the website." : passed ? "The agent finished the run." : "Run the test to watch the agent."}</b><span>{serviceFailure ? "Nothing ran in this browser." : "The agent’s browser appears here while it works through your steps."}</span></div>}
+        {running ? <WatchOnlyBrowser url={props.run?.liveViewUrl ?? null} /> : currentScreen ? <><img src={currentScreen.image} alt="Agent browser screen" /><AgentScreenBar thought={currentThought} testPassed={passed} index={currentIndex} count={screens.length} onSelect={(index) => setScreenIndex(Math.max(0, Math.min(screens.length - 1, index)))} /></> : <div className="empty-browser"><b>{serviceFailure ? "The agent has not opened the website." : passed ? "The agent finished the run." : "Run the test to watch the agent."}</b><span>{serviceFailure ? "Nothing ran in this browser." : "The agent’s browser appears here while it works through your steps."}</span></div>}
       </section>
       <aside className="test-rail" aria-label="Test steps"><header><h3>{props.run ? "Test result" : "Your steps"}</h3><span>{props.run ? `${completedSteps ? props.steps.length : failedStep ? stopped! + 1 : 0} of ${props.steps.length} reached` : `${props.steps.length} steps`}</span></header>
         <div className={`run-status ${failed ? "bad" : passed ? "good" : ""}`} role={failed ? "alert" : "status"}><small>{serviceFailure ? "Reiterate problem · not your steps" : kind === "steps" ? "Step needs clearer wording" : kind === "signin" ? "Sign-in problem" : kind === "result" ? "No file came back" : kind === "check" ? "Done-when check not met" : emailProblem ? props.emailStatus === "rejected" ? "Email not accepted" : "Email not received" : passed ? "Test passed" : running ? "Test running" : emailRun ? "Waiting for email" : failed ? "Test failed" : "Not tested yet"}</small><strong>{statusText}</strong><p>{props.run ? statusDetail : "Run the test to watch the agent work through these steps in a fresh browser."}</p>{!serviceFailure && props.run?.failure?.message && kind !== "result" && kind !== "check" && <blockquote><b>The agent said</b>{props.run.failure.message}</blockquote>}{emailRun && props.emailStatus === "rejected" && props.emailFrom && <button type="button" className="button button-primary" onClick={props.onAllowEmail} disabled={locked}>Accept emails from {props.emailFrom}</button>}{kind === "signin" && <button type="button" className="button button-quiet" onClick={props.onChangeCredentials} disabled={locked}>Change sign-in details</button>}</div>

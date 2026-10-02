@@ -35,7 +35,7 @@ Recording steps never contain sign-in values; a `credential` step records only t
 
 ## Test feedback and completion checks
 
-`failure` is null or `{kind, message}`. Kinds are `service`, `signin`, `website`, `steps`, `result`, and `check`. The host returns user-safe messages and never provider error bodies. The UI uses fixed service-failure copy. `stoppedAtStep` is a nullable 1-based demonstrated step number. `confirmation` is nullable final-page text. `screens` contains up to 20 `{image, thought}` records, oldest first, with PNG data URLs. The live view is watch-only. Finished image navigation never controls the browser.
+`failure` is null or `{kind, message}`. Kinds are `service`, `signin`, `website`, `steps`, `result`, and `check`. The host returns user-safe messages and never provider error bodies. The UI uses fixed service-failure copy. `stoppedAtStep` is a nullable 1-based demonstrated step number. `confirmation` is nullable final-page text. `screens` contains up to 20 `{image, thought}` records, oldest first, with PNG data URLs. `thought` is the web agent's raw note for that screen, passed through unchanged; `ui/src/setup/agentThought.ts` reads its shapes (final JSON outcome, reasoning summaries, proposed actions, replay) so the UI never prints the outcome JSON. The live view is watch-only. Finished image navigation never controls the browser.
 
 `draft.doneWhen` defaults to `{kind: "file"}`. File checks compile to `[agent, download]`; `{kind: "text", value}` to `[agent, expect_text]` with 1–200 characters and a 10-second timeout; `{kind: "described", value}`, `{kind: "email", address, channelId}` and `{kind: "clicked", value}` to `[agent]`. The host must accept these exact stage lists. A successful run may have no files.
 

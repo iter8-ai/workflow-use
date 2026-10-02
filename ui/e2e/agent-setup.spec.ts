@@ -440,6 +440,7 @@ test("shows the failed step and keeps a multi-character inline edit focused", as
   await expect(setup.getByRole("alert")).toContainText("The button was missing.");
   await expect(setup.locator(".test-step.done")).toHaveCount(1);
   await expect(setup.locator(".test-step.failed")).toHaveCount(1);
+  await expectNoSideStripes(setup);
   await page.screenshot({ path: "e2e-artifacts/test-step-failure.png" });
   const instruction = setup.getByLabel("Step 2 instruction");
   await instruction.fill("");
@@ -610,6 +611,8 @@ test("presents an unmet described criterion as a check without blaming a step", 
   await expect(setup.locator(".test-step.failed")).toHaveCount(0);
   await expect(setup.getByText(/Rewrite/i)).toHaveCount(0);
   await expect(setup.locator(".done-options")).toHaveAttribute("open", "");
+  await expect(setup.locator(".done-when.failed")).toHaveCount(1);
+  await expectNoSideStripes(setup);
   await expect(setup.getByRole("button", { name: "Continue to schedule" })).toHaveCount(0);
   await page.screenshot({ path: "e2e-artifacts/free-text/described-failure.png" });
 });
@@ -634,7 +637,7 @@ test("keeps custom done-when editable after validation fails and requires a fres
 
   await setup.getByRole("button", { name: "Back to review" }).click();
   await setup.getByRole("button", { name: "Continue to test" }).click();
-  await expect(setup.getByRole("heading", { name: "Test a fresh run" })).toBeVisible();
+  await expect(setup.getByRole("heading", { name: "Verify agent can follow the process" })).toBeVisible();
   await setup.locator("summary").filter({ hasText: "Change" }).click();
   await expect(customText).toHaveValue("Password: secret123");
   await setup.getByRole("button", { name: "Run test" }).click();
@@ -758,6 +761,51 @@ test("keeps the browser, final step, and primary action visible at desktop and n
   const dimensions = await setup.locator("body").evaluate((body) => ({ width: body.scrollWidth, viewport: innerWidth }));
   expect(dimensions.width).toBeLessThanOrEqual(dimensions.viewport);
   await page.screenshot({ path: "e2e-artifacts/test-passed-narrow.png" });
+});
+
+test("shows the agent's note for each finished screen as a readable bar", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=agent-notes`);
+  const setup = page.frameLocator("iframe");
+  await completeToTest(setup);
+
+  const help = setup.getByRole("button", { name: "How the test works" });
+  await expect(setup.getByText("Reiterate runs your steps in a new browser.", { exact: false })).toBeHidden();
+  await help.click();
+  await expect(setup.getByText("Reiterate runs your steps in a new browser.", { exact: false })).toBeVisible();
+  await help.press("Escape");
+  await expect(setup.getByText("Reiterate runs your steps in a new browser.", { exact: false })).toBeHidden();
+
+  await setup.getByRole("button", { name: "Run test" }).click();
+  const bar = setup.locator(".test-caption");
+  await expect(bar.locator(".caption-kind")).toHaveText("Finished");
+  await expect(bar.locator(".caption-summary")).toHaveText("Opened Reports, kept the last-month filter, and downloaded the statement.");
+  await expect(bar).not.toContainText("{");
+  await expect(bar).not.toContainText("Download started: statement.pdf");
+  await expect(bar.getByText("3 / 3")).toBeVisible();
+  await bar.getByRole("button", { name: "More" }).click();
+  await expect(bar).toContainText("Saw “Download started: statement.pdf”");
+  await expect(bar).toContainText("Confirming the download The statement download started.");
+  await page.screenshot({ path: "e2e-artifacts/test-agent-note-expanded.png" });
+  await bar.getByRole("button", { name: "Less" }).click();
+  expect((await bar.boundingBox())?.height ?? 0).toBeLessThan(56);
+  await page.screenshot({ path: "e2e-artifacts/test-agent-note.png" });
+
+  await bar.getByRole("button", { name: "Previous screen" }).click();
+  await expect(bar.locator(".caption-kind")).toHaveText("Actions");
+  await expect(bar.locator(".caption-summary")).toHaveText("Click · Type · Press keys");
+  await expect(bar.getByRole("button", { name: "More" })).toHaveCount(0);
+
+  await bar.getByRole("button", { name: "Previous screen" }).click();
+  await expect(bar.locator(".caption-kind")).toHaveText("Thinking");
+  await page.setViewportSize({ width: 480, height: 900 });
+  expect((await bar.boundingBox())?.height ?? 0).toBeLessThan(56);
+  await expect(bar.getByRole("button", { name: "Next screen" })).toBeInViewport();
+  await page.screenshot({ path: "e2e-artifacts/test-agent-note-narrow.png" });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await expect(bar.locator(".caption-summary")).toHaveText("Opening the reports The reports menu is in the left navigation.");
+  await expect(bar.getByRole("button", { name: "Previous screen" })).toBeDisabled();
+  await bar.getByRole("button", { name: "More" }).click();
+  await expect(bar).toContainText("Checking the date filter The filter already shows last month.");
 });
 
 test("assumes https for a website address typed without a scheme", async ({ page }) => {
@@ -950,7 +998,8 @@ test("uses one top bar and the same title row on every stage", async ({ page }) 
     const layout = await setup.locator("body").evaluate(() => {
       const box = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
       const header = box(".setup-topbar"), progress = box(".setup-progress"), back = box(".setup-topbar .setup-nav"), close = box(".setup-close"), heading = box(".stage-title h2");
-      return { headers: document.querySelectorAll("header.setup-header").length, headerHeight: header.height, centreOffset: Math.abs(progress.left + progress.width / 2 - (header.left + header.width / 2)), backLeft: back.left, closeRight: innerWidth - close.right, sameRow: Math.abs(back.top - close.top) < 2 && Math.abs(back.top - progress.top) < 8, headingFont: getComputedStyle(document.querySelector(".stage-title h2")!).font, headingLeft: heading.left, headingTop: heading.top - header.bottom, descriptionGap: box(".stage-title p").top - heading.bottom, descriptionLeft: box(".stage-title p").left - heading.left };
+      const description = document.querySelector(".stage-title p")?.getBoundingClientRect();
+      return { headers: document.querySelectorAll("header.setup-header").length, headerHeight: header.height, centreOffset: Math.abs(progress.left + progress.width / 2 - (header.left + header.width / 2)), backLeft: back.left, closeRight: innerWidth - close.right, sameRow: Math.abs(back.top - close.top) < 2 && Math.abs(back.top - progress.top) < 8, headingFont: getComputedStyle(document.querySelector(".stage-title h2")!).font, headingLeft: heading.left, headingTop: heading.top - header.bottom, descriptionGap: description ? description.top - heading.bottom : null, descriptionLeft: description ? description.left - heading.left : null };
     });
     expect(layout.headers).toBe(1);
     expect(layout.headerHeight).toBeLessThan(56);
@@ -958,7 +1007,7 @@ test("uses one top bar and the same title row on every stage", async ({ page }) 
     expect(layout.sameRow).toBe(true);
     expect(layout.backLeft).toBeLessThan(40);
     expect(layout.closeRight).toBeLessThan(40);
-    return { font: layout.headingFont, left: Math.round(layout.headingLeft), top: Math.round(layout.headingTop), descriptionGap: Math.round(layout.descriptionGap), descriptionLeft: Math.round(layout.descriptionLeft) };
+    return { font: layout.headingFont, left: Math.round(layout.headingLeft), top: Math.round(layout.headingTop), descriptionGap: layout.descriptionGap === null ? null : Math.round(layout.descriptionGap), descriptionLeft: layout.descriptionLeft === null ? null : Math.round(layout.descriptionLeft) };
   };
 
   const formats = [await expectStage("Describe the job")];
@@ -971,7 +1020,9 @@ test("uses one top bar and the same title row on every stage", async ({ page }) 
   await setup.getByRole("button", { name: "Continue to review" }).click();
   formats.push(await expectStage("Review the draft"));
   await setup.getByRole("button", { name: "Continue to test" }).click();
-  formats.push(await expectStage("Test a fresh run"));
+  // The test stage keeps its explanation behind a (?) next to the heading.
+  const testFormat = await expectStage("Verify agent can follow the process");
+  expect(testFormat).toEqual({ ...formats[0], descriptionGap: null, descriptionLeft: null });
   for (const format of formats) expect(format).toEqual(formats[0]);
 });
 
@@ -1458,6 +1509,14 @@ test("announces an unscheduled publish without claiming scheduled runs", async (
   await expect(setup.getByRole("status").filter({ hasText: "Published v4." })).toHaveText("Published v4.");
 });
 
+async function expectNoSideStripes(setup: FrameLocator): Promise<void> {
+  const violations = await setup.locator(".test-rail").evaluate((root) => [root, ...root.querySelectorAll("*")].flatMap((element) => {
+    const style = getComputedStyle(element);
+    return parseFloat(style.borderLeftWidth) > 1 || parseFloat(style.borderRightWidth) > 1 ? [element.className] : [];
+  }));
+  expect(violations).toEqual([]);
+}
+
 for (const scenario of ["edit", "edit-raw"]) {
   test(`uses full borders rather than accent side stripes in ${scenario}`, async ({ page }) => {
     await page.goto(`${baseUrl}/host?scenario=${scenario}`);
@@ -1527,6 +1586,12 @@ function hostPage(url: string): string {
   const signIn = scenario === "sign-in" || scenario === "sign-in-unsupported" || scenario === "signin-failure";
   const emailScenario = scenario?.startsWith("email-");
   const screen = { image: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6S8sAAAAASUVORK5CYII=", thought: "I looked for the export button." };
+  // Thought shapes as the web agent stores them: reasoning summaries, proposed actions, the final JSON outcome.
+  const agentNoteScreens = [
+    { ...screen, thought: "**Opening the reports**\\n\\nThe reports menu is in the left navigation.\\n**Checking the date filter**\\n\\nThe filter already shows last month." },
+    { ...screen, thought: "Proposed computer actions: click, type, keypress." },
+    { ...screen, thought: '**Confirming the download**\\n\\nThe statement download started.\\n{"status":"completed","reason":"Opened Reports, kept the last-month filter, and downloaded the statement.","step":2,"confirmation":"Download started: statement.pdf"}' },
+  ];
   let recordingExists = false;
   let publishedConflict = false;
   let testAttempts = 0;
@@ -1596,6 +1661,7 @@ function hostPage(url: string): string {
       else if (scenario === "select-failure" && window.__testArguments.length === 1) send({ status: "failed", failure: { kind: "steps", message: "The PDF option was missing." }, stoppedAtStep: 2, screens: [screen] });
       else if (scenario === "signin-failure" && window.__testArguments.length === 1) send({ status: "failed", failure: { kind: "signin", message: "The username field was missing." }, stoppedAtStep: 2, screens: [screen] });
       else if ((emailScenario || scenario === "text-result") && window.__testArguments.length === 1) send({ status: "failed", failure: { kind: "result", message: "No file was downloaded." }, stoppedAtStep: null, screens: [screen] });
+      else if (scenario === "agent-notes") send({ status: "succeeded", files: [{ name: "statement.pdf", url: "https://files.example.test/statement.pdf" }], screens: agentNoteScreens, confirmation: "Download started: statement.pdf" });
       else if (scenario === "failed" || (scenario === "edit-fail-pass" && testAttempts === 1)) send({ status: "failed", error: "The website rejected the request." });
       else if (scenario === "watch" || scenario === "edit-watch") send({ status: "running", liveViewUrl: "https://www.browserbase.com/devtools-fullscreen/inspector.html" });
       else send({ status: "succeeded", files: emailScenario || scenario === "described-success" ? [] : [{ name: "statement.pdf", url: "https://files.example.test/statement.pdf" }], screens: [screen], confirmation: scenario === "described-success" ? "The green toast says Export sent" : "Export sent" });
