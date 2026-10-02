@@ -703,7 +703,7 @@ select {
 .edit-step { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 10px; border: 1px solid #e4e5ee; border-radius: 6px; }
 .edit-step > b { display: grid; width: 24px; height: 24px; place-items: center; border-radius: 6px; background: #f7f7fb; color: #5f667c; font-size: .875rem; }
 .edit-step > div:nth-child(2) { display: grid; gap: 8px; min-width: 0; }
-.edit-step textarea { min-height: 34px; field-sizing: content; resize: none; }
+.edit-step textarea { min-height: 34px; padding: 6px 8px; field-sizing: content; resize: none; }
 .edit-step-controls { display: flex; gap: 4px; }
 .edit-step label { display: grid; gap: 4px; }
 .edit-field-label { color: #5f667c; font-size: .82rem; font-weight: 650; }
@@ -716,6 +716,7 @@ select {
 .edit-rail { position: sticky; top: 18px; }
 .change-item { display: grid; gap: 4px; padding: 10px 0; border-top: 1px solid #e4e5ee; font-size: .875rem; }
 .change-item span { color: #5f667c; overflow-wrap: anywhere; }
+.text-button { justify-self: start; border: 0; padding: 0; color: #6546c9; background: transparent; font-size: .74rem; font-weight: 700; cursor: pointer; }
 .edit-agent .text-button { justify-self: start; border: 0; padding: 4px 0; color: #5236ad; background: transparent; font-size: .82rem; font-weight: 650; cursor: pointer; }
 .edit-recording { height: 560px; overflow: hidden; border: 1px solid #e4e5ee; border-radius: 8px; }
 .raw-stage { display: grid; gap: 12px; }
@@ -741,6 +742,7 @@ select {
 #conflict-edit-description { display: grid; gap: 8px; }
 .edit-agent .close-confirmation-card { box-shadow: none; }
 .edit-agent .close-confirmation h2 { font-size: 1rem; }
+.edit-agent .edit-modal-card:focus, .edit-agent .close-confirmation-card:focus { outline: none; }
 .edit-agent .button, .edit-agent .icon-button, .edit-agent .text-button, .edit-agent input, .edit-agent textarea, .edit-agent select, .edit-agent a { transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease; }
 .edit-agent .icon-button { width: 34px; height: 34px; border: 1px solid #e4e5ee; color: #5f667c; }
 .edit-agent .icon-button::before { content: none; }

@@ -1278,6 +1278,9 @@ test("guards leaving a running test or re-demonstration with no draft changes", 
   const setup = page.frameLocator("iframe");
   await setup.getByRole("button", { name: "Test changes" }).click();
   await expect(setup.getByRole("status").filter({ hasText: "Test is running." })).toBeVisible();
+  await expect(setup.getByLabel("Step 1 description")).toBeDisabled();
+  await expect(setup.getByRole("button", { name: "Insert step" })).toBeDisabled();
+  await expect(setup.getByRole("button", { name: "Move step 1 down" })).toBeDisabled();
   await expect(setup.getByRole("link", { name: "Watch the test" })).toHaveAttribute("target", "_blank");
   await expect(setup.getByRole("link", { name: "Watch the test" })).toHaveAttribute("rel", "noreferrer");
   await setup.getByRole("button", { name: "Close edit page" }).click();
@@ -1381,6 +1384,25 @@ test("cancels publish and conflict dialogs and returns focus to Publish changes"
   await expect(publish).toBeFocused();
   await expect(setup.getByLabel("Step 1 description")).toHaveValue("My changes");
   await expect(publish).toBeEnabled();
+});
+
+test("keeps keyboard focus inside the publish dialog while the host is busy", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-slow-publish`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByLabel("Step 1 description").fill("My changes");
+  await setup.getByRole("button", { name: "Test changes" }).click();
+  await expect(setup.getByText("Test completed")).toBeVisible();
+  await setup.getByLabel("I checked the result").check();
+  await setup.getByRole("button", { name: "Publish changes" }).click();
+  const dialog = setup.getByRole("dialog", { name: "Publish changes?" });
+  await dialog.getByRole("button", { name: "Publish", exact: true }).click();
+  await expect(dialog.getByRole("button", { name: "Publishing…" })).toBeDisabled();
+  await expect(setup.getByRole("button", { name: "Close edit page" })).toBeDisabled();
+  await dialog.locator(".edit-modal-card").press("Tab");
+  expect(await dialog.evaluate((element) => element.contains(element.ownerDocument.activeElement))).toBe(true);
+  await dialog.locator(".edit-modal-card").press("Shift+Tab");
+  expect(await dialog.evaluate((element) => element.contains(element.ownerDocument.activeElement))).toBe(true);
+  await expect(setup.getByRole("status").filter({ hasText: "Published v4." })).toHaveText("Published v4.");
 });
 
 test("announces an unscheduled publish without claiming scheduled runs", async ({ page }) => {
@@ -1518,7 +1540,7 @@ function hostPage(url: string): string {
     } else if (request.method === "publishDraft") {
       window.__publishRequests.push(request.params);
       if (scenario === "edit-conflict" && !request.params.overwrite && !publishedConflict) { publishedConflict = true; send({ conflict: { updatedBy: "teammate@example.test", updatedAt: "2026-10-01T10:00:00Z" } }); }
-      else { editVersion += 1; publishedDraft = window.__savedAgents.at(-1); send({ version: editVersion }); }
+      else { editVersion += 1; publishedDraft = window.__savedAgents.at(-1); if (scenario === "edit-slow-publish") setTimeout(() => send({ version: editVersion }), 2000); else send({ version: editVersion }); }
     } else if (request.method === "requestCredentials") { window.__credentialRequests.push(request.params); send({ saved: request.params.kinds }); } else if (request.method === "startRecording") { window.__startUrls.push(request.params.url); if (edit ? recordingExists : recordingActive) { fail("Finish the current demonstration first."); return; } recordingActive = true; recordingExists = true; send({ id: "recording-1", status: "recording", liveViewUrl: "https://live.browserbase.com/session", steps: edit ? [] : steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
     else if (request.method === "getRecording" || request.method === "stopRecording") { if (request.method === "stopRecording" && edit) recordingActive = false; send({ id: "recording-1", status: request.method === "getRecording" && recordingActive ? "recording" : "stopped", liveViewUrl: "https://live.browserbase.com/session", steps: edit ? (request.method === "stopRecording" ? redemonstrationSteps : []) : steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
     else if (request.method === "cancelRecording") { recordingActive = false; recordingExists = false; send(undefined); }

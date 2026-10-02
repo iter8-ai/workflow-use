@@ -667,21 +667,29 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
     if (!dialogOpen) return;
     const trigger = dialogTriggerRef.current;
     modalRef.current?.querySelector<HTMLElement>("button:not(:disabled)")?.focus();
+    return () => { trigger?.focus(); };
+  }, [dialogOpen]);
+  useEffect(() => {
+    if (!dialogOpen) return;
+    const dialog = modalRef.current;
+    if (busy) dialog?.focus();
+    else if (document.activeElement === dialog || !dialog?.contains(document.activeElement)) dialog?.querySelector<HTMLElement>("button:not(:disabled)")?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
         if (!busy) { setPublishOpen(false); setConflict(null); setConfirmClose(false); }
       } else if (event.key === "Tab") {
-        const controls = Array.from(modalRef.current?.querySelectorAll<HTMLElement>("button:not(:disabled)") ?? []);
+        const controls = Array.from(dialog?.querySelectorAll<HTMLElement>("button:not(:disabled)") ?? []);
         const first = controls[0], last = controls[controls.length - 1];
-        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+        if (controls.length === 0) { event.preventDefault(); dialog?.focus(); }
+        else if (!dialog?.contains(document.activeElement)) { event.preventDefault(); first?.focus(); }
+        else if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog)) { event.preventDefault(); last?.focus(); }
         else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
       }
     };
     document.addEventListener("keydown", onKeyDown);
-    return () => { document.removeEventListener("keydown", onKeyDown); trigger?.focus(); };
-  }, [dialogOpen, busy]);
-  useEffect(() => { if (conflict) modalRef.current?.querySelector<HTMLElement>("button:not(:disabled)")?.focus(); }, [conflict]);
+    return () => { document.removeEventListener("keydown", onKeyDown); };
+  }, [dialogOpen, busy, conflict]);
   useEffect(() => { insertedStepRef.current?.focus(); }, [insertedStepId]);
 
   if (agent === null || draft === null) return <main className="setup-unavailable edit-agent edit-loading">{error ? <div role="alert"><p>{error}</p><button className="button button-primary" onClick={() => void load()}>Retry</button></div> : <p className="edit-status" role="status"><span className="edit-spinner" aria-hidden="true" />Loading agent…</p>}</main>;
@@ -691,7 +699,7 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
   const changed = changes.length > 0;
   const succeeded = testRun?.status === "succeeded";
   const recordingActive = recording?.status === "recording";
-  const readOnly = agent.internal || busy || recordingActive;
+  const readOnly = agent.internal || busy || recordingActive || testRun?.status === "running";
   const canPublish = !agent.internal && changed && checked && succeeded && !recordingActive;
   const publishHelp = agent.internal ? "Managed by Operations. Publishing changes is disabled." : !changed ? "Make a change to publish." : !succeeded ? "Test your changes before publishing." : !checked ? "Confirm you checked the result." : "Ready to publish your changes.";
   const selectedFromStep = Math.min(fromStep, Math.max(0, draft.steps.length - 1));
@@ -789,7 +797,7 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
 
   return <main className="agent-setup edit-agent">
     <header className="setup-header edit-header">
-      <button className="icon-button" aria-label="Back to web agents" title="Back to web agents" onClick={(e) => requestClose(e.currentTarget)}><EditIcon name="back" /></button>
+      <button className="icon-button" aria-label="Back to web agents" title="Back to web agents" disabled={dialogOpen} onClick={(e) => requestClose(e.currentTarget)}><EditIcon name="back" /></button>
       <div className="edit-heading">
         <h1 className="visually-hidden">Edit web agent</h1>
         <div className="edit-title">
@@ -806,7 +814,7 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
         </div>
         {renameError && <p id="rename-error" className="edit-rename-error" role="alert">{renameError}</p>}
       </div>
-      <button className="icon-button" aria-label="Close edit page" title="Close edit page" onClick={(e) => requestClose(e.currentTarget)}><EditIcon name="close" /></button>
+      <button className="icon-button" aria-label="Close edit page" title="Close edit page" disabled={dialogOpen} onClick={(e) => requestClose(e.currentTarget)}><EditIcon name="close" /></button>
     </header>
     <section className="edit-layout" aria-busy={busy}>
       {agent.internal && <p className="edit-notice"><b>Read-only internal agent</b><br />Managed by Operations. Publishing changes is disabled.</p>}
@@ -835,9 +843,8 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
               <button className="icon-button" aria-label={`Remove step ${index + 1}`} title={`Remove step ${index + 1}`} disabled={readOnly} onClick={() => update({ steps: draft.steps.filter((item) => item.id !== step.id) })}><EditIcon name="close" /></button>
             </div>
           </div>)}</div>
-          <div className="edit-actions"><button className="button button-quiet" disabled={readOnly} onClick={insertStep}>Insert step</button></div>
           <div className="redemo-controls">
-            <div className="edit-actions"><label>Re-demonstrate from step<select aria-label="Re-demonstrate from step" value={selectedFromStep} disabled={readOnly || draft.steps.length === 0} onChange={(e) => setFromStep(Number(e.target.value))}>{draft.steps.map((_, index) => <option key={index} value={index}>{index + 1}</option>)}</select></label>
+            <div className="edit-actions"><button className="button button-quiet" disabled={readOnly} onClick={insertStep}>Insert step</button><label>Re-demonstrate from step<select aria-label="Re-demonstrate from step" value={selectedFromStep} disabled={readOnly || draft.steps.length === 0} onChange={(e) => setFromStep(Number(e.target.value))}>{draft.steps.map((_, index) => <option key={index} value={index}>{index + 1}</option>)}</select></label>
               <button className="button button-quiet" disabled={readOnly} onClick={() => void startRecording()}>Re-demonstrate</button>
               {recordingActive && <button className="button button-primary" disabled={busy} onClick={() => void stopRecording()}>Finish re-demonstration</button>}
             </div>
@@ -862,16 +869,16 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
         {changes.length === 0 ? <p>No changes yet.</p> : changes.map((change) => <div className="change-item" key={change.key}><b>{change.label}</b><span>{change.from || "Empty"} → {change.to || "Empty"}</span><button className="text-button" aria-label={`Revert ${change.label}`} disabled={readOnly} onClick={() => revert(change.key)}>Revert</button></div>)}
       </section></aside></div>
     </section>
-    {confirmClose && <div className="close-confirmation" role="dialog" aria-modal="true" aria-labelledby="close-edit-title" aria-describedby="close-edit-description"><div className="close-confirmation-card" ref={modalRef}>
+    {confirmClose && <div className="close-confirmation" role="dialog" aria-modal="true" aria-labelledby="close-edit-title" aria-describedby="close-edit-description"><div className="close-confirmation-card" ref={modalRef} tabIndex={-1}>
       <h2 id="close-edit-title">Discard your changes?</h2><p id="close-edit-description">Your unpublished changes and any active test or re-demonstration will be left behind.</p>
       <div className="edit-actions"><button className="button button-quiet" onClick={() => setConfirmClose(false)} disabled={busy}>Keep editing</button><button className="button button-danger" onClick={() => void close()} disabled={busy}>Discard changes</button></div>
     </div></div>}
-    {publishOpen && <div className="edit-modal" role="dialog" aria-modal="true" aria-labelledby="publish-edit-title" aria-describedby="publish-edit-description"><div className="edit-modal-card" ref={modalRef}>
+    {publishOpen && <div className="edit-modal" role="dialog" aria-modal="true" aria-labelledby="publish-edit-title" aria-describedby="publish-edit-description"><div className="edit-modal-card" ref={modalRef} tabIndex={-1}>
       <h2 id="publish-edit-title">Publish changes?</h2><p id="publish-edit-description">Publish {changes.length} {changes.length === 1 ? "change" : "changes"} to this agent.</p>
       {agent.schedule && <p className="edit-notice">Timers will use v{agent.version + 1} at the next run time.</p>}
       <div className="edit-actions"><button className="button button-quiet" disabled={busy} onClick={() => setPublishOpen(false)}>Cancel</button><button className="button button-primary" disabled={busy} aria-busy={operation === "publish"} onClick={() => void publish(false)}>{operation === "publish" ? "Publishing…" : "Publish"}</button></div>
     </div></div>}
-    {conflict && <div className="edit-modal" role="dialog" aria-modal="true" aria-labelledby="conflict-edit-title" aria-describedby="conflict-edit-description"><div className="edit-modal-card" ref={modalRef}>
+    {conflict && <div className="edit-modal" role="dialog" aria-modal="true" aria-labelledby="conflict-edit-title" aria-describedby="conflict-edit-description"><div className="edit-modal-card" ref={modalRef} tabIndex={-1}>
       <h2 id="conflict-edit-title">This agent changed while you were editing</h2>
       <div id="conflict-edit-description"><p>{conflict.updatedBy ?? "An unknown user"} saved it at {conflict.updatedAt ? formatConflictDate(conflict.updatedAt) : "an unknown time"}.</p><p>Reloading their version or publishing yours discards the other version's changes permanently.</p></div>
       <div className="edit-actions"><button className="button button-quiet" disabled={busy} onClick={() => setConflict(null)}>Cancel</button><button className="button button-quiet" disabled={busy} onClick={() => void load()}>Reload their version</button><button className="button button-danger" disabled={busy} aria-busy={operation === "publish"} onClick={() => void publish(true)}>{operation === "publish" ? "Publishing…" : "Publish mine anyway"}</button></div>
