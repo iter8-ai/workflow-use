@@ -688,11 +688,10 @@ select {
 .edit-version { border: 1px solid #e4e5ee; border-radius: 6px; background: #f7f7fb; color: #5f667c; padding: 4px 8px; font-size: .82rem; font-weight: 650; }
 .edit-schedule, .edit-rename-status { color: #5f667c; font-size: .82rem; }
 .edit-rename-status:empty { display: none; }
-.edit-layout { width: min(1480px, 100%); margin: 0 auto; padding: 24px clamp(24px, 4vw, 64px) 40px; }
+.edit-layout { width: min(1600px, 100%); margin: 0 auto; padding: 24px clamp(24px, 4vw, 64px) 40px; }
 .edit-layout, .edit-grid, .edit-main { display: grid; gap: 16px; }
-.edit-grid { grid-template-columns: minmax(0, 1fr) 320px; align-items: start; }
-.edit-main { display: contents; }
-.edit-main > .edit-card { grid-column: 1; }
+.edit-grid { grid-template-columns: minmax(0, 7fr) minmax(300px, 3fr); align-items: start; }
+.edit-main { min-width: 0; }
 .edit-card { display: grid; gap: 12px; padding: 18px; border: 1px solid #e4e5ee; border-radius: 8px; background: #fff; }
 .edit-rename-error { margin: 4px 0 0; color: #922e3d; font-size: .82rem; }
 .edit-card h2, .edit-modal-card h2 { margin: 0; color: #17182b; font-size: 1rem; font-weight: 650; letter-spacing: -.018em; }
@@ -715,15 +714,26 @@ select {
 .redemo-controls { display: grid; gap: 6px; padding-top: 12px; border-top: 1px solid #e4e5ee; }
 .redemo-controls label { display: flex; align-items: center; gap: 8px; color: #5f667c; font-size: .82rem; }
 .redemo-controls select { border: 1px solid #c8cad8; border-radius: 6px; padding: 6px; background: #fff; color: #17233d; }
-.edit-rail { grid-column: 2; grid-row: 1 / span 3; position: sticky; top: 18px; min-width: 0; }
+.edit-rail { display: grid; gap: 16px; grid-template-areas: "credentials" "publish" "details" "changes"; grid-template-rows: auto auto auto 1fr; align-self: stretch; align-items: start; min-width: 0; }
+.edit-credentials { grid-area: credentials; }
+.edit-publish { grid-area: publish; position: sticky; top: 18px; }
+.edit-publish .edit-actions:has(.result-check) { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+.edit-publish .edit-actions:has(.result-check) > button:first-child { grid-column: 1 / -1; justify-self: start; }
+.edit-publish .edit-actions .result-check { white-space: normal; }
+.edit-details { grid-area: details; }
+.edit-changes { grid-area: changes; }
+.edit-credential-kinds { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: .875rem; color: #5f667c; }
+.edit-credentials > .button { justify-self: start; }
+.edit-credentials .edit-rename-error { color: #922e3d; }
+.raw-limit label { display: grid; gap: 6px; color: #5f667c; font-size: .82rem; font-weight: 650; }
+.raw-limit input { max-width: 7rem; }
 .change-item { display: grid; gap: 4px; padding: 10px 0; border-top: 1px solid #e4e5ee; font-size: .875rem; }
 .change-item span { color: #5f667c; overflow-wrap: anywhere; }
 .text-button { justify-self: start; border: 0; padding: 0; color: #6546c9; background: transparent; font-size: .74rem; font-weight: 700; cursor: pointer; }
 .edit-agent .text-button { justify-self: start; border: 0; padding: 4px 0; color: #5236ad; background: transparent; font-size: .82rem; font-weight: 650; cursor: pointer; }
 .edit-recording { height: 560px; overflow: hidden; border: 1px solid #e4e5ee; border-radius: 8px; }
 .raw-stage { display: grid; gap: 12px; }
-.raw-preserved { display: flex; justify-content: space-between; gap: 10px; padding: 10px; border: 1px solid #e4e5ee; border-radius: 6px; background: #fbfbfd; color: #363b50; font-size: .875rem; }
-.raw-unchanged { color: #5f667c; font-size: .82rem; }
+.raw-preserved { overflow-wrap: anywhere; }
 .edit-result { display: grid; gap: 6px; padding: 12px; border: 1px solid #c8cad8; border-radius: 6px; font-size: .875rem; }
 .edit-result-succeeded { border-color: #9bc6b2; background: #edf7f2; color: #205c43; }
 .edit-result-failed { border-color: #e2b6bf; background: #fff5f5; color: #922e3d; }
@@ -738,7 +748,7 @@ select {
 @keyframes edit-spin { to { transform: rotate(360deg); } }
 .edit-name-help { margin: 4px 0 0; color: #5f667c; font-size: .75rem; }
 .edit-agent input, .edit-agent textarea, .edit-agent select { border-color: #8a8fa3; }
-.raw-stage textarea { field-sizing: content; min-height: 16em; max-height: 60vh; overflow-y: auto; line-height: 1.5; resize: none; }
+.raw-stage textarea { field-sizing: content; min-height: 60vh; line-height: 1.6; resize: none; }
 .edit-screen-thumbnail { justify-self: start; padding: 0; border: 1px solid #8a8fa3; border-radius: 4px; background: #fff; cursor: zoom-in; }
 .edit-screen-thumbnail img { display: block; width: 180px; max-width: 100%; max-height: 120px; object-fit: contain; }
 .edit-screen-dialog { width: min(1000px, 100%); max-height: 90vh; overflow: auto; }
@@ -772,7 +782,7 @@ select {
   .edit-agent .edit-spinner { animation: none; }
   .edit-agent .button, .edit-agent .icon-button, .edit-agent .text-button, .edit-agent input, .edit-agent textarea, .edit-agent select, .edit-agent a { transition: none; }
 }
-@media (max-width: 1100px) { .edit-grid { grid-template-columns: minmax(0, 1fr); } .edit-rail { grid-column: 1; grid-row: auto; position: static; } }
+@media (max-width: 1100px) { .edit-grid { grid-template-columns: minmax(0, 1fr); } .edit-rail { grid-template-areas: "credentials" "publish" "changes" "details"; } .edit-publish { position: static; } }
 
 .field-note {
   color: #5f667c;
