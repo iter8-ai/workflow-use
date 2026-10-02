@@ -219,7 +219,7 @@ select {
 
 .button:focus-visible,
 .text-button:focus-visible {
-  outline: 3px solid #cfc5f2;
+  outline: 2px solid #6546c9;
   outline-offset: 2px;
 }
 
@@ -688,9 +688,9 @@ select {
 .edit-version { border: 1px solid #e4e5ee; border-radius: 6px; background: #f7f7fb; color: #5f667c; padding: 4px 8px; font-size: .82rem; font-weight: 650; }
 .edit-schedule, .edit-rename-status { color: #5f667c; font-size: .82rem; }
 .edit-rename-status:empty { display: none; }
-.edit-layout { width: min(1480px, 100%); margin: 0 auto; padding: 24px clamp(24px, 4vw, 64px) 40px; }
+.edit-layout { width: min(1600px, 100%); margin: 0 auto; padding: 24px clamp(24px, 4vw, 64px) 40px; }
 .edit-layout, .edit-grid, .edit-main { display: grid; gap: 16px; }
-.edit-grid { grid-template-columns: minmax(0, 1fr) 320px; align-items: start; }
+.edit-grid { grid-template-columns: minmax(0, 7fr) minmax(280px, 3fr); align-items: start; }
 .edit-main { min-width: 0; }
 .edit-card { display: grid; gap: 12px; padding: 18px; border: 1px solid #e4e5ee; border-radius: 8px; background: #fff; }
 .edit-rename-error { margin: 4px 0 0; color: #922e3d; font-size: .82rem; }
@@ -699,8 +699,9 @@ select {
 .edit-card input, .edit-card textarea { width: 100%; border: 1px solid #c8cad8; border-radius: 6px; padding: 8px; color: #17233d; background: #fff; font-size: .875rem; font-weight: 400; }
 .edit-card textarea { min-height: 56px; resize: vertical; }
 .edit-card p { margin: 0; color: #5f667c; font-size: .875rem; line-height: 1.45; }
-.edit-steps { display: grid; gap: 8px; }
-.edit-step { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 10px; border: 1px solid #e4e5ee; border-radius: 6px; }
+.edit-steps { display: grid; }
+.edit-step { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 12px 0; }
+.edit-step + .edit-step { border-top: 1px solid #e4e5ee; }
 .edit-step > b { display: grid; width: 24px; height: 24px; place-items: center; border-radius: 6px; background: #f7f7fb; color: #5f667c; font-size: .875rem; }
 .edit-step > div:nth-child(2) { display: grid; gap: 8px; min-width: 0; }
 .edit-step textarea { min-height: 34px; padding: 6px 8px; field-sizing: content; resize: none; }
@@ -713,15 +714,26 @@ select {
 .redemo-controls { display: grid; gap: 6px; padding-top: 12px; border-top: 1px solid #e4e5ee; }
 .redemo-controls label { display: flex; align-items: center; gap: 8px; color: #5f667c; font-size: .82rem; }
 .redemo-controls select { border: 1px solid #c8cad8; border-radius: 6px; padding: 6px; background: #fff; color: #17233d; }
-.edit-rail { position: sticky; top: 18px; }
+.edit-rail { display: grid; gap: 16px; grid-template-areas: "credentials" "publish" "details" "changes"; grid-template-rows: auto auto auto 1fr; align-self: stretch; align-items: start; min-width: 0; }
+.edit-credentials { grid-area: credentials; }
+.edit-publish { grid-area: publish; position: sticky; top: 18px; }
+.edit-publish .edit-actions:has(.result-check) { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+.edit-publish .edit-actions:has(.result-check) > button:first-child { grid-column: 1 / -1; justify-self: start; }
+.edit-publish .edit-actions .result-check { white-space: normal; }
+.edit-details { grid-area: details; }
+.edit-changes { grid-area: changes; }
+.edit-credential-kinds { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: .875rem; color: #5f667c; }
+.edit-credentials > .button { justify-self: start; }
+.edit-credentials .edit-rename-error { color: #922e3d; }
+.raw-limit label { display: grid; gap: 6px; color: #5f667c; font-size: .82rem; font-weight: 650; }
+.raw-limit input { max-width: 7rem; }
 .change-item { display: grid; gap: 4px; padding: 10px 0; border-top: 1px solid #e4e5ee; font-size: .875rem; }
 .change-item span { color: #5f667c; overflow-wrap: anywhere; }
 .text-button { justify-self: start; border: 0; padding: 0; color: #6546c9; background: transparent; font-size: .74rem; font-weight: 700; cursor: pointer; }
 .edit-agent .text-button { justify-self: start; border: 0; padding: 4px 0; color: #5236ad; background: transparent; font-size: .82rem; font-weight: 650; cursor: pointer; }
 .edit-recording { height: 560px; overflow: hidden; border: 1px solid #e4e5ee; border-radius: 8px; }
 .raw-stage { display: grid; gap: 12px; }
-.raw-preserved { display: flex; justify-content: space-between; gap: 10px; padding: 10px; border: 1px solid #e4e5ee; border-radius: 6px; background: #fbfbfd; color: #363b50; font-size: .875rem; }
-.raw-unchanged { color: #5f667c; font-size: .82rem; }
+.raw-preserved { overflow-wrap: anywhere; }
 .edit-result { display: grid; gap: 6px; padding: 12px; border: 1px solid #c8cad8; border-radius: 6px; font-size: .875rem; }
 .edit-result-succeeded { border-color: #9bc6b2; background: #edf7f2; color: #205c43; }
 .edit-result-failed { border-color: #e2b6bf; background: #fff5f5; color: #922e3d; }
@@ -730,11 +742,17 @@ select {
 .edit-agent a { color: #5236ad; text-underline-offset: 3px; }
 .edit-agent a:hover { color: #37374d; }
 .edit-agent a:active { color: #17182b; }
-.edit-agent a:focus-visible { outline: 3px solid #cfc5f2; outline-offset: 2px; }
+.edit-agent a:focus-visible, .edit-agent button:focus-visible, .edit-rail h2:focus { outline: 2px solid #6546c9; outline-offset: 2px; }
 .edit-status { display: flex; align-items: center; gap: 8px; font-size: .875rem; color: #5f667c; }
 .edit-spinner { width: 14px; height: 14px; flex-shrink: 0; border: 1px solid #c8cad8; border-top-color: #6546c9; border-radius: 50%; animation: edit-spin 800ms linear infinite; }
 @keyframes edit-spin { to { transform: rotate(360deg); } }
-.edit-loading { display: grid; place-content: center; min-height: 100vh; }
+.edit-name-help { margin: 4px 0 0; color: #5f667c; font-size: .75rem; }
+.edit-agent input, .edit-agent textarea, .edit-agent select { border-color: #8a8fa3; }
+.raw-stage textarea { field-sizing: content; min-height: 60vh; line-height: 1.6; resize: none; }
+.edit-screen-thumbnail { justify-self: start; padding: 0; border: 1px solid #8a8fa3; border-radius: 4px; background: #fff; cursor: zoom-in; }
+.edit-screen-thumbnail img { display: block; width: 180px; max-width: 100%; max-height: 120px; object-fit: contain; }
+.edit-screen-dialog { width: min(1000px, 100%); max-height: 90vh; overflow: auto; }
+.edit-screen-dialog img { max-width: 100%; max-height: 65vh; margin: auto; object-fit: contain; }
 .edit-notice { margin: 0; padding: 12px; border: 1px solid #d6cdf6; border-radius: 6px; background: #eeeaff; color: #4e38a0; font-size: .875rem; }
 .edit-modal { position: fixed; inset: 0; z-index: 5; display: grid; place-items: center; padding: 20px; background: rgb(23 35 61 / 22%); }
 .edit-modal-card { width: min(520px, 100%); display: grid; gap: 14px; padding: 24px; border-radius: 8px; background: #fff; box-shadow: 0 12px 35px rgb(23 35 61 / 20%); }
@@ -756,15 +774,15 @@ select {
 .edit-agent .text-button:hover:not(:disabled) { color: #37374d; text-decoration: underline; }
 .edit-agent .text-button:active:not(:disabled) { color: #17182b; }
 .edit-agent .button:disabled, .edit-agent .icon-button:disabled, .edit-agent .text-button:disabled { opacity: 1; color: #5f667c; border-color: #e4e5ee; background: #f7f7fb; cursor: not-allowed; }
-.edit-agent input:hover:not(:disabled), .edit-agent textarea:hover:not(:disabled), .edit-agent select:hover:not(:disabled) { border-color: #a7a9bb; }
-.edit-agent input:focus-visible, .edit-agent textarea:focus-visible, .edit-agent select:focus-visible { border-color: #6546c9; outline: 3px solid #eeeaff; outline-offset: 1px; }
+.edit-agent input:hover:not(:disabled), .edit-agent textarea:hover:not(:disabled), .edit-agent select:hover:not(:disabled) { border-color: #8a8fa3; }
+.edit-agent input:focus-visible, .edit-agent textarea:focus-visible, .edit-agent select:focus-visible { border-color: #6546c9; outline: 2px solid #6546c9; outline-offset: 2px; }
 .edit-agent input:active:not(:disabled), .edit-agent textarea:active:not(:disabled), .edit-agent select:active:not(:disabled) { border-color: #6546c9; }
 .edit-agent input:disabled, .edit-agent textarea:disabled, .edit-agent select:disabled { background: #f7f7fb; color: #5f667c; cursor: not-allowed; }
 @media (prefers-reduced-motion: reduce) {
   .edit-agent .edit-spinner { animation: none; }
   .edit-agent .button, .edit-agent .icon-button, .edit-agent .text-button, .edit-agent input, .edit-agent textarea, .edit-agent select, .edit-agent a { transition: none; }
 }
-@media (max-width: 900px) { .edit-grid { grid-template-columns: 1fr; } .edit-rail { position: static; } }
+@media (width < 880px) { .edit-grid { grid-template-columns: minmax(0, 1fr); } .edit-rail { grid-template-areas: "publish" "credentials" "changes" "details"; } .edit-publish { position: static; } }
 
 .field-note {
   color: #5f667c;
