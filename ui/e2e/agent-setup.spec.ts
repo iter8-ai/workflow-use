@@ -1310,6 +1310,7 @@ test("keeps raw stages and internal agents safe", async ({ page }) => {
   await expect(setup.locator("pre.raw-preserved")).toHaveCount(0);
   await page.screenshot({ path: "e2e-artifacts/edit-raw.png" });
   await setup.getByLabel("Agent instructions", { exact: true }).fill("Updated legacy prompt");
+  await expect(setup.locator(".edit-rail p")).toHaveText("1 unpublished change");
   await page.screenshot({ path: "e2e-artifacts/edit-raw-changed.png" });
   await expect(setup.locator(".edit-rail").getByText("Agent instructions", { exact: true })).toBeVisible();
   await setup.getByRole("button", { name: "Test changes" }).click();
@@ -1549,7 +1550,8 @@ test("shows failure evidence and enlarges the final screen with keyboard focus",
   await page.goto(`${baseUrl}/host?scenario=edit-fail-evidence`);
   const setup = page.frameLocator("iframe");
   await setup.getByRole("button", { name: "Test changes" }).click();
-  await expect(setup.getByText("Failure kind: website", { exact: true })).toBeVisible();
+  await expect(setup.locator(".edit-result-failed > b")).toHaveText(["Test failed", "Website problem"]);
+  await expect(setup.getByText("Failure kind:", { exact: false })).toHaveCount(0);
   await expect(setup.getByText("Stopped at step 2: Download the statement", { exact: true })).toBeVisible();
   await expect(setup.getByText("The reports list opened, but no file was downloaded.")).toBeVisible();
   const thumbnail = setup.getByRole("button", { name: "Enlarge final screen" });
@@ -1596,6 +1598,28 @@ test("keeps the edit header and a way back for loading errors and missing agents
   await expect.poll(() => page.evaluate(() => window.__closeRequests)).toEqual([{}]);
 });
 
+for (const [kind, label] of [
+  ["signin", "Sign-in problem"],
+  ["website", "Website problem"],
+  ["steps", "A step didn't work"],
+  ["result", "Result problem"],
+  ["check", "Completion check failed"],
+  ["service", "Reiterate service problem"],
+  ["unknown", "Cause unknown"],
+  ["missing", "Cause unknown"],
+  ["unrecognized", "Cause unknown"],
+]) {
+  test(`shows a plain edit failure label for ${kind}`, async ({ page }) => {
+    await page.goto(`${baseUrl}/host?scenario=edit-failure-label-${kind}`);
+    const setup = page.frameLocator("iframe");
+    await setup.getByRole("button", { name: "Test changes" }).click();
+    const result = setup.getByRole("alert");
+    await expect(result.locator("> b")).toHaveText(["Test failed", label]);
+    await expect(result).not.toContainText("Failure kind:");
+    await expect(result).not.toContainText(`: ${kind}`);
+  });
+}
+
 test("reviews and reverts raw fields independently and announces only changed counts", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=edit-raw`);
   const setup = page.frameLocator("iframe");
@@ -1603,24 +1627,28 @@ test("reviews and reverts raw fields independently and announces only changed co
   const limit = setup.getByLabel("Maximum actions", { exact: true });
   const rail = setup.locator(".edit-rail");
   const status = rail.getByRole("status");
-  await expect(status).toHaveText("0 unpublished changes");
+  await expect(status).toHaveText("No unpublished changes");
+  await expect(rail.locator("p")).toHaveText("No changes yet.");
   await prompt.fill("Open updated reports\nDownload the report");
-  await expect(status).toHaveText("1 unpublished changes");
+  await expect(status).toHaveText("1 unpublished change");
+  await expect(rail.locator("p")).toHaveText("1 unpublished change");
   await expect(rail.getByText("Open reports → Open updated reports", { exact: true })).toBeVisible();
   await prompt.pressSequentially(" now");
-  await expect(status).toHaveText("1 unpublished changes");
+  await expect(status).toHaveText("1 unpublished change");
   await limit.fill("32");
   await expect(status).toHaveText("2 unpublished changes");
+  await expect(rail.locator("p")).toHaveText("2 unpublished changes");
   await expect(rail.getByText("16 → 32", { exact: true })).toBeVisible();
   await rail.getByRole("button", { name: "Revert Agent instructions", exact: true }).click();
   await expect(prompt).toHaveValue("Open reports");
   await expect(prompt).toBeFocused();
   await expect(limit).toHaveValue("32");
-  await expect(status).toHaveText("1 unpublished changes");
+  await expect(status).toHaveText("1 unpublished change");
   await rail.getByRole("button", { name: "Revert Maximum actions", exact: true }).click();
   await expect(limit).toHaveValue("16");
   await expect(limit).toBeFocused();
-  await expect(status).toHaveText("0 unpublished changes");
+  await expect(status).toHaveText("No unpublished changes");
+  await expect(rail.locator("p")).toHaveText("No changes yet.");
   await setup.getByRole("button", { name: "Test changes" }).click();
   await expect(setup.getByText("Test completed")).toBeVisible();
   expect(JSON.stringify((await page.evaluate(() => window.__savedAgents))[0].config.stages)).toBe(JSON.stringify([{ type: "agent", prompt: "Open reports", step_limit: 16 }, { type: "download" }, { type: "sleep", sleep_ms: 5000 }, { type: "reload" }]));
@@ -1769,12 +1797,16 @@ function hostPage(url: string): string {
       if (scenario === "edit-conflict" && !request.params.overwrite && !publishedConflict) { publishedConflict = true; send({ conflict: { updatedBy: "teammate@example.test", updatedAt: "2026-10-01T10:00:00Z" } }); }
       else { editVersion += 1; publishedDraft = window.__savedAgents.at(-1); if (scenario === "edit-slow-publish") setTimeout(() => send({ version: editVersion }), 2000); else send({ version: editVersion }); }
     } else if (request.method === "requestCredentials") { window.__credentialRequests.push(request.params); send({ saved: request.params.kinds }); } else if (request.method === "startRecording") { window.__startUrls.push(request.params.url); if (edit ? recordingExists : recordingActive) { fail("Finish the current demonstration first."); return; } recordingActive = true; recordingExists = true; send({ id: "recording-1", status: "recording", liveViewUrl: "https://live.browserbase.com/session", steps: edit ? [] : steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
-    else if (request.method === "getRecording" || request.method === "stopRecording") { if (request.method === "stopRecording" && edit) recordingActive = false; send({ id: "recording-1", status: request.method === "getRecording" && recordingActive ? "recording" : "stopped", liveViewUrl: "https://live.browserbase.com/session", steps: edit ? (request.method === "stopRecording" ? redemonstrationSteps : []) : steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
+    else if (request.method === "getRecording" || request.method === "stopRecording") { if (request.method === "stopRecording") recordingActive = false; send({ id: "recording-1", status: request.method === "getRecording" && recordingActive ? "recording" : "stopped", liveViewUrl: "https://live.browserbase.com/session", steps: edit ? (request.method === "stopRecording" ? redemonstrationSteps : []) : steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
     else if (request.method === "cancelRecording") { recordingActive = false; recordingExists = false; send(undefined); }
     else if (request.method === "saveAgent") { if (window.__savedSchedule || scenario === "rerun-save-rejection" && window.__savedAgents.length > 0) fail("This agent is scheduled. Edit it in agent settings."); else { window.__savedAgents.push(request.params); send({ id: "agent-1" }); } }
     else if (request.method === "testAgent") { testAttempts += 1; window.__testArguments.push(request.params.arguments); exportSentAt = Date.now(); if (scenario === "email-cutoff" && window.__testArguments.length > 1) setTimeout(() => send({ id: "run-" + window.__testArguments.length }), 1000); else send({ id: "run-" + window.__testArguments.length }); }
     else if (request.method === "getTestRun") {
       if (scenario === "edit-fail-evidence") send({ status: "failed", failure: { kind: "website", message: "The download button was missing." }, stoppedAtStep: 2, confirmation: "The reports list opened, but no file was downloaded.", screens: [{ ...screen, thought: "Earlier screen" }, screen] });
+      else if (scenario.startsWith("edit-failure-label-")) {
+        const kind = scenario.slice("edit-failure-label-".length);
+        send({ status: "failed", failure: kind === "missing" ? null : { kind, message: "The test could not finish." } });
+      }
       else if (scenario === "edit-empty-result") send({ status: "succeeded", files: [], screens: [], confirmation: null });
       else if (scenario === "service-failure") send({ status: "failed", failure: { kind: "service", message: "The AI service did not respond." }, stoppedAtStep: null, screens: [] });
       if (scenario === "service-failure-midrun") send({ status: "failed", failure: { kind: "service", message: "The AI service did not respond." }, stoppedAtStep: 2, screens: [] });

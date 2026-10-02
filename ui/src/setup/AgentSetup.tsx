@@ -722,6 +722,7 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
   const raw = agent.steps === null || agent.steps.length === 0;
   const changes = [...draftChanges(draft, live), ...(raw ? rawStageChanges(stages, agent.stages) : [])];
   const changed = changes.length > 0;
+  const changeCount = `${changes.length} unpublished ${changes.length === 1 ? "change" : "changes"}`;
   const lastScreen = testRun?.screens?.at(-1);
   const nextRunTime = agent.nextRunAt ? formatNextRun(agent.nextRunAt) : null;
   const succeeded = testRun?.status === "succeeded";
@@ -916,8 +917,8 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
           {recordingActive && <div className="browser-frame edit-recording">{browserbaseLiveViewUrl(recording.liveViewUrl) ? <iframe title="Virtual browser" src={browserbaseLiveViewUrl(recording.liveViewUrl)!} allow="clipboard-read; clipboard-write" /> : <p>Opening the virtual browser.</p>}</div>}
         </section>}
         <aside className="edit-rail"><section className="edit-card"><h2 ref={changesHeadingRef} tabIndex={-1}>Changes</h2>
-          <p>{changes.length} unpublished changes</p>
-          <span className="visually-hidden" role="status">{changes.length} unpublished changes</span>
+          {changed && <p>{changeCount}</p>}
+          <span className="visually-hidden" role="status">{changed ? changeCount : "No unpublished changes"}</span>
           {changes.length === 0 ? <p>No changes yet.</p> : changes.map((change) => <div className="change-item" key={change.key}><b>{change.label}</b><span>{change.from || "Empty"} → {change.to || "Empty"}</span><button className="text-button" aria-label={`Revert ${change.label}`} disabled={readOnly} onClick={() => revert(change.key)}>Revert</button></div>)}
         </section></aside>
         <section className="edit-card"><h2>Test &amp; publish</h2><p>Scheduled runs continue using the live version until you publish.</p>
@@ -925,7 +926,7 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
           {testRun && testRun.status !== "running" && <div className={`edit-result edit-result-${succeeded ? "succeeded" : "failed"}`} role={succeeded ? "status" : "alert"}>
             <b>{succeeded ? "Test completed" : "Test failed"}</b>
             {!succeeded && <>
-              <span>Failure kind: {testRun.failure?.kind === "signin" ? "sign-in" : testRun.failure?.kind ?? "unknown"}</span>
+              <b>{editFailureLabel(testRun.failure?.kind)}</b>
               {(testRun.failure?.message || testRun.error) && <p>{testRun.failure?.message || testRun.error}</p>}
             </>}
             {testRun.stoppedAtStep != null && <p>Stopped at step {testRun.stoppedAtStep}{draft.steps[testRun.stoppedAtStep - 1]?.description ? `: ${draft.steps[testRun.stoppedAtStep - 1]!.description}` : ""}</p>}
@@ -970,6 +971,17 @@ function EditIcon({ name }: { name: "back" | "up" | "down" | "close" }): JSX.Ele
   return <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none"><path d={path} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>;
 }
 
+function editFailureLabel(kind: string | null | undefined): string {
+  switch (kind) {
+    case "signin": return "Sign-in problem";
+    case "website": return "Website problem";
+    case "steps": return "A step didn't work";
+    case "result": return "Result problem";
+    case "check": return "Completion check failed";
+    case "service": return "Reiterate service problem";
+    default: return "Cause unknown";
+  }
+}
 function isObject(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null; }
 function moveStep(steps: SetupStep[], index: number, delta: number): SetupStep[] { const next = [...steps]; const target = index + delta; if (target < 0 || target >= next.length) return next; [next[index], next[target]] = [next[target]!, next[index]!]; return next; }
 function rawStageChanges(current: unknown[], live: unknown[]): Array<{ key: string; label: string; from: string; to: string }> {
