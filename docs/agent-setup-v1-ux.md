@@ -29,6 +29,6 @@ Credential entry is excluded from recording. Login-dependent demonstrations requ
 5. A successful, reviewed test can finish with no schedule.
 6. Canceling an exit confirmation keeps the current demonstration.
 7. Completion opens the host-owned saved agent even if the list refresh finishes later.
-8. Public source and license links remain visible.
+8. No source-code or license footer or links in the setup UI. The repository is public and its README carries the AGPL notice; that is enough.
 
 Controlled browser fixtures verify authoring interactions and layout. Authenticated host-to-backend testing is a separate release check.
