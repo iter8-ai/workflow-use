@@ -613,6 +613,8 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
   const [agent, setAgent] = useState<EditAgentData | null>(null);
   const [draft, setDraft] = useState<SetupDraft | null>(null);
   const [stages, setStages] = useState<unknown[]>([]);
+  const [stageLimitInputs, setStageLimitInputs] = useState<Record<number, string>>({});
+  const [stageLimitErrors, setStageLimitErrors] = useState<Record<number, boolean>>({});
   const [testRun, setTestRun] = useState<TestRun & { id: string } | null>(null);
   const [checked, setChecked] = useState(false);
   const [recording, setRecording] = useState<Recording | null>(null);
@@ -642,6 +644,7 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
       setRenameError(null); setRenameSaved(false);
       setDraft({ name: loaded.name, url: loaded.url, goal: loaded.goal, steps: loaded.steps ?? [], inputs: [] });
       setStages(loaded.stages);
+      setStageLimitInputs({}); setStageLimitErrors({});
       setTestRun(null); setChecked(false); setConflict(null); setPublishOpen(false);
     } catch (requestError) { setError(errorMessage(requestError)); }
     finally { setBusy(false); }
@@ -703,8 +706,9 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
   const canPublish = !agent.internal && changed && checked && succeeded && !recordingActive;
   const publishHelp = agent.internal ? "Managed by Operations. Publishing changes is disabled." : !changed ? "Make a change to publish." : !succeeded ? "Test your changes before publishing." : !checked ? "Confirm you checked the result." : "Ready to publish your changes.";
   const selectedFromStep = Math.min(fromStep, Math.max(0, draft.steps.length - 1));
-  const update = (next: Partial<SetupDraft>): void => { setDraft((current) => current === null ? current : { ...current, ...next }); setTestRun(null); setChecked(false); setNotice(null); setError(null); };
-  const updateStage = (index: number, next: Record<string, unknown>): void => { setStages((current) => current.map((stage, i) => i === index && isObject(stage) ? { ...stage, ...next } : stage)); setTestRun(null); setChecked(false); setNotice(null); setError(null); };
+  const resetTest = (): void => { setTestRun(null); setChecked(false); setNotice(null); setError(null); };
+  const update = (next: Partial<SetupDraft>): void => { setDraft((current) => current === null ? current : { ...current, ...next }); resetTest(); };
+  const updateStage = (index: number, next: Record<string, unknown>): void => { setStages((current) => current.map((stage, i) => i === index && isObject(stage) ? { ...stage, ...next } : stage)); resetTest(); };
   const rename = async (value: string): Promise<void> => {
     const name = value.trim();
     setDraft((current) => current === null ? current : { ...current, name });
@@ -721,6 +725,11 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
     finally { setRenaming(false); }
   };
   const test = async (): Promise<void> => {
+    if (raw) {
+      const errors = Object.fromEntries(Object.entries(stageLimitInputs).map(([index, value]) => [index, !validStepLimit(value)]));
+      setStageLimitErrors(errors);
+      if (Object.values(errors).some(Boolean)) return;
+    }
     const emptyStep = raw ? -1 : draft.steps.findIndex((step) => !step.description.trim());
     if (emptyStep !== -1) { setError(`Add an instruction for step ${emptyStep + 1} before testing.`); return; }
     setBusy(true); setOperation("test"); setError(null); setTestRun(null); setChecked(false);
@@ -761,7 +770,7 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
     finally { setBusy(false); }
   };
   const revert = (key: string): void => {
-    if (raw && key === "stages") { setStages(agent.stages); setTestRun(null); setChecked(false); setNotice(null); setError(null); return; }
+    if (raw && key === "stages") { setStages(agent.stages); setStageLimitInputs({}); setStageLimitErrors({}); resetTest(); return; }
     if (key === "url" || key === "goal") update({ [key]: live[key] });
     else if (key === "steps") {
       const ordered = live.steps.flatMap((step) => draft.steps.filter((item) => item.id === step.id));
@@ -828,7 +837,17 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
         {raw ? <section className="edit-card"><h2>Advanced instructions</h2>
           {stages.map((stage, index) => { const item = isObject(stage) ? stage : null; return item?.type === "agent" ? <div className="raw-stage" key={index}>
             <label>Agent instructions<textarea aria-label="Agent stage prompt" value={String(item.prompt ?? "")} disabled={readOnly} onChange={(e) => updateStage(index, { prompt: e.target.value })} /></label>
-            <label>Maximum actions<input aria-label="Maximum actions" type="number" min="1" step="1" value={Number(item.step_limit ?? 1)} disabled={readOnly} onChange={(e) => updateStage(index, { step_limit: Math.max(1, Math.trunc(Number(e.target.value))) })} /><span className="field-note">The agent stops after this many browser actions.</span></label>
+            <label>Maximum actions<input aria-label="Maximum actions" type="text" inputMode="numeric" value={stageLimitInputs[index] ?? String(item.step_limit ?? 1)} disabled={readOnly} aria-invalid={stageLimitErrors[index] ?? false} aria-describedby={stageLimitErrors[index] ? `stage-limit-error-${index}` : undefined}
+              onChange={(e) => {
+                const value = e.target.value;
+                setStageLimitInputs((current) => ({ ...current, [index]: value }));
+                setStageLimitErrors((current) => ({ ...current, [index]: false }));
+                if (validStepLimit(value)) updateStage(index, { step_limit: Number(value) });
+                else resetTest();
+              }}
+              onBlur={(e) => setStageLimitErrors((current) => ({ ...current, [index]: !validStepLimit(e.target.value) }))} />
+              {stageLimitErrors[index] && <span id={`stage-limit-error-${index}`} className="edit-rename-error" role="alert">Enter a whole number of 1 or more.</span>}
+              <span className="field-note">The agent stops after this many browser actions.</span></label>
           </div> : <div className="raw-preserved" key={index}><span>{preservedStageLabel(item)}</span><span className="raw-unchanged">Kept as is</span></div>; })}
         </section> : <section className="edit-card"><h2>Steps</h2>
           <div className="edit-steps">{draft.steps.map((step, index) => <div className="edit-step" key={step.id}>
@@ -878,13 +897,15 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
       {agent.schedule && <p className="edit-notice">Timers will use v{agent.version + 1} at the next run time.</p>}
       <div className="edit-actions"><button className="button button-quiet" disabled={busy} onClick={() => setPublishOpen(false)}>Cancel</button><button className="button button-primary" disabled={busy} aria-busy={operation === "publish"} onClick={() => void publish(false)}>{operation === "publish" ? "Publishing…" : "Publish"}</button></div>
     </div></div>}
-    {conflict && <div className="edit-modal" role="dialog" aria-modal="true" aria-labelledby="conflict-edit-title" aria-describedby="conflict-edit-description"><div className="edit-modal-card" ref={modalRef} tabIndex={-1}>
+    {conflict && <div className="edit-modal" role="dialog" aria-modal="true" aria-labelledby="conflict-edit-title" aria-describedby="conflict-edit-description"><div className="edit-modal-card conflict-modal" ref={modalRef} tabIndex={-1}>
       <h2 id="conflict-edit-title">This agent changed while you were editing</h2>
       <div id="conflict-edit-description"><p>{conflict.updatedBy ?? "An unknown user"} saved it at {conflict.updatedAt ? formatConflictDate(conflict.updatedAt) : "an unknown time"}.</p><p>Reloading their version or publishing yours discards the other version's changes permanently.</p></div>
       <div className="edit-actions"><button className="button button-quiet" disabled={busy} onClick={() => setConflict(null)}>Cancel</button><button className="button button-quiet" disabled={busy} onClick={() => void load()}>Reload their version</button><button className="button button-danger" disabled={busy} aria-busy={operation === "publish"} onClick={() => void publish(true)}>{operation === "publish" ? "Publishing…" : "Publish mine anyway"}</button></div>
     </div></div>}
   </main>;
 }
+
+function validStepLimit(value: string): boolean { return value.trim() !== "" && Number.isInteger(Number(value)) && Number(value) >= 1; }
 
 function EditIcon({ name }: { name: "back" | "up" | "down" | "close" }): JSX.Element {
   const path = { back: "M19 12H5m6-6-6 6 6 6", up: "M12 19V5m-6 6 6-6 6 6", down: "M12 5v14m-6-6 6 6 6-6", close: "M6 6l12 12M18 6L6 18" }[name];

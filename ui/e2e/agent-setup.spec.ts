@@ -1143,6 +1143,10 @@ test("shows the conflict modal and supports overwrite or discard", async ({ page
   await expect(setup.getByText("teammate@example.test saved it at 01.10.2026 at 10:00.", { exact: true })).toBeVisible();
   await expect(setup.getByRole("button", { name: "Publish mine anyway" })).toBeVisible();
   await expect(setup.getByRole("button", { name: "Reload their version" })).toBeVisible();
+  const actions = await setup.getByRole("dialog").getByRole("button").evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().y));
+  expect(actions).toHaveLength(3);
+  expect(Math.max(...actions) - Math.min(...actions)).toBeLessThanOrEqual(2);
+  await expect(setup.getByRole("dialog").locator(".edit-actions")).toHaveCSS("justify-content", "flex-end");
   await page.screenshot({ path: "e2e-artifacts/edit-conflict.png" });
   await setup.getByRole("button", { name: "Publish mine anyway" }).click();
   await expect(setup.getByRole("heading", { name: "Edit web agent" })).toBeVisible();
@@ -1203,6 +1207,42 @@ test("keeps a published raw agent editable when its stored setup has empty steps
   await expect(setup.getByText("Test completed")).toBeVisible();
   await setup.getByLabel("I checked the result").check();
   await expect(setup.getByRole("button", { name: "Publish changes" })).toBeEnabled();
+});
+
+test("lets maximum actions be cleared and typed without changing other raw stages", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-raw`);
+  const setup = page.frameLocator("iframe");
+  const limit = setup.getByLabel("Maximum actions");
+  await limit.fill("");
+  await expect(limit).toHaveValue("");
+  await limit.pressSequentially("32");
+  await expect(limit).toHaveValue("32");
+  await setup.getByRole("button", { name: "Test changes" }).click();
+  await expect(setup.getByText("Test completed")).toBeVisible();
+  const saved = await page.evaluate(() => window.__savedAgents);
+  expect(saved[0].config.stages[0]).toEqual({ type: "agent", prompt: "Open reports", step_limit: 32 });
+  expect(JSON.stringify(saved[0].config.stages.slice(1))).toBe(JSON.stringify([{ type: "download" }, { type: "sleep", sleep_ms: 5000 }, { type: "reload" }]));
+  await setup.getByRole("button", { name: "Revert Agent stages" }).click();
+  await expect(limit).toHaveValue("16");
+});
+
+test("shows invalid maximum actions on blur or test and never saves them", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-raw`);
+  const setup = page.frameLocator("iframe");
+  const limit = setup.getByLabel("Maximum actions");
+  for (const value of ["", "0", "1.5", "abc"]) {
+    await limit.fill(value);
+    await limit.blur();
+    await expect(limit).toHaveValue(value);
+    await expect(limit).toHaveAttribute("aria-invalid", "true");
+    await expect(setup.getByRole("alert")).toHaveText("Enter a whole number of 1 or more.");
+    await setup.getByRole("button", { name: "Test changes" }).click();
+    expect(await page.evaluate(() => window.__savedAgents)).toEqual([]);
+  }
+  await limit.fill("32");
+  await expect(setup.getByRole("alert")).toHaveCount(0);
+  await setup.getByRole("button", { name: "Test changes" }).click();
+  await expect(setup.getByText("Test completed")).toBeVisible();
 });
 
 test("keeps raw stages and internal agents safe", async ({ page }) => {
@@ -1371,6 +1411,7 @@ test("cancels publish and conflict dialogs and returns focus to Publish changes"
   await publish.click();
   const cancel = setup.getByRole("button", { name: "Cancel", exact: true });
   await expect(cancel).toBeFocused();
+  await expect(setup.getByRole("dialog").locator(".edit-actions")).toHaveCSS("justify-content", "flex-end");
   await cancel.press("Escape");
   await expect(setup.getByRole("dialog")).toHaveCount(0);
   await expect(publish).toBeFocused();
