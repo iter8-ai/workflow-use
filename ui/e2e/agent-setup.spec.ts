@@ -440,6 +440,7 @@ test("shows the failed step and keeps a multi-character inline edit focused", as
   await expect(setup.getByRole("alert")).toContainText("The button was missing.");
   await expect(setup.locator(".test-step.done")).toHaveCount(1);
   await expect(setup.locator(".test-step.failed")).toHaveCount(1);
+  await expectNoSideStripes(setup);
   await page.screenshot({ path: "e2e-artifacts/test-step-failure.png" });
   const instruction = setup.getByLabel("Step 2 instruction");
   await instruction.fill("");
@@ -610,6 +611,8 @@ test("presents an unmet described criterion as a check without blaming a step", 
   await expect(setup.locator(".test-step.failed")).toHaveCount(0);
   await expect(setup.getByText(/Rewrite/i)).toHaveCount(0);
   await expect(setup.locator(".done-options")).toHaveAttribute("open", "");
+  await expect(setup.locator(".done-when.failed")).toHaveCount(1);
+  await expectNoSideStripes(setup);
   await expect(setup.getByRole("button", { name: "Continue to schedule" })).toHaveCount(0);
   await page.screenshot({ path: "e2e-artifacts/free-text/described-failure.png" });
 });
@@ -789,11 +792,16 @@ test("shows the agent's note for each finished screen as a readable bar", async 
 
   await bar.getByRole("button", { name: "Previous screen" }).click();
   await expect(bar.locator(".caption-kind")).toHaveText("Actions");
-  await expect(bar.locator(".caption-chip")).toHaveText(["Click", "Type", "Press keys"]);
+  await expect(bar.locator(".caption-summary")).toHaveText("Click · Type · Press keys");
   await expect(bar.getByRole("button", { name: "More" })).toHaveCount(0);
 
   await bar.getByRole("button", { name: "Previous screen" }).click();
   await expect(bar.locator(".caption-kind")).toHaveText("Thinking");
+  await page.setViewportSize({ width: 480, height: 900 });
+  expect((await bar.boundingBox())?.height ?? 0).toBeLessThan(56);
+  await expect(bar.getByRole("button", { name: "Next screen" })).toBeInViewport();
+  await page.screenshot({ path: "e2e-artifacts/test-agent-note-narrow.png" });
+  await page.setViewportSize({ width: 1440, height: 900 });
   await expect(bar.locator(".caption-summary")).toHaveText("Opening the reports The reports menu is in the left navigation.");
   await expect(bar.getByRole("button", { name: "Previous screen" })).toBeDisabled();
   await bar.getByRole("button", { name: "More" }).click();
@@ -1500,6 +1508,14 @@ test("announces an unscheduled publish without claiming scheduled runs", async (
   await setup.getByRole("button", { name: "Publish", exact: true }).click();
   await expect(setup.getByRole("status").filter({ hasText: "Published v4." })).toHaveText("Published v4.");
 });
+
+async function expectNoSideStripes(setup: FrameLocator): Promise<void> {
+  const violations = await setup.locator(".test-rail").evaluate((root) => [root, ...root.querySelectorAll("*")].flatMap((element) => {
+    const style = getComputedStyle(element);
+    return parseFloat(style.borderLeftWidth) > 1 || parseFloat(style.borderRightWidth) > 1 ? [element.className] : [];
+  }));
+  expect(violations).toEqual([]);
+}
 
 for (const scenario of ["edit", "edit-raw"]) {
   test(`uses full borders rather than accent side stripes in ${scenario}`, async ({ page }) => {

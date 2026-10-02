@@ -4,8 +4,11 @@ import { actionLabels, outcomeLabels, type AgentThought, type ReasoningNote } fr
 type Tone = "good" | "bad" | "thinking" | "neutral";
 type BarView = { tone: Tone; label: string; summary: ReactNode; details: ReactNode[] };
 
-/** Bottom bar under a finished test's screenshot: what the agent noted, plus screen paging. */
-export function AgentScreenBar(props: { thought: AgentThought; index: number; count: number; onSelect(index: number): void }): JSX.Element {
+/**
+ * Bottom bar under a finished test's screenshot: what the agent noted, plus screen paging.
+ * The agent's own "completed" is only shown as a pass when the host also passed the test.
+ */
+export function AgentScreenBar(props: { thought: AgentThought; testPassed: boolean; index: number; count: number; onSelect(index: number): void }): JSX.Element {
   const [expanded, setExpanded] = useState(false);
   const [truncated, setTruncated] = useState(false);
   const summaryRef = useRef<HTMLParagraphElement>(null);
@@ -18,16 +21,16 @@ export function AgentScreenBar(props: { thought: AgentThought; index: number; co
     observer.observe(summary);
     return () => observer.disconnect();
   }, [props.thought, expanded]);
-  const view = barView(props.thought);
+  const view = barView(props.thought, props.testPassed);
   const canExpand = expanded || truncated || view.details.length > 0;
   return <div className={`test-caption${expanded ? " expanded" : ""}`}>
     <span className={`caption-kind ${view.tone}`}>{view.label}</span>
-    <div className="caption-body">
+    <div className="caption-body" aria-live="polite">
       <p ref={summaryRef} className="caption-summary">{view.summary}</p>
       {expanded && view.details.map((detail, index) => <p className="caption-detail" key={index}>{detail}</p>)}
     </div>
     {canExpand && <button type="button" className="text-button caption-toggle" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>{expanded ? "Less" : "More"}</button>}
-    <div className="caption-pager">
+    <div className="caption-pager" role="group" aria-label="Screens">
       <button type="button" className="icon-button" aria-label="Previous screen" onClick={() => props.onSelect(props.index - 1)} disabled={props.index <= 0}><Chevron direction="left" /></button>
       <span>{props.index + 1} / {props.count}</span>
       <button type="button" className="icon-button" aria-label="Next screen" onClick={() => props.onSelect(props.index + 1)} disabled={props.index >= props.count - 1}><Chevron direction="right" /></button>
@@ -35,12 +38,12 @@ export function AgentScreenBar(props: { thought: AgentThought; index: number; co
   </div>;
 }
 
-function barView(thought: AgentThought): BarView {
+function barView(thought: AgentThought, testPassed: boolean): BarView {
   switch (thought.kind) {
     case "outcome": {
       const { status, reason, confirmation } = thought.outcome;
       return {
-        tone: status === "completed" ? "good" : status === "completed_nothing_to_export" ? "neutral" : "bad",
+        tone: status === "blocked" || status === "failed" ? "bad" : status === "completed" && testPassed ? "good" : "neutral",
         label: outcomeLabels[status],
         summary: reason || "The agent gave no reason.",
         details: [...(confirmation === null ? [] : [<>Saw “{confirmation}”</>]), ...thought.reasoning.map(note)],
@@ -54,7 +57,7 @@ function barView(thought: AgentThought): BarView {
       return {
         tone: "neutral",
         label: thought.actions.length === 1 ? "Action" : "Actions",
-        summary: thought.actions.map((action, index) => <span className="caption-chip" key={index}>{actionLabels[action]}</span>),
+        summary: thought.actions.map((action) => actionLabels[action]).join(" · "),
         details: thought.safetyChecks === null ? [] : [`Safety checks: ${thought.safetyChecks}`],
       };
     case "replay":
