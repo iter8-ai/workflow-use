@@ -690,7 +690,7 @@ select {
 .edit-rename-status:empty { display: none; }
 .edit-layout { width: min(1600px, 100%); margin: 0 auto; padding: 24px clamp(24px, 4vw, 64px) 40px; }
 .edit-layout, .edit-grid, .edit-main { display: grid; gap: 16px; }
-.edit-grid { grid-template-columns: minmax(0, 7fr) minmax(300px, 3fr); align-items: start; }
+.edit-grid { grid-template-columns: minmax(0, 7fr) minmax(280px, 3fr); align-items: start; }
 .edit-main { min-width: 0; }
 .edit-card { display: grid; gap: 12px; padding: 18px; border: 1px solid #e4e5ee; border-radius: 8px; background: #fff; }
 .edit-rename-error { margin: 4px 0 0; color: #922e3d; font-size: .82rem; }
@@ -782,7 +782,7 @@ select {
   .edit-agent .edit-spinner { animation: none; }
   .edit-agent .button, .edit-agent .icon-button, .edit-agent .text-button, .edit-agent input, .edit-agent textarea, .edit-agent select, .edit-agent a { transition: none; }
 }
-@media (max-width: 1100px) { .edit-grid { grid-template-columns: minmax(0, 1fr); } .edit-rail { grid-template-areas: "credentials" "publish" "changes" "details"; } .edit-publish { position: static; } }
+@media (width < 880px) { .edit-grid { grid-template-columns: minmax(0, 1fr); } .edit-rail { grid-template-areas: "publish" "credentials" "changes" "details"; } .edit-publish { position: static; } }
 
 .field-note {
   color: #5f667c;

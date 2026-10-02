@@ -1670,12 +1670,35 @@ test("moves focus to reverted structured fields and to Changes after removing an
 });
 
 for (const scenario of ["edit", "edit-raw"]) {
-  test(`puts instructions, sign-in, testing, changes, and details in one column at 1024px in ${scenario}`, async ({ page }) => {
-    await page.setViewportSize({ width: 1024, height: 900 });
+  for (const width of [1024, 960]) {
+    for (const inset of [0, 64]) {
+      test(`keeps instructions beside the rail at ${width}px with ${inset}px host inset in ${scenario}`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 900 });
+        await page.goto(`${baseUrl}/host?scenario=${scenario}`);
+        await page.locator("iframe").evaluate((frame, inset) => { frame.style.width = `calc(100% - ${inset}px)`; frame.style.marginInline = `${inset / 2}px`; }, inset);
+        const setup = page.frameLocator("iframe");
+        await expect(setup.getByRole("heading", { name: "Sign-in details", exact: true })).toBeVisible();
+        const instructions = (await setup.locator(".edit-instructions").boundingBox())!;
+        const rail = (await setup.locator(".edit-rail").boundingBox())!;
+        expect(rail.x).toBeGreaterThanOrEqual(instructions.x + instructions.width);
+        expect(rail.y).toBe(instructions.y);
+        expect(rail.width).toBeGreaterThanOrEqual(280);
+        expect((await page.locator("iframe").boundingBox())!.width).toBe(width - inset);
+        await expect(setup.getByRole("button", { name: "Test changes" })).toBeInViewport({ ratio: 1 });
+        expect(await setup.locator("html").evaluate((element) => element.scrollTop)).toBe(0);
+        expect(await setup.locator("html").evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+        expect(await page.locator("html").evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+        if (scenario === "edit-raw" && width === 1024 && inset === 64) await page.screenshot({ path: "e2e-artifacts/edit-narrow.png" });
+      });
+    }
+  }
+
+  test(`puts testing directly after instructions in one column at 860px in ${scenario}`, async ({ page }) => {
+    await page.setViewportSize({ width: 860, height: 900 });
     await page.goto(`${baseUrl}/host?scenario=${scenario}`);
     const setup = page.frameLocator("iframe");
     await expect(setup.getByRole("heading", { name: "Sign-in details", exact: true })).toBeVisible();
-    const selectors = [".edit-instructions", ".edit-credentials", ".edit-publish", ".edit-changes", ".edit-details"];
+    const selectors = [".edit-instructions", ".edit-publish", ".edit-credentials", ".edit-changes", ".edit-details"];
     const boxes = await Promise.all(selectors.map((selector) => setup.locator(selector).boundingBox()));
     boxes.forEach((box, index) => {
       expect(box!.x).toBe(boxes[0]!.x);
@@ -1684,7 +1707,6 @@ for (const scenario of ["edit", "edit-raw"]) {
     });
     expect(await setup.locator("html").evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
     await expect(setup.getByRole("button", { name: "Close edit page" })).toBeInViewport();
-    if (scenario === "edit-raw") await page.screenshot({ path: "e2e-artifacts/edit-narrow.png" });
   });
 }
 
@@ -1719,7 +1741,7 @@ test("changes saved sign-in kinds, invalidates the test, and requires a fresh ch
   await page.goto(`${baseUrl}/host?scenario=edit-raw`);
   const setup = page.frameLocator("iframe");
   const card = setup.getByRole("region", { name: "Sign-in details" });
-  await expect(card.locator("li")).toHaveText(["Username · saved", "Password · saved", "Authenticator key · Not saved"]);
+  await expect(card.locator("li")).toHaveText(["Username · saved", "Password · saved"]);
   await expect(card.locator("input, textarea")).toHaveCount(0);
   await setup.getByRole("button", { name: "Test changes" }).click();
   await setup.getByLabel("I checked the result").check();
@@ -1752,16 +1774,49 @@ test("changes saved sign-in kinds, invalidates the test, and requires a fresh ch
 for (const [scenario, kinds] of [
   ["edit-raw-placeholders", ["username", "password", "otp"]],
   ["edit-credentials-placeholders", ["username", "password", "otp"]],
-  ["edit-credentials-empty", ["username", "password", "otp"]],
 ] as const) {
   test(`requests saved kinds and instruction placeholders in ${scenario}`, async ({ page }) => {
     await page.goto(`${baseUrl}/host?scenario=${scenario}`);
     const setup = page.frameLocator("iframe");
+    await expect(setup.locator(".edit-credentials li")).toHaveText(scenario === "edit-raw-placeholders"
+      ? ["Username · saved", "Password · saved", "Authenticator key · Not saved"]
+      : ["Username · saved", "Password · Not saved", "Authenticator key · Not saved"]);
     await setup.getByRole("button", { name: "Change sign-in details", exact: true }).click();
     await expect.poll(() => page.evaluate(() => window.__credentialRequests)).toEqual([{ kinds: [...kinds], replace: true }]);
     await expect(setup.locator(".edit-credentials li")).toHaveText(["Username · saved", "Password · saved", "Authenticator key · saved"]);
   });
 }
+
+for (const scenario of ["edit-credentials-empty", "edit-raw-no-signin"]) {
+  test(`offers a quiet add action without unsaved rows in ${scenario}`, async ({ page }) => {
+    await page.goto(`${baseUrl}/host?scenario=${scenario}`);
+    const setup = page.frameLocator("iframe");
+    const card = setup.getByRole("region", { name: "Sign-in details" });
+    await expect(card.getByText("No sign-in details saved.", { exact: true })).toBeVisible();
+    await expect(card.locator("li")).toHaveCount(0);
+    await expect(card.getByRole("button", { name: "Change sign-in details", exact: true })).toHaveCount(0);
+    const add = card.getByRole("button", { name: "Add sign-in details", exact: true });
+    await expect(add).toHaveClass("button button-quiet");
+    if (scenario === "edit-raw-no-signin") await page.screenshot({ path: "e2e-artifacts/edit-no-signin.png" });
+    await add.click();
+    await expect.poll(() => page.evaluate(() => window.__credentialRequests)).toEqual([{ kinds: ["username", "password"], replace: true }]);
+    await expect(card.locator("li")).toHaveText(["Username · saved", "Password · saved"]);
+    await expect(card.getByRole("button", { name: "Change sign-in details", exact: true })).toBeVisible();
+    await expect(card.getByText("No sign-in details saved.", { exact: true })).toHaveCount(0);
+    await expect(setup.locator(".edit-changes").getByRole("status")).toHaveText("1 unpublished change");
+  });
+}
+
+test("lists only referenced sign-in kinds as instructions change", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-raw-no-signin`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByLabel("Agent instructions", { exact: true }).fill("Sign in with $otp.");
+  await expect(setup.locator(".edit-credentials li")).toHaveText(["Authenticator key · Not saved"]);
+  await setup.getByRole("button", { name: "Change sign-in details", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__credentialRequests)).toEqual([{ kinds: ["otp"], replace: true }]);
+  await setup.getByLabel("Agent instructions", { exact: true }).fill("Sign in with $username and $password.");
+  await expect(setup.locator(".edit-credentials li")).toHaveText(["Username · Not saved", "Password · Not saved", "Authenticator key · saved"]);
+});
 
 for (const scenario of ["edit-old-host", "edit-credentials-unsupported"]) {
   test(`keeps sign-in details compatible with ${scenario}`, async ({ page }) => {
@@ -1780,7 +1835,7 @@ test("shows credential host errors inline and keeps internal agents read-only", 
   await expect(setup.locator(".edit-changes").getByRole("status")).toHaveText("No unpublished changes");
   await expect(setup.getByRole("button", { name: "Change sign-in details", exact: true })).toBeEnabled();
   await page.goto(`${baseUrl}/host?scenario=edit-internal`);
-  await expect(setup.locator(".edit-credentials li")).toHaveText(["Username · saved", "Password · saved", "Authenticator key · Not saved"]);
+  await expect(setup.locator(".edit-credentials li")).toHaveText(["Username · saved", "Password · saved"]);
   await expect(setup.getByRole("button", { name: "Change sign-in details", exact: true })).toHaveCount(0);
   expect(await page.evaluate(() => window.__credentialRequests)).toEqual([]);
 });
@@ -1851,7 +1906,7 @@ function hostPage(url: string): string {
   ];
   const redemonstrationSteps = [{ id: "download-refreshed", type: "click", description: "Download the refreshed statement", target: "Download statement" }];
   const internal = scenario === "edit-internal";
-  let savedCredentials = scenario === "edit-credentials-empty" ? [] : ["username", "password"];
+  let savedCredentials = ["edit-credentials-empty", "edit-raw-no-signin"].includes(scenario) ? [] : ["username", "password"];
   if (scenario === "edit-credentials-placeholders") {
     savedCredentials = ["username"];
     editSteps[0].description += " with $password";

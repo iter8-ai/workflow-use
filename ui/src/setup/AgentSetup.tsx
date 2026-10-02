@@ -738,13 +738,13 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
   const resetTest = (): void => { setTestRun(null); setChecked(false); setNotice(null); setError(null); };
   const update = (next: Partial<SetupDraft>): void => { setDraft((current) => current === null ? current : { ...current, ...next }); resetTest(); };
   const updateStage = (index: number, next: Record<string, unknown>): void => { setStages((current) => current.map((stage, i) => i === index && isObject(stage) ? { ...stage, ...next } : stage)); resetTest(); };
+  const instructions = raw ? stages.filter(isObject).filter((stage) => stage.type === "agent").map((stage) => String(stage.prompt ?? "")).join("\n") : JSON.stringify(draft.steps);
+  const placeholders: string[] = instructions.match(/\$(username|password|otp)\b/g) ?? [];
+  const signInKinds = credentialKinds.filter((kind) => agent.credentials?.saved.includes(kind) || requiredCredentials(draft.steps).includes(kind) || placeholders.includes(`$${kind}`));
   const changeCredentials = async (): Promise<void> => {
-    const instructions = raw ? stages.filter(isObject).filter((stage) => stage.type === "agent").map((stage) => String(stage.prompt ?? "")).join("\n") : JSON.stringify(draft.steps);
-    const placeholders: string[] = instructions.match(/\$(username|password|otp)\b/g) ?? [];
-    const kinds = credentialKinds.filter((kind) => agent.credentials?.saved.includes(kind) || requiredCredentials(draft.steps).includes(kind) || placeholders.includes(`$${kind}`));
     setBusy(true); setOperation("credentials"); setCredentialError(null);
     try {
-      const result = await bridge.request("requestCredentials", { kinds: kinds.length ? kinds : [...credentialKinds], replace: true }, { timeoutMs: interactiveRequestTimeoutMs });
+      const result = await bridge.request("requestCredentials", { kinds: signInKinds.length ? signInKinds : ["username", "password"], replace: true }, { timeoutMs: interactiveRequestTimeoutMs });
       setAgent((current) => current === null ? current : { ...current, credentials: { saved: result.saved } });
       setCredentialsChanged(true); resetTest();
     } catch (e) { setCredentialError(errorMessage(e)); }
@@ -921,9 +921,9 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
       </div><aside className="edit-rail">
         <section className="edit-card edit-credentials" aria-labelledby="edit-credentials-title"><h2 id="edit-credentials-title">Sign-in details</h2>
           {credentialsAllowed && agent.credentials ? <>
-            <ul className="edit-credential-kinds">{credentialKinds.map((kind) => <li key={kind}>{kind === "username" ? "Username" : kind === "password" ? "Password" : "Authenticator key"} · {agent.credentials!.saved.includes(kind) ? "saved" : "Not saved"}</li>)}</ul>
+            {signInKinds.length ? <ul className="edit-credential-kinds">{signInKinds.map((kind) => <li key={kind}>{kind === "username" ? "Username" : kind === "password" ? "Password" : "Authenticator key"} · {agent.credentials!.saved.includes(kind) ? "saved" : "Not saved"}</li>)}</ul> : <p>No sign-in details saved.</p>}
             {credentialsChanged && <p role="status">Changed — test before publishing</p>}
-            {!agent.internal && <button className="button button-quiet" disabled={readOnly} aria-busy={operation === "credentials"} onClick={() => void changeCredentials()}>{operation === "credentials" ? "Changing sign-in details…" : "Change sign-in details"}</button>}
+            {!agent.internal && <button className="button button-quiet" disabled={readOnly} aria-busy={operation === "credentials"} onClick={() => void changeCredentials()}>{operation === "credentials" ? "Changing sign-in details…" : signInKinds.length ? "Change sign-in details" : "Add sign-in details"}</button>}
             {credentialError && <p className="edit-rename-error" role="alert">{credentialError}</p>}
           </> : <p>Sign-in details: managed in the agent settings</p>}
         </section>
