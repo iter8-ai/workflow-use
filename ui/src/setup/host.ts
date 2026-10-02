@@ -39,7 +39,7 @@ export type EditAgent = {
 type RequestMap = {
   ready: { params: Record<string, never>; result: { schedule: boolean; credentials?: boolean; emailRoutes?: boolean; chooseSchedule?: boolean; mode?: "create" | "edit" } };
   // The host collects and stores the values; only the saved kinds come back.
-  requestCredentials: { params: { kinds: CredentialKind[]; replace?: boolean }; result: { saved: CredentialKind[] } };
+  requestCredentials: { params: { kinds: CredentialKind[]; replace?: boolean }; result: { saved: CredentialKind[]; changed?: boolean } };
   startRecording: { params: { url: string }; result: Recording };
   getRecording: { params: { id: string }; result: Recording };
   stopRecording: { params: { id: string }; result: Recording };
