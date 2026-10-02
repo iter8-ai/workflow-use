@@ -1,5 +1,7 @@
 import type { CredentialKind, SetupDraft, SetupStep } from "./compiler";
 
+export type RecordedDownload = { id: string; name: string; state: "started" | "completed" | "failed" };
+
 export type Recording = {
   id: string;
   status: "recording" | "stopped" | "expired";
@@ -7,6 +9,10 @@ export type Recording = {
   steps: SetupStep[];
   expiresAt: string;
   blockedReason: string | null;
+  /** Files the demonstration browser downloaded. Older hosts omit it. */
+  downloads?: RecordedDownload[];
+  /** True while the finished steps are being grouped into stages and reworded. */
+  organizing?: boolean;
 };
 
 export type TestRun = {

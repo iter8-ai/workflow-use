@@ -4,6 +4,7 @@ import asyncio
 import os
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
+from uuid import uuid4
 
 from .capture import CAPTURE_SCRIPT, install_sign_in_capture, page_event
 from .security import is_public_http_url, resolves_to_public_host, safe_public_url
@@ -37,6 +38,8 @@ class PlaywrightRecordingSession:
         self.live_view_url = live_view_url
         self._release = release
         self._tasks: set[asyncio.Task[None]] = set()
+        # Waits on downloads still in progress; nothing to report once the browser is gone.
+        self._watchers: set[asyncio.Task[None]] = set()
         self._browser_closed = False
         self._runtime_stopped = False
         self._released = False
@@ -46,14 +49,21 @@ class PlaywrightRecordingSession:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
+    def watch(self, coroutine: Awaitable[None]) -> None:
+        task = asyncio.create_task(coroutine)
+        self._watchers.add(task)
+        task.add_done_callback(self._watchers.discard)
+
     async def close(self) -> None:
         if self._browser_closed and self._runtime_stopped and (self._release is None or self._released):
             return
         if not self._browser_closed:
             await self.browser.close()
             self._browser_closed = True
-        if self._tasks:
-            await asyncio.gather(*self._tasks, return_exceptions=True)
+        for watcher in list(self._watchers):
+            watcher.cancel()
+        if self._tasks or self._watchers:
+            await asyncio.gather(*self._tasks, *self._watchers, return_exceptions=True)
         if not self._runtime_stopped:
             await self.runtime.stop()
             self._runtime_stopped = True
@@ -84,8 +94,21 @@ async def _install_page_events(session: PlaywrightRecordingSession, page: Any, o
             event["target"] = "embedded frame"
         session.track(on_event(event))
 
+    def on_download(download: Any) -> None:
+        session.watch(_report_download(download, on_event))
+
     page.on("framenavigated", on_navigation)
+    # The live view shows no download bar, so the recorder reports each download to the person demonstrating.
+    page.on("download", on_download)
     await install_sign_in_capture(page.context, page, lambda event: session.track(on_event(event)))
+
+
+async def _report_download(download: Any, on_event: EventSink) -> None:
+    download_id = str(uuid4())
+    name = download.suggested_filename
+    await on_event({"type": "download", "downloadId": download_id, "state": "started", "value": name})
+    failure = await download.failure()
+    await on_event({"type": "download", "downloadId": download_id, "state": "failed" if failure else "completed"})
 
 
 class BrowserbaseProvider:

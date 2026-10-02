@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { compileAgent, doneWhenOptions, draftChanges, findUnambiguousEmailStep, replaceStepsFrom, requiredCredentials, type SetupDraft } from "./compiler";
+import { applyOrganizedSteps, compileAgent, doneWhenOptions, draftChanges, findUnambiguousEmailStep, groupSteps, replaceStepsFrom, requiredCredentials, type SetupDraft, type SetupStep } from "./compiler";
 
 const baseDraft = (): SetupDraft => ({
   name: "Download monthly statement",
@@ -418,4 +418,70 @@ test("does not treat described confirmation evidence as verbatim page text", () 
   const options = doneWhenOptions(baseDraft().steps, { confirmation }, { kind: "described", value: "The export was emailed to me" });
   assert.equal(options.some((option) => option.doneWhen?.kind === "text"), false);
   assert.ok(options.some((option) => option.doneWhen?.kind === "described" && option.doneWhen.value === confirmation));
+});
+
+test("stages become headings in the agent prompt while step numbers stay global", () => {
+  const draft = baseDraft();
+  draft.steps = [
+    { id: "a", type: "click", description: "Click Log in", target: "Log inUse single sign-on", stage: "Sign in" },
+    { id: "b", type: "click", description: "Click Reports in the menu", target: "Reports", stage: "Open reports" },
+    { id: "c", type: "click", description: "Click Download", target: "Download", stage: "Open reports" },
+  ];
+  const prompt = compileAgent(draft).stages[0]?.type === "agent" ? (compileAgent(draft).stages[0] as { prompt: string }).prompt : "";
+
+  assert.match(prompt, /Sign in:\n1\. Click Log in\.\nOpen reports:\n2\. Click Reports in the menu\.\n3\. Click Download\./);
+  assert.doesNotMatch(prompt, /single sign-on/);
+});
+
+test("a demonstrated download tells the agent to confirm it instead of downloading twice", () => {
+  const draft = baseDraft();
+  draft.steps = [
+    { id: "a", type: "click", description: "Click Export", target: "Export" },
+    { id: "d", type: "download", description: "Download the transactions CSV", value: "tx-2026-10-01.csv" },
+  ];
+  const prompt = (compileAgent(draft).stages[0] as { prompt: string }).prompt;
+
+  assert.match(prompt, /2\. Download the transactions CSV: the previous step starts a file download\. Confirm a download started and do not start it again\. In the demonstration the file was "tx-2026-10-01\.csv"; the name may differ\./);
+  assert.equal(doneWhenOptions(draft.steps, null, { kind: "file" }).find((option) => option.doneWhen?.kind === "file")?.recommended, true);
+});
+
+test("consecutive steps with the same stage form one group; a step without a stage joins the one before", () => {
+  const steps: SetupStep[] = [
+    { id: "1", type: "click", description: "a", stage: "Sign in" },
+    { id: "2", type: "click", description: "b" },
+    { id: "3", type: "click", description: "c", stage: "Download" },
+    { id: "4", type: "click", description: "d", stage: "Sign in" },
+  ];
+  assert.deepEqual(groupSteps(steps).map((group) => [group.stage, group.steps.map(({ index }) => index)]), [
+    ["Sign in", [0, 1]],
+    ["Download", [2]],
+    ["Sign in", [3]],
+  ]);
+});
+
+test("organized wording arrives without undoing a step the user already edited or removed", () => {
+  const recorded: SetupStep[] = [
+    { id: "1", type: "click", description: "Click Continue with GoogleorEmail" },
+    { id: "2", type: "click", description: "Click Reports" },
+    { id: "3", type: "click", description: "Click Download" },
+  ];
+  const organized: SetupStep[] = [
+    { id: "1", type: "click", description: "Click Email login", stage: "Sign in" },
+    { id: "2", type: "click", description: "Click Reports in the menu", stage: "Open reports" },
+    { id: "3", type: "click", description: "Click Download", stage: "Open reports" },
+  ];
+  const current: SetupStep[] = [{ ...recorded[0]!, description: "Click Sign in with email" }, recorded[2]!];
+
+  assert.deepEqual(applyOrganizedSteps(current, recorded, organized), [
+    { id: "1", type: "click", description: "Click Sign in with email", stage: "Sign in" },
+    { id: "3", type: "click", description: "Click Download", stage: "Open reports" },
+  ]);
+});
+
+test("stage names are checked like instructions", () => {
+  const draft = baseDraft();
+  draft.steps[0] = { ...draft.steps[0]!, stage: "password: hunter22" };
+  assert.throws(() => compileAgent(draft), /Remove sign-in details/);
+  draft.steps[0] = { ...draft.steps[0]!, stage: "x".repeat(61) };
+  assert.throws(() => compileAgent(draft), /Stage name/);
 });

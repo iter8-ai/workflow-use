@@ -1,13 +1,30 @@
 export type SetupStep = {
   id: string;
-  type: "navigation" | "click" | "input" | "credential" | "select_change" | "key_press" | "scroll" | "agent";
+  type: "navigation" | "click" | "input" | "credential" | "select_change" | "key_press" | "scroll" | "download" | "agent";
   description: string;
   target?: string | null;
   value?: string | null;
   url?: string | null;
   expectedOutcome?: string | null;
   inputName?: string;
+  /** Short purpose of the run of steps this one belongs to, e.g. "Sign in". Set after the demonstration. */
+  stage?: string | null;
 };
+
+export type StepGroup = { stage: string | null; steps: Array<{ step: SetupStep; index: number }> };
+
+/** Consecutive steps that share a stage, in order. Steps keep their overall index. */
+export function groupSteps(steps: SetupStep[]): StepGroup[] {
+  const groups: StepGroup[] = [];
+  steps.forEach((step, index) => {
+    // An empty name still starts its own stage, so clearing the name while renaming does not merge stages.
+    const stage = step.stage ?? null;
+    const last = groups.at(-1);
+    if (last !== undefined && (stage === null || stage === last.stage)) last.steps.push({ step, index });
+    else groups.push({ stage, steps: [{ step, index }] });
+  });
+  return groups;
+}
 
 export type SetupInput = {
   name: string;
@@ -101,6 +118,21 @@ export function replaceStepsFrom(steps: SetupStep[], index: number, replacement:
   return [...steps.slice(0, index), ...replacement];
 }
 
+/**
+ * Bring in the recorder's stages and clearer wording once they arrive, without undoing the user's edits:
+ * a step whose description the user already changed keeps it, and removed steps stay removed.
+ */
+export function applyOrganizedSteps(current: SetupStep[], recorded: SetupStep[], organized: SetupStep[]): SetupStep[] {
+  const before = new Map(recorded.map((step) => [step.id, step]));
+  const after = new Map(organized.map((step) => [step.id, step]));
+  return current.map((step) => {
+    const was = before.get(step.id);
+    const next = after.get(step.id);
+    if (was === undefined || next === undefined) return step;
+    return { ...step, stage: next.stage ?? step.stage, description: step.description === was.description ? next.description : step.description };
+  });
+}
+
 // A credential word followed by an assigned value, or directly by a token containing a
 // digit or symbol (e.g. "password correct-horse-9", "code 482913"). Sign-in wording
 // ("Enter the password and log in") and $placeholders stay allowed.
@@ -121,6 +153,7 @@ const secretFieldPattern = /pass.?(?:word|code|phrase)|\bpin\b|api.?key|\bauth\b
 const codeNearbyPattern = /\b(?:otp|passcode|(?:verification|security|access|auth(?:entication)?|one[- ]time|2fa|mfa|sms) code)s?\b[^.\n]{0,40}?\b\d{4,8}\b/iu;
 const rawReplayPattern = /\b(?:css|xpath|selector)\b|#[a-z][\w-]*(?:\s*[>+~]|\[)|\[[^\]]+\]|(?:^|\s)(?:x|y)\s*[:=]\s*\d+|^\s*\d+(?:px)?\s*,\s*\d+(?:px)?\s*$/i;
 const maximumNameLength = 150;
+const maximumStageLength = 60;
 const maximumUrlLength = 2_048;
 const maximumSteps = 200;
 
@@ -128,7 +161,11 @@ export function compileAgent(draft: SetupDraft): CompiledAgent {
   validateDraft(draft);
 
   const task = `Complete ${escapeLiteral(draft.name)}: ${escapeLiteral(draft.goal)}`;
-  const instructions = draft.steps.map(formatStep).join("\n");
+  // Stage titles are headings only; step numbers stay global because the agent reports the step it stopped at.
+  const instructions = groupSteps(draft.steps).flatMap((group) => [
+    ...(group.stage?.trim() ? [`${escapeLiteral(group.stage.trim())}:`] : []),
+    ...group.steps.map(({ step, index }) => formatStep(step, index)),
+  ]).join("\n");
   const prompt = [
     "Use the current, live browser screen to complete this task.",
     "Ground every action in what is visible. Do not replay CSS selectors, DOM locators, or recorded coordinates.",
@@ -184,7 +221,10 @@ function validateDraft(draft: SetupDraft): void {
   for (const step of draft.steps) {
     requireText(step.id, "Step id");
     requireText(step.description, `Description for step ${step.id}`);
-    rejectCredentialDisclosure(step.description, step.expectedOutcome, step.target, step.value);
+    rejectCredentialDisclosure(step.description, step.expectedOutcome, step.target, step.value, step.stage);
+    if ((step.stage?.length ?? 0) > maximumStageLength) {
+      throw new Error(`Stage name for step ${step.id} must be at most ${maximumStageLength} characters.`);
+    }
     if (stepIds.has(step.id)) {
       throw new Error(`Step id ${step.id} is duplicated.`);
     }
@@ -231,7 +271,8 @@ export function doneWhenOptions(
   if (confirmation) options.push({ label: `“${confirmation}” is shown (checked by the agent)`, strength: "medium", why: "The agent judges it in context, so small wording changes still pass.", doneWhen: { kind: "described", value: confirmation } });
   const last = steps.at(-1);
   if (last?.type === "click" && last.target) options.push({ label: `The agent clicks “${last.target}”`, strength: "weak", why: "This proves the click, but not the website result.", doneWhen: { kind: "clicked", value: last.target } });
-  options.push({ label: "A file is downloaded in the browser", strength: "strong", why: "Reiterate saves the downloaded file.", doneWhen: { kind: "file" } });
+  const downloadsInDemonstration = steps.some((step) => step.type === "download");
+  options.push({ label: "A file is downloaded in the browser", strength: "strong", why: downloadsInDemonstration ? "Your demonstration downloaded a file, and Reiterate saves it." : "Reiterate saves the downloaded file.", recommended: downloadsInDemonstration && !options.some((option) => option.recommended), doneWhen: { kind: "file" } });
   options.push({ label: "Describe what success looks like", strength: "medium", why: "Write it in your own words; the agent checks it on the screen at the end of each run.", action: "custom" });
   return options.filter((option, index) => options.findIndex((candidate) => candidate.label === option.label) === index);
 }
@@ -266,7 +307,7 @@ function validateStep(step: SetupStep): void {
   if (value !== undefined && isMaskedValue(value)) {
     throw new Error(`Step ${step.id} contains a hidden value. Remove it and demonstrate the step again.`);
   }
-  if (looksLikeRawReplay(target) || looksLikeRawReplay(step.description)) {
+  if (looksLikeRawReplay(target) || looksLikeRawReplay(step.description) || looksLikeRawReplay(step.stage)) {
     throw new Error(`Step ${step.id} must use a semantic target, not a selector or screen coordinates.`);
   }
 }
@@ -297,7 +338,15 @@ function formatInstruction(
     return `Navigate to ${escapeLiteral(step.url ?? step.target ?? step.description)} to ${intent}.`;
   }
   if (step.type === "click") {
+    // A description that already names the click ("Click Reports in the menu") is the clearest instruction.
+    if (/^click\b/i.test(step.description.trim())) return `${description}.`;
     return target === undefined ? `Complete this action: ${description}.` : `Click ${target} to ${intent}.`;
+  }
+  if (step.type === "download") {
+    // The click before this step starts the download. Repeating it would fetch a second copy.
+    // The demonstration's file name usually carries a date, so it identifies the kind of file, not the exact name.
+    const file = value === undefined ? "" : ` In the demonstration the file was ${quoted(step.value ?? "")}; the name may differ.`;
+    return `${description}: the previous step starts a file download. Confirm a download started and do not start it again.${file}`;
   }
   if (step.type === "credential") {
     // The engine replaces the placeholder with the stored value while typing.

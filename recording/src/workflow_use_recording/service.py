@@ -3,18 +3,24 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 from uuid import uuid4
 
-from .models import RecordingResponse, SetupStep
+from .models import RecordedDownload, RecordingResponse, SetupStep
+from .organize import StepOrganizer
 from .provider import BrowserProvider, BrowserSession
 from .security import safe_public_url
 
 MAX_STEPS = 200
 MAX_FIELD_LENGTH = 2000
+MAX_DOWNLOADS = 20
+# A double click, or a second click while the page is still reacting, repeats the same step.
+REPEATED_CLICK_SECONDS = 1.0
+ORGANIZE_TIMEOUT_SECONDS = 45
 CREDENTIAL_KINDS = frozenset({"username", "password", "otp"})
 # Backstop for the page script: typing into a field labelled like a secret never keeps the text.
 _SECRET_TARGETS = (
@@ -53,6 +59,9 @@ class Recording:
     steps: list[SetupStep] = field(default_factory=list)
     blocked_reason: str | None = None
     last_input_key: str | None = None
+    last_step_at: float = 0.0
+    downloads: list[RecordedDownload] = field(default_factory=list)
+    organizing: bool = False
     # Sign-in values typed during the demonstration, by kind. Never part of steps, responses or logs;
     # handed to the host once on stop, then forgotten.
     credentials: dict[str, str] = field(default_factory=dict, repr=False)
@@ -63,11 +72,20 @@ class Recording:
 
 
 class RecordingService:
-    def __init__(self, provider: BrowserProvider, *, timeout_seconds: int = 900, max_sessions: int = 100) -> None:
+    def __init__(
+        self,
+        provider: BrowserProvider,
+        *,
+        timeout_seconds: int = 900,
+        max_sessions: int = 100,
+        organizer: StepOrganizer | None = None,
+    ) -> None:
         self.provider = provider
         self.timeout_seconds = min(max(timeout_seconds, 1), 900)
         self.max_sessions = max(max_sessions, 1)
+        self.organizer = organizer
         self._recordings: OrderedDict[str, Recording] = OrderedDict()
+        self._organizing: dict[str, asyncio.Task[None]] = {}
         self._closed = False
 
     async def create(self, owner: RecordingOwner, start_url: str) -> Recording:
@@ -114,6 +132,7 @@ class RecordingService:
         if recording is None:
             return None
         await self._stop(recording, expired=False)
+        self._start_organizing(recording)
         return recording
 
     @staticmethod
@@ -127,6 +146,9 @@ class RecordingService:
         if recording is None:
             return False
         await self._stop(recording, expired=False)
+        task = self._organizing.pop(recording_id, None)
+        if task is not None:
+            task.cancel()
         recording.credentials = {}
         self._recordings.pop(recording_id, None)
         return True
@@ -154,10 +176,14 @@ class RecordingService:
                     else:
                         recording.credentials.pop(kind, None)
                 return
+            if event.get("type") == "download":
+                self._record_download(recording, event)
+                return
             step = _to_step(event)
             if step is None:
                 return
             input_key = _text(event.get("targetKey"), maximum=512) or step.target
+            now = time.monotonic()
             if step.type in {"input", "credential"} and recording.steps:
                 previous = recording.steps[-1]
                 if previous.type == step.type and recording.last_input_key == input_key:
@@ -165,11 +191,84 @@ class RecordingService:
                     return
             if step.type == "navigation" and recording.steps and recording.steps[-1].url == step.url:
                 return
+            if (
+                step.type == "click"
+                and recording.steps
+                and recording.steps[-1].type == "click"
+                and recording.steps[-1].target == step.target
+                and now - recording.last_step_at < REPEATED_CLICK_SECONDS
+            ):
+                recording.last_step_at = now
+                return
             if len(recording.steps) >= MAX_STEPS:
                 recording.blocked_reason = CAPTURE_LIMIT_REASON
                 return
             recording.steps.append(step)
+            recording.last_step_at = now
             recording.last_input_key = input_key if step.type in {"input", "credential"} else None
+
+    @staticmethod
+    def _record_download(recording: Recording, event: dict[str, Any]) -> None:
+        """A started download becomes a step (in order with the clicks around it); later states only update it."""
+        download_id = _text(event.get("downloadId"), maximum=64)
+        state = event.get("state")
+        if download_id is None or state not in {"started", "completed", "failed"}:
+            return
+        known = next((item for item in recording.downloads if item.id == download_id), None)
+        if known is not None:
+            if state != "started":
+                known.state = state
+            return
+        name = _text(event.get("value"), maximum=240) or "file"
+        if state != "started" or len(recording.downloads) >= MAX_DOWNLOADS:
+            return
+        recording.downloads.append(RecordedDownload(id=download_id, name=name, state="started"))
+        if len(recording.steps) >= MAX_STEPS:
+            recording.blocked_reason = CAPTURE_LIMIT_REASON
+            return
+        recording.steps.append(
+            SetupStep(id=download_id, type="download", description=f"Download {name}", value=name)
+        )
+        recording.last_step_at = time.monotonic()
+        recording.last_input_key = None
+
+    def _start_organizing(self, recording: Recording) -> None:
+        """Group the finished steps into stages and reword them, without holding up the stop response."""
+        if (
+            self.organizer is None
+            or recording.status != "stopped"
+            or recording.blocked_reason is not None
+            or not recording.steps
+            or recording.organizing
+            or recording.id in self._organizing
+            or any(step.stage for step in recording.steps)
+        ):
+            return
+        recording.organizing = True
+        task = asyncio.create_task(self._organize(recording, list(recording.steps)))
+        self._organizing[recording.id] = task
+        task.add_done_callback(lambda _: self._organizing.pop(recording.id, None))
+
+    async def _organize(self, recording: Recording, steps: list[SetupStep]) -> None:
+        assert self.organizer is not None
+        try:
+            try:
+                organized = await asyncio.wait_for(self.organizer.organize(steps), ORGANIZE_TIMEOUT_SECONDS)
+            except Exception as error:
+                # The steps stay as recorded; organizing only makes them easier to read.
+                logger.warning("recording_organize_failed", extra={"error_type": type(error).__name__})
+                return
+            if organized is None:
+                return
+            async with recording.lock:
+                if [step.id for step in recording.steps] != [step.id for step in steps]:
+                    return
+                recording.steps = [
+                    step.model_copy(update={"stage": item.stage, "description": item.description})
+                    for step, item in zip(steps, organized, strict=True)
+                ]
+        finally:
+            recording.organizing = False
 
     async def cleanup(self) -> None:
         now = datetime.now(UTC)
@@ -191,6 +290,8 @@ class RecordingService:
         if self._closed:
             return
         self._closed = True
+        for task in list(self._organizing.values()):
+            task.cancel()
         for recording in list(self._recordings.values()):
             try:
                 await self._stop(recording, expired=recording.status == "recording")
@@ -269,6 +370,8 @@ class RecordingService:
             steps=recording.steps,
             expires_at=recording.expires_at,
             blocked_reason=recording.blocked_reason,
+            downloads=recording.downloads,
+            organizing=recording.organizing,
         )
 
 

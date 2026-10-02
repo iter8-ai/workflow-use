@@ -354,3 +354,42 @@ async def test_sign_in_capture_covers_a_document_that_is_already_open() -> None:
         await browser.close()
 
     assert [event["secret"] for event in sign_ins] == ["popup-password"]
+
+
+@pytest.mark.asyncio
+async def test_clicks_in_a_sign_in_dialog_name_the_control_not_the_whole_dialog() -> None:
+    playwright = pytest.importorskip("playwright.async_api")
+    events: list[dict[str, Any]] = []
+
+    async def record(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    # Shaped like a hosted sign-in page: everything sits inside one role="main" panel.
+    fixture = (
+        '<div role="main" style="padding:40px"><h1>Welcome</h1>'
+        '<button type="button">Continue with Google</button><p id="or">or</p>'
+        '<form onsubmit="return false"><label for="email">Email</label><input id="email" name="email" type="email">'
+        '<label for="pw">Password</label><input id="pw" type="password"><button type="submit">Log in</button></form>'
+        '<span role="link" tabindex="0">Use single sign-on</span>'
+        '<a href="#reset">Reset password</a>'
+        '<div class="card" style="cursor:pointer"><b>Invoices</b><small>Monthly statements</small></div></div>'
+    )
+    async with playwright.async_playwright() as runtime:
+        browser = await runtime.chromium.launch()
+        context = await browser.new_context()
+        await context.expose_binding("workflowUseRecord", lambda _, event: record(event))
+        await context.add_init_script(CAPTURE_SCRIPT)
+        page = await context.new_page()
+        await page.goto("data:text/html," + quote(fixture))
+        await page.locator('[role="main"]').click(position={"x": 5, "y": 5})
+        await page.locator("#or").click()
+        await page.get_by_text("Email", exact=True).click()
+        await page.get_by_text("Password", exact=True).click()
+        await page.get_by_role("button", name="Continue with Google").click()
+        await page.get_by_text("Use single sign-on").click()
+        await page.get_by_text("Monthly statements").click()
+        await asyncio.sleep(0.05)
+        await browser.close()
+
+    clicks = [event["target"] for event in events if event["type"] == "click"]
+    assert clicks == ["Continue with Google", "Use single sign-on", "Monthly statements"]

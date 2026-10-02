@@ -62,11 +62,35 @@ CAPTURE_SCRIPT = r"""
     if (passwordInForm || /user.?name|login/.test(hint)) return "username";
     return null;
   };
+  // Controls a person clicks on purpose. Landmark and container roles (dialog, form, main, ...) are not here:
+  // naming a click after one of them glues the whole panel's text into one unreadable label.
+  const CLICKABLE = "button,a,input,select,textarea,summary,label,[role=button],[role=link],[role=tab]," +
+    "[role=menuitem],[role=menuitemcheckbox],[role=menuitemradio],[role=option],[role=checkbox],[role=radio]," +
+    "[role=switch],[role=treeitem],[role=combobox],[onclick]";
+  // innerText keeps the visual line breaks that textContent drops ("Continue with Google" + "or" stays apart).
+  const visibleLines = (node) => String(node instanceof HTMLElement ? node.innerText : node.textContent || "")
+    .split(/\n+/).map((line) => semanticText(line)).filter(Boolean);
+  const visibleName = (node) => {
+    const lines = visibleLines(node);
+    const joined = lines.join(" ");
+    return joined.length <= 80 ? joined : semanticText(lines[0] || "", 80);
+  };
+  // Single-page apps attach click handlers in JavaScript, so a clickable card or table cell often has no
+  // role; its pointer cursor is the visible sign. The cursor is inherited, so this is usually the clicked node.
+  const pointerTarget = (node) => {
+    let current = node;
+    for (let depth = 0; current instanceof Element && depth < 6; depth += 1) {
+      if (getComputedStyle(current).cursor === "pointer") return current;
+      current = current.parentElement;
+    }
+    return null;
+  };
   const target = (node) => {
     if (!(node instanceof Element)) return "";
     const valueBearing = node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement ||
       node instanceof HTMLSelectElement || (node instanceof HTMLElement && node.isContentEditable);
-    const fallback = valueBearing ? node.tagName.toLowerCase() : node.textContent || node.tagName.toLowerCase();
+    const fallback = valueBearing ? node.tagName.toLowerCase()
+      : visibleName(node) || node.querySelector("img[alt]")?.getAttribute("alt") || node.tagName.toLowerCase();
     return semanticText(
       labelText(node) || node.getAttribute("title") ||
       node.getAttribute("name") || fallback
@@ -84,8 +108,13 @@ CAPTURE_SCRIPT = r"""
     void window.workflowUseRecord(event).catch(() => undefined);
   };
   document.addEventListener("click", (event) => {
-    const node = event.target instanceof Element
-      ? event.target.closest("button,a,input,select,textarea,[role]") || event.target : null;
+    const clicked = event.target instanceof Element ? event.target : null;
+    const control = clicked?.closest(CLICKABLE) || null;
+    // A label stands for its field: clicking "Email" focuses the email box.
+    const field = control instanceof HTMLLabelElement && control.control ? control.control : control;
+    // Without a control, only something styled as clickable counts. Plain text and empty panel space do nothing.
+    const node = field || pointerTarget(clicked);
+    if (!node) return;
     // Focusing a sign-in field is implied by its credential step.
     if (credentialKind(node)) return;
     emit({ type: "click", target: target(node) });
@@ -219,10 +248,10 @@ SIGN_IN_SCRIPT = r"""
 
 
 def page_event(event: object) -> object:
-    """Events from page JavaScript never carry sign-in values; those come only from the isolated world."""
+    """Events from page JavaScript never carry sign-in values or downloads; those come only from the browser."""
     if isinstance(event, dict):
         event = {key: value for key, value in event.items() if key != "secret"}
-        if event.get("type") == "sign_in_value":
+        if event.get("type") in {"sign_in_value", "download"}:
             return {}
     return event
 

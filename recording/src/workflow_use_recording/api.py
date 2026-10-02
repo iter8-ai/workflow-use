@@ -11,6 +11,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
 from fastapi.responses import JSONResponse
 
 from .models import CreateRecordingRequest, RecordingResponse, StoppedRecordingResponse
+from .organize import OpenAIStepOrganizer, StepOrganizer
 from .provider import BrowserbaseProvider, BrowserProvider
 from .service import InvalidRecordingUrl, RecordingOwner, RecordingService
 
@@ -30,9 +31,11 @@ class RecordingConfig:
             raise ValueError("timeout_seconds must be between 1 and 900.")
 
 
-def create_app(provider: BrowserProvider, config: RecordingConfig) -> FastAPI:
+def create_app(
+    provider: BrowserProvider, config: RecordingConfig, organizer: StepOrganizer | None = None
+) -> FastAPI:
     service = RecordingService(
-        provider, timeout_seconds=config.timeout_seconds, max_sessions=config.max_sessions
+        provider, timeout_seconds=config.timeout_seconds, max_sessions=config.max_sessions, organizer=organizer
     )
     cleanup_task: asyncio.Task[None] | None = None
 
@@ -152,6 +155,8 @@ def create_default_app() -> FastAPI:
     return create_app(
         BrowserbaseProvider(region=os.environ.get("BROWSERBASE_REGION", "eu-central-1")),
         RecordingConfig(service_key=key),
+        # Without a key the steps stay as recorded: one per action, with no stages.
+        OpenAIStepOrganizer() if os.environ.get("OPENAI_API_KEY") else None,
     )
 
 
