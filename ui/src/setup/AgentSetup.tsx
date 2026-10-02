@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { compileAgent, doneWhenOptions, draftChanges, findUnambiguousEmailStep, replaceStepsFrom, requiredCredentials, type CredentialKind, type DoneWhen, type SetupDraft, type SetupStep } from "./compiler";
+import { compileAgent, credentialKinds, doneWhenOptions, draftChanges, findUnambiguousEmailStep, replaceStepsFrom, requiredCredentials, type CredentialKind, type DoneWhen, type SetupDraft, type SetupStep } from "./compiler";
 import { browserbaseLiveViewUrl, createHostBridge, HostRequestTimeoutError, type EditAgent as EditAgentData, type HostBridge, type Recording, type TestRun } from "./host";
 import { AgentScreenBar } from "./AgentScreenBar";
 import { parseAgentThought } from "./agentThought";
@@ -581,7 +581,7 @@ export default function AgentSetup() {
     return <main className="setup-unavailable"><h1>Open agent setup from Reiterate</h1><p>This page needs the Reiterate host to securely create and test an agent.</p></main>;
   }
 
-  if (mode === "edit") return <EditScreen bridge={bridge} />;
+  if (mode === "edit") return <EditScreen bridge={bridge} credentialsAllowed={credentialsAllowed} />;
 
   return (
     <main className={`agent-setup${screen === "demonstrate" ? " agent-setup-demonstrating" : screen === "test" ? " agent-setup-testing" : ""}`}>
@@ -612,7 +612,7 @@ export default function AgentSetup() {
   );
 }
 
-function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
+function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; credentialsAllowed: boolean }): JSX.Element {
   const [agent, setAgent] = useState<EditAgentData | null>(null);
   const [draft, setDraft] = useState<SetupDraft | null>(null);
   const [stages, setStages] = useState<unknown[]>([]);
@@ -628,7 +628,9 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
   const [publishOpen, setPublishOpen] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const [operation, setOperation] = useState<"test" | "publish" | null>(null);
+  const [operation, setOperation] = useState<"test" | "publish" | "credentials" | null>(null);
+  const [credentialsChanged, setCredentialsChanged] = useState(false);
+  const [credentialError, setCredentialError] = useState<string | null>(null);
   const [renameSaved, setRenameSaved] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [renameError, setRenameError] = useState<string | null>(null);
@@ -652,6 +654,7 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
       setDraft({ name: loaded.name, url: loaded.url, goal: loaded.goal, steps: loaded.steps ?? [], inputs: [] });
       setStages(loaded.stages);
       setStageLimitInputs({}); setStageLimitErrors({});
+      setCredentialsChanged(false); setCredentialError(null);
       setTestRun(null); setChecked(false); setConflict(null); setPublishOpen(false);
     } catch (requestError) { setError(errorMessage(requestError)); }
     finally { setBusy(false); }
@@ -721,8 +724,9 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
   const live: SetupDraft = { name: agent.name, url: agent.url, goal: agent.goal, steps: agent.steps ?? [], inputs: [] };
   const raw = agent.steps === null || agent.steps.length === 0;
   const changes = [...draftChanges(draft, live), ...(raw ? rawStageChanges(stages, agent.stages) : [])];
-  const changed = changes.length > 0;
-  const changeCount = `${changes.length} unpublished ${changes.length === 1 ? "change" : "changes"}`;
+  const totalChanges = changes.length + Number(credentialsChanged);
+  const changed = totalChanges > 0;
+  const changeCount = `${totalChanges} unpublished ${totalChanges === 1 ? "change" : "changes"}`;
   const lastScreen = testRun?.screens?.at(-1);
   const nextRunTime = agent.nextRunAt ? formatNextRun(agent.nextRunAt) : null;
   const succeeded = testRun?.status === "succeeded";
@@ -734,6 +738,18 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
   const resetTest = (): void => { setTestRun(null); setChecked(false); setNotice(null); setError(null); };
   const update = (next: Partial<SetupDraft>): void => { setDraft((current) => current === null ? current : { ...current, ...next }); resetTest(); };
   const updateStage = (index: number, next: Record<string, unknown>): void => { setStages((current) => current.map((stage, i) => i === index && isObject(stage) ? { ...stage, ...next } : stage)); resetTest(); };
+  const instructions = raw ? stages.filter(isObject).filter((stage) => stage.type === "agent").map((stage) => String(stage.prompt ?? "")).join("\n") : JSON.stringify(draft.steps);
+  const placeholders: string[] = instructions.match(/\$(username|password|otp)\b/g) ?? [];
+  const signInKinds = credentialKinds.filter((kind) => agent.credentials?.saved.includes(kind) || requiredCredentials(draft.steps).includes(kind) || placeholders.includes(`$${kind}`));
+  const changeCredentials = async (): Promise<void> => {
+    setBusy(true); setOperation("credentials"); setCredentialError(null);
+    try {
+      const result = await bridge.request("requestCredentials", { kinds: signInKinds.length ? signInKinds : ["username", "password"], replace: true }, { timeoutMs: interactiveRequestTimeoutMs });
+      setAgent((current) => current === null ? current : { ...current, credentials: { saved: result.saved } });
+      setCredentialsChanged(true); resetTest();
+    } catch (e) { setCredentialError(errorMessage(e)); }
+    finally { setBusy(false); setOperation(null); }
+  };
   const rename = async (value: string): Promise<void> => {
     const name = value.trim();
     setDraft((current) => current === null ? current : { ...current, name });
@@ -873,26 +889,12 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
       {error && <div className="edit-result edit-result-failed" role="alert">{error}</div>}
       {notice && <p className="edit-result edit-result-succeeded" role="status">{notice}</p>}
       <div className="edit-grid"><div className="edit-main">
-        <section className="edit-card"><h2>Details</h2>
-          <label>Website address<input ref={(field) => { fieldRefs.current.url = field; }} aria-label="Website address" value={draft.url} disabled={readOnly} onChange={(e) => update({ url: e.target.value })} /></label>
-          <label>Goal{raw && <span id="edit-goal-help" className="field-note">Describes the agent. Change its actions in Advanced instructions.</span>}<textarea ref={(field) => { fieldRefs.current.goal = field; }} aria-label="Goal" aria-describedby={raw ? "edit-goal-help" : undefined} value={draft.goal} disabled={readOnly} onChange={(e) => update({ goal: e.target.value })} /></label>
-        </section>
-        {raw ? <section className="edit-card"><h2>Advanced instructions</h2>
+        {raw ? <section className="edit-card edit-instructions"><h2>Instructions</h2>
           {stages.map((stage, index) => { const item = isObject(stage) ? stage : null; return item?.type === "agent" ? <div className="raw-stage" key={index}>
             <label>Agent instructions<textarea ref={(field) => { fieldRefs.current[`stage:${index}:prompt`] = field; }} aria-label="Agent instructions" value={String(item.prompt ?? "")} disabled={readOnly} onChange={(e) => updateStage(index, { prompt: e.target.value })} /></label>
-            <label>Maximum actions<input ref={(field) => { fieldRefs.current[`stage:${index}:step_limit`] = field; }} aria-label="Maximum actions" type="text" inputMode="numeric" value={stageLimitInputs[index] ?? String(item.step_limit ?? 1)} disabled={readOnly} aria-invalid={stageLimitErrors[index] ?? false} aria-describedby={`stage-limit-help-${index}${stageLimitErrors[index] ? ` stage-limit-error-${index}` : ""}`}
-              onChange={(e) => {
-                const value = e.target.value;
-                setStageLimitInputs((current) => ({ ...current, [index]: value }));
-                setStageLimitErrors((current) => ({ ...current, [index]: false }));
-                if (validStepLimit(value)) updateStage(index, { step_limit: Number(value) });
-                else resetTest();
-              }}
-              onBlur={(e) => setStageLimitErrors((current) => ({ ...current, [index]: !validStepLimit(e.target.value) }))} />
-              {stageLimitErrors[index] && <span id={`stage-limit-error-${index}`} className="edit-rename-error" role="alert">Enter a whole number from 1 to 128.</span>}
-              <span id={`stage-limit-help-${index}`} className="field-note">The agent stops after this many browser actions.</span></label>
-          </div> : <div className="raw-preserved" key={index}><span>{preservedStageLabel(item)}</span><span className="raw-unchanged">Kept as is</span></div>; })}
-        </section> : <section className="edit-card"><h2>Steps</h2>
+          </div> : null; })}
+          {stages.some((stage) => !isObject(stage) || stage.type !== "agent") && <p className="raw-preserved">Then: {stages.filter((stage) => !isObject(stage) || stage.type !== "agent").map((stage) => preservedStageLabel(isObject(stage) ? stage : null)).join(" · ")} — kept as is</p>}
+        </section> : <section className="edit-card edit-instructions"><h2>Steps</h2>
           <div className="edit-steps">{draft.steps.map((step, index) => <div className="edit-step" key={step.id}>
             <b>{index + 1}</b>
             <div>
@@ -916,12 +918,16 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
           {recording?.status === "expired" && <p className="edit-result edit-result-failed" role="alert">Demonstration expired. Re-demonstrate again.</p>}
           {recordingActive && <div className="browser-frame edit-recording">{browserbaseLiveViewUrl(recording.liveViewUrl) ? <iframe title="Virtual browser" src={browserbaseLiveViewUrl(recording.liveViewUrl)!} allow="clipboard-read; clipboard-write" /> : <p>Opening the virtual browser.</p>}</div>}
         </section>}
-        <aside className="edit-rail"><section className="edit-card"><h2 ref={changesHeadingRef} tabIndex={-1}>Changes</h2>
-          {changed && <p>{changeCount}</p>}
-          <span className="visually-hidden" role="status">{changed ? changeCount : "No unpublished changes"}</span>
-          {changes.length === 0 ? <p>No changes yet.</p> : changes.map((change) => <div className="change-item" key={change.key}><b>{change.label}</b><span>{change.from || "Empty"} → {change.to || "Empty"}</span><button className="text-button" aria-label={`Revert ${change.label}`} disabled={readOnly} onClick={() => revert(change.key)}>Revert</button></div>)}
-        </section></aside>
-        <section className="edit-card"><h2>Test &amp; publish</h2><p>Scheduled runs continue using the live version until you publish.</p>
+      </div><aside className="edit-rail">
+        <section className="edit-card edit-credentials" aria-labelledby="edit-credentials-title"><h2 id="edit-credentials-title">Sign-in details</h2>
+          {credentialsAllowed && agent.credentials ? <>
+            {signInKinds.length ? <ul className="edit-credential-kinds">{signInKinds.map((kind) => <li key={kind}>{kind === "username" ? "Username" : kind === "password" ? "Password" : "Authenticator key"} · {agent.credentials!.saved.includes(kind) ? "saved" : "Not saved"}</li>)}</ul> : <p>No sign-in details saved.</p>}
+            {credentialsChanged && <p role="status">Changed — test before publishing</p>}
+            {!agent.internal && <button className="button button-quiet" disabled={readOnly} aria-busy={operation === "credentials"} onClick={() => void changeCredentials()}>{operation === "credentials" ? "Changing sign-in details…" : signInKinds.length ? "Change sign-in details" : "Add sign-in details"}</button>}
+            {credentialError && <p className="edit-rename-error" role="alert">{credentialError}</p>}
+          </> : <p>Sign-in details: managed in the agent settings</p>}
+        </section>
+        <section className="edit-card edit-publish"><h2>Test &amp; publish</h2><p>Scheduled runs continue using the live version until you publish.</p>
           {testRun?.status === "running" && <div className="edit-status" role="status"><span className="edit-spinner" aria-hidden="true" />Test is running.{testRun.liveViewUrl && <a href={testRun.liveViewUrl} target="_blank" rel="noreferrer" aria-label="Watch the test (opens in a new tab)">Watch the test</a>}</div>}
           {testRun && testRun.status !== "running" && <div className={`edit-result edit-result-${succeeded ? "succeeded" : "failed"}`} role={succeeded ? "status" : "alert"}>
             <b>{succeeded ? "Test completed" : "Test failed"}</b>
@@ -942,7 +948,30 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
           </div>
           <p id="edit-publish-help">{publishHelp}</p>
         </section>
-      </div></div>
+        <section className="edit-card edit-changes"><h2 ref={changesHeadingRef} tabIndex={-1}>Changes</h2>
+          {changed && <p>{changeCount}</p>}
+          <span className="visually-hidden" role="status">{changed ? changeCount : "No unpublished changes"}</span>
+          {!changed ? <p>No changes yet.</p> : changes.map((change) => <div className="change-item" key={change.key}><b>{change.label}</b><span>{change.from || "Empty"} → {change.to || "Empty"}</span><button className="text-button" aria-label={`Revert ${change.label}`} disabled={readOnly} onClick={() => revert(change.key)}>Revert</button></div>)}
+          {credentialsChanged && <div className="change-item"><b>Sign-in details: updated</b><span>Leave without publishing to undo</span></div>}
+        </section>
+        <section className="edit-card edit-details"><h2>Details</h2>
+          <label>Website address<input ref={(field) => { fieldRefs.current.url = field; }} aria-label="Website address" value={draft.url} disabled={readOnly} onChange={(e) => update({ url: e.target.value })} /></label>
+          <label>Goal{raw && <span id="edit-goal-help" className="field-note">Describes the agent. Change its actions in Instructions.</span>}<textarea ref={(field) => { fieldRefs.current.goal = field; }} rows={3} aria-label="Goal" aria-describedby={raw ? "edit-goal-help" : undefined} value={draft.goal} disabled={readOnly} onChange={(e) => update({ goal: e.target.value })} /></label>
+          {raw && stages.map((stage, index) => { const item = isObject(stage) ? stage : null; return item?.type === "agent" ? <div className="raw-limit" key={index}>
+            <label>Maximum actions<input ref={(field) => { fieldRefs.current[`stage:${index}:step_limit`] = field; }} aria-label="Maximum actions" type="text" inputMode="numeric" value={stageLimitInputs[index] ?? String(item.step_limit ?? 1)} disabled={readOnly} aria-invalid={stageLimitErrors[index] ?? false} aria-describedby={`stage-limit-help-${index}${stageLimitErrors[index] ? ` stage-limit-error-${index}` : ""}`}
+              onChange={(e) => {
+                const value = e.target.value;
+                setStageLimitInputs((current) => ({ ...current, [index]: value }));
+                setStageLimitErrors((current) => ({ ...current, [index]: false }));
+                if (validStepLimit(value)) updateStage(index, { step_limit: Number(value) });
+                else resetTest();
+              }}
+              onBlur={(e) => setStageLimitErrors((current) => ({ ...current, [index]: !validStepLimit(e.target.value) }))} />
+              {stageLimitErrors[index] && <span id={`stage-limit-error-${index}`} className="edit-rename-error" role="alert">Enter a whole number from 1 to 128.</span>}
+              <span id={`stage-limit-help-${index}`} className="field-note">The agent stops after this many browser actions.</span></label>
+          </div> : null; })}
+        </section>
+      </aside></div>
     </section>
     {screenOpen && lastScreen && <div className="edit-modal" role="dialog" aria-modal="true" aria-labelledby="edit-screen-title"><div className="edit-modal-card edit-screen-dialog" ref={modalRef} tabIndex={-1}>
       <h2 id="edit-screen-title">Final screen</h2><button className="button button-quiet" onClick={() => setScreenOpen(false)}>Close screenshot</button><img src={lastScreen.image} alt={lastScreen.thought || "Final screen"} />
@@ -952,7 +981,7 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
       <div className="edit-actions"><button className="button button-quiet" onClick={() => setConfirmClose(false)} disabled={busy}>Keep editing</button><button className="button button-danger" onClick={() => void close()} disabled={busy}>Discard changes</button></div>
     </div></div>}
     {publishOpen && <div className="edit-modal" role="dialog" aria-modal="true" aria-labelledby="publish-edit-title" aria-describedby="publish-edit-description"><div className="edit-modal-card" ref={modalRef} tabIndex={-1}>
-      <h2 id="publish-edit-title">Publish changes?</h2><p id="publish-edit-description">Publish {changes.length} {changes.length === 1 ? "change" : "changes"} to this agent.</p>
+      <h2 id="publish-edit-title">Publish changes?</h2><p id="publish-edit-description">Publish {totalChanges} {totalChanges === 1 ? "change" : "changes"} to this agent.</p>
       {agent.schedule && <p className="edit-notice">Scheduled runs will use v{agent.version + 1} {nextRunTime ? `at ${nextRunTime}` : "at the next run time"}.</p>}
       <div className="edit-actions"><button className="button button-quiet" disabled={busy} onClick={() => setPublishOpen(false)}>Cancel</button><button className="button button-primary" disabled={busy} aria-busy={operation === "publish"} onClick={() => void publish(false)}>{operation === "publish" ? "Publishing…" : "Publish"}</button></div>
     </div></div>}

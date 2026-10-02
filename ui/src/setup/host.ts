@@ -33,6 +33,7 @@ export type EditAgent = {
   internal: boolean;
   schedule: string | null;
   nextRunAt: string | null;
+  credentials?: { saved: CredentialKind[] };
 };
 
 type RequestMap = {
