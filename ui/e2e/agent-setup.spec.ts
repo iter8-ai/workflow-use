@@ -86,7 +86,23 @@ test("shows the demonstration's download and groups the finished steps into stag
   expect(saved.draft.steps.map((step: { stage?: string }) => step.stage)).toEqual(["Log in", "Log in", "Download the statement", "Download the statement", "Download the statement"]);
   expect(saved.config.stages[0].prompt).toContain("Log in:\n1. Navigate to");
   expect(saved.config.stages[0].prompt).toContain("Download the statement:\n3. Click Reports.");
-  expect(saved.config.stages[0].prompt).toContain("Confirm a download started and do not start it again.");
+  expect(saved.config.stages[0].prompt).toContain("Do not start the download again.");
+  expect(saved.config.stages[0].prompt).toContain('2. Click Email login. Its recorded label was "Continue with GoogleorEmailPasswordLog in".');
+});
+
+test("edits stage names and keeps a moved step in the stage it moves into", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-staged`);
+  const setup = page.frameLocator("iframe");
+  await expect(setup.getByLabel("Stage name for step 1")).toHaveValue("Open reports");
+  await setup.getByLabel("Stage name for step 2").fill("Download the statement");
+  await setup.getByRole("button", { name: "Move step 2 up" }).click();
+  await expect(setup.getByLabel("Stage name for step 1")).toHaveValue("Open reports");
+  await expect(setup.getByLabel("Stage name for step 2")).toHaveCount(0);
+  await setup.getByRole("button", { name: "Test changes" }).click();
+  await expect.poll(() => page.evaluate(() => window.__savedAgents.length)).toBe(1);
+  const saved = await page.evaluate(() => window.__savedAgents[0]);
+  expect(saved.draft.steps.map((step: { id: string; stage?: string }) => [step.id, step.stage])).toEqual([["download", "Open reports"], ["open-reports", "Open reports"]]);
+  expect(saved.config.stages[0].prompt).toContain("Open reports:\n1. ");
 });
 
 test("nginx response policies allow finished-run PNG evidence", async ({ page }) => {
@@ -1637,9 +1653,10 @@ function hostPage(url: string): string {
   let publishedDraft = null;
   window.__loadAvailable = scenario !== "edit-load-error";
   const edit = scenario.startsWith("edit");
+  const staged = scenario === "edit-staged";
   const editSteps = [
-    { id: "open-reports", type: "click", description: "Open the reports section", target: "Reports", expectedOutcome: "The reports list is visible" },
-    { id: "download", type: "click", description: "Download the statement", target: "Download statement" },
+    { id: "open-reports", type: "click", description: "Open the reports section", target: "Reports", expectedOutcome: "The reports list is visible", ...(staged ? { stage: "Open reports" } : {}) },
+    { id: "download", type: "click", description: "Download the statement", target: "Download statement", ...(staged ? { stage: "Download" } : {}) },
   ];
   const redemonstrationSteps = [{ id: "download-refreshed", type: "click", description: "Download the refreshed statement", target: "Download statement" }];
   const internal = scenario === "edit-internal";

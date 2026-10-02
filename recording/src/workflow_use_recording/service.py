@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -18,8 +17,6 @@ from .security import safe_public_url
 MAX_STEPS = 200
 MAX_FIELD_LENGTH = 2000
 MAX_DOWNLOADS = 20
-# A double click, or a second click while the page is still reacting, repeats the same step.
-REPEATED_CLICK_SECONDS = 1.0
 ORGANIZE_TIMEOUT_SECONDS = 45
 CREDENTIAL_KINDS = frozenset({"username", "password", "otp"})
 # Backstop for the page script: typing into a field labelled like a secret never keeps the text.
@@ -59,7 +56,6 @@ class Recording:
     steps: list[SetupStep] = field(default_factory=list)
     blocked_reason: str | None = None
     last_input_key: str | None = None
-    last_step_at: float = 0.0
     downloads: list[RecordedDownload] = field(default_factory=list)
     organizing: bool = False
     # Sign-in values typed during the demonstration, by kind. Never part of steps, responses or logs;
@@ -183,7 +179,6 @@ class RecordingService:
             if step is None:
                 return
             input_key = _text(event.get("targetKey"), maximum=512) or step.target
-            now = time.monotonic()
             if step.type in {"input", "credential"} and recording.steps:
                 previous = recording.steps[-1]
                 if previous.type == step.type and recording.last_input_key == input_key:
@@ -191,25 +186,26 @@ class RecordingService:
                     return
             if step.type == "navigation" and recording.steps and recording.steps[-1].url == step.url:
                 return
-            if (
-                step.type == "click"
-                and recording.steps
-                and recording.steps[-1].type == "click"
-                and recording.steps[-1].target == step.target
-                and now - recording.last_step_at < REPEATED_CLICK_SECONDS
-            ):
-                recording.last_step_at = now
-                return
+            # Clicks in quick succession on one control are one step with a count, e.g. paging a calendar back
+            # three months. The count is kept, so the agent repeats it; a stray double click shows up in review.
+            if step.type == "click" and event.get("repeat") is True and recording.steps:
+                previous = recording.steps[-1]
+                if previous.type == "click" and previous.target == step.target:
+                    count = int(previous.value or "1") + 1 if (previous.value or "1").isdigit() else 2
+                    recording.steps[-1] = previous.model_copy(
+                        update={"value": str(count), "description": f"Click {step.target or 'element'} ({count} times)"}
+                    )
+                    return
             if len(recording.steps) >= MAX_STEPS:
                 recording.blocked_reason = CAPTURE_LIMIT_REASON
                 return
             recording.steps.append(step)
-            recording.last_step_at = now
             recording.last_input_key = input_key if step.type in {"input", "credential"} else None
 
     @staticmethod
     def _record_download(recording: Recording, event: dict[str, Any]) -> None:
-        """A started download becomes a step (in order with the clicks around it); later states only update it."""
+        """A started download becomes a step, in order with the clicks around it. A failed one is removed again:
+        the person retries it, and the agent should not be told about a download that never arrived."""
         download_id = _text(event.get("downloadId"), maximum=64)
         state = event.get("state")
         if download_id is None or state not in {"started", "completed", "failed"}:
@@ -218,6 +214,8 @@ class RecordingService:
         if known is not None:
             if state != "started":
                 known.state = state
+            if state == "failed":
+                recording.steps = [step for step in recording.steps if step.id != download_id]
             return
         name = _text(event.get("value"), maximum=240) or "file"
         if state != "started" or len(recording.downloads) >= MAX_DOWNLOADS:
@@ -229,7 +227,6 @@ class RecordingService:
         recording.steps.append(
             SetupStep(id=download_id, type="download", description=f"Download {name}", value=name)
         )
-        recording.last_step_at = time.monotonic()
         recording.last_input_key = None
 
     def _start_organizing(self, recording: Recording) -> None:

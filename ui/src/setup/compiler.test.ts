@@ -429,11 +429,10 @@ test("stages become headings in the agent prompt while step numbers stay global"
   ];
   const prompt = compileAgent(draft).stages[0]?.type === "agent" ? (compileAgent(draft).stages[0] as { prompt: string }).prompt : "";
 
-  assert.match(prompt, /Sign in:\n1\. Click Log in\.\nOpen reports:\n2\. Click Reports in the menu\.\n3\. Click Download\./);
-  assert.doesNotMatch(prompt, /single sign-on/);
+  assert.match(prompt, /Sign in:\n1\. Click Log in\. Its recorded label was "Log inUse single sign-on"\.\nOpen reports:\n2\. Click Reports in the menu\.\n3\. Click Download\./);
 });
 
-test("a demonstrated download tells the agent to confirm it instead of downloading twice", () => {
+test("a demonstrated download tells the agent not to download twice", () => {
   const draft = baseDraft();
   draft.steps = [
     { id: "a", type: "click", description: "Click Export", target: "Export" },
@@ -441,7 +440,7 @@ test("a demonstrated download tells the agent to confirm it instead of downloadi
   ];
   const prompt = (compileAgent(draft).stages[0] as { prompt: string }).prompt;
 
-  assert.match(prompt, /2\. Download the transactions CSV: the previous step starts a file download\. Confirm a download started and do not start it again\. In the demonstration the file was "tx-2026-10-01\.csv"; the name may differ\./);
+  assert.match(prompt, /2\. Download the transactions CSV: the previous action starts a file download\. Reiterate keeps the file; the screen does not show it, and a "Download started" message confirms it\. Do not start the download again\. In the demonstration the file was "tx-2026-10-01\.csv"; the name may differ\./);
   assert.equal(doneWhenOptions(draft.steps, null, { kind: "file" }).find((option) => option.doneWhen?.kind === "file")?.recommended, true);
 });
 
@@ -484,4 +483,22 @@ test("stage names are checked like instructions", () => {
   assert.throws(() => compileAgent(draft), /Remove sign-in details/);
   draft.steps[0] = { ...draft.steps[0]!, stage: "x".repeat(61) };
   assert.throws(() => compileAgent(draft), /Stage name/);
+});
+
+test("repeated clicks on one control compile to a click count the agent repeats", () => {
+  const draft = baseDraft();
+  draft.steps = [{ id: "a", type: "click", description: "Click Previous month (3 times)", target: "Previous month", value: "3" }];
+  const prompt = (compileAgent(draft).stages[0] as { prompt: string }).prompt;
+  assert.match(prompt, /1\. Click Previous month \(3 times\)\./);
+  draft.steps = [{ id: "a", type: "click", description: "Go back to the earlier month", target: "Previous month", value: "3" }];
+  assert.match((compileAgent(draft).stages[0] as { prompt: string }).prompt, /Click Previous month to go back to the earlier month\. Click it 3 times in a row\./);
+});
+
+test("steps added after organizing get a neutral heading instead of joining the stage before them", () => {
+  const draft = baseDraft();
+  draft.steps = [
+    { id: "a", type: "click", description: "Click Log in", target: "Log in", stage: "Sign in" },
+    { id: "b", type: "click", description: "Click Export", target: "Export", stage: "" },
+  ];
+  assert.match((compileAgent(draft).stages[0] as { prompt: string }).prompt, /Sign in:\n1\. Click Log in\.\nThen:\n2\. Click Export\./);
 });

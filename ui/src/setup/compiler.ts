@@ -162,8 +162,9 @@ export function compileAgent(draft: SetupDraft): CompiledAgent {
 
   const task = `Complete ${escapeLiteral(draft.name)}: ${escapeLiteral(draft.goal)}`;
   // Stage titles are headings only; step numbers stay global because the agent reports the step it stopped at.
-  const instructions = groupSteps(draft.steps).flatMap((group) => [
-    ...(group.stage?.trim() ? [`${escapeLiteral(group.stage.trim())}:`] : []),
+  // An unnamed stage after a named one gets a neutral heading, so its steps do not read as part of the one before.
+  const instructions = groupSteps(draft.steps).flatMap((group, position) => [
+    ...(group.stage?.trim() ? [`${escapeLiteral(group.stage.trim())}:`] : position > 0 && group.stage !== null ? ["Then:"] : []),
     ...group.steps.map(({ step, index }) => formatStep(step, index)),
   ]).join("\n");
   const prompt = [
@@ -333,20 +334,29 @@ function formatInstruction(
   value: string | undefined,
   description: string,
 ): string {
-  const intent = continuation(step.description, optionalStepText(step.value));
+  // A click's value is how many times it was clicked in a row, not text to keep out of the instruction.
+  const intent = continuation(step.description, step.type === "click" ? undefined : optionalStepText(step.value));
   if (step.type === "navigation") {
     return `Navigate to ${escapeLiteral(step.url ?? step.target ?? step.description)} to ${intent}.`;
   }
   if (step.type === "click") {
+    const times = clickCount(step);
+    const repeat = times > 1 && !/\b\d+\s+times\b/i.test(step.description) ? ` Click it ${times} times in a row.` : "";
     // A description that already names the click ("Click Reports in the menu") is the clearest instruction.
-    if (/^click\b/i.test(step.description.trim())) return `${description}.`;
-    return target === undefined ? `Complete this action: ${description}.` : `Click ${target} to ${intent}.`;
+    // The control's recorded label stays as a hint, because a reworded description may name it differently.
+    if (/^click\b/i.test(step.description.trim())) {
+      const label = target !== undefined && target.length <= 60 && !step.description.toLowerCase().includes((step.target ?? "").toLowerCase())
+        ? ` Its recorded label was ${quoted(step.target ?? "")}.` : "";
+      return `${sentence(description)}${label}${repeat}`;
+    }
+    return target === undefined ? `Complete this action: ${description}.${repeat}` : `Click ${target} to ${intent}.${repeat}`;
   }
   if (step.type === "download") {
-    // The click before this step starts the download. Repeating it would fetch a second copy.
+    // The browser's download bar is not on the screenshot. The engine reports each download in a
+    // "Download started: <file>" message and keeps the file, so the agent only has to not click again.
     // The demonstration's file name usually carries a date, so it identifies the kind of file, not the exact name.
     const file = value === undefined ? "" : ` In the demonstration the file was ${quoted(step.value ?? "")}; the name may differ.`;
-    return `${description}: the previous step starts a file download. Confirm a download started and do not start it again.${file}`;
+    return `${description}: the previous action starts a file download. Reiterate keeps the file; the screen does not show it, and a "Download started" message confirms it. Do not start the download again.${file}`;
   }
   if (step.type === "credential") {
     // The engine replaces the placeholder with the stored value while typing.
@@ -450,6 +460,15 @@ function multipleChoices(value: string): string[] | null {
   } catch {
     return null;
   }
+}
+
+function clickCount(step: SetupStep): number {
+  const count = Number(step.value);
+  return Number.isInteger(count) && count > 1 && count <= 50 ? count : 1;
+}
+
+function sentence(text: string): string {
+  return /[.!?]$/.test(text.trim()) ? text.trim() : `${text.trim()}.`;
 }
 
 function quoted(value: string): string {

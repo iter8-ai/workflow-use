@@ -34,7 +34,8 @@ e.g. "Click Reports in the menu", "Open the transaction reports page".
 together, or several labels joined), infer the most likely control from the surrounding steps and keep it short.
 - A navigation step that follows a click is the page that click opened: describe it as "Open the <page> page".
 - Input and select steps name the field only, e.g. "Enter the merchant ID", "Choose the report format". The typed \
-text or chosen option is kept separately, so do not repeat it.
+text or chosen option is not sent to you and is kept with the step.
+- A click whose value is a number was clicked that many times in a row; say so, e.g. "Click Previous month 3 times".
 - Credential steps name the saved value and the field, e.g. "Enter the saved password". Never write a password, \
 code or other secret.
 - A download step means the browser downloaded the named file: write "Download the <kind of file>" without the exact \
@@ -82,19 +83,27 @@ class StepOrganizer(Protocol):
 
 
 def step_lines(steps: Sequence[SetupStep]) -> str:
-    """One JSON line per step. Credential steps carry only their kind; there is no secret to send."""
+    """One JSON line per step. Typed text and chosen options stay out: the rewrite only names the field, and the
+    agent gets the exact value from the step itself. Credential steps carry their kind (username, password), never
+    the secret, and a download its file name; a click's value is its click count."""
     lines = []
     for number, step in enumerate(steps, start=1):
         fields = {
             "n": number,
             "type": step.type,
             "target": step.target,
-            "value": step.value,
+            "value": None if step.type in {"input", "select_change"} else step.value,
             "url": step.url,
-            "description": step.description,
+            "description": _without_value(step),
         }
         lines.append(json.dumps({key: value for key, value in fields.items() if value is not None}, ensure_ascii=False))
     return "\n".join(lines)
+
+
+def _without_value(step: SetupStep) -> str:
+    if step.type in {"input", "select_change"} and step.value:
+        return step.description.replace(step.value, "the value")
+    return step.description
 
 
 def parse_organized(text: str, count: int) -> list[OrganizedStep] | None:

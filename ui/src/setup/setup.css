@@ -979,5 +979,7 @@ select {
 .setup-panel input.review-stage-name:focus { border-color: #cfc5f2; outline: none; text-transform: none; letter-spacing: 0; }
 .review-step-download .review-step-number { color: #1d6b4a; }
 .test-stage, .edit-stage { padding: 10px 14px 2px; color: #4e38a0; font-size: .72rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
-.edit-stage { padding: 6px 2px 0; }
+input.edit-stage { width: 100%; margin-top: 6px; padding: 4px 6px; border: 1px solid transparent; border-radius: 6px; background: transparent; }
+input.edit-stage:hover:not(:disabled) { border-color: #e4e5ee; }
+input.edit-stage:focus { border-color: #cfc5f2; outline: none; text-transform: none; letter-spacing: 0; }
 @media (prefers-reduced-motion: reduce) { .organizing-notice .edit-spinner { animation: none; } }

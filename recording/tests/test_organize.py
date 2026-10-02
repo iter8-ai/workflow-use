@@ -146,15 +146,65 @@ async def test_page_scripts_cannot_fake_a_download() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_double_click_is_one_step_but_a_later_click_on_the_same_control_is_another() -> None:
+async def test_quick_repeat_clicks_on_one_control_become_one_step_with_a_count() -> None:
     provider = FakeProvider()
     with TestClient(create_app(provider, RecordingConfig(service_key="test-key", timeout_seconds=60))) as http:
         recording = create_recording(http)
         session = provider.sessions[0]
-        await session.emit({"type": "click", "target": "Next page"})
-        await session.emit({"type": "click", "target": "Next page"})
-        await asyncio.sleep(1.1)
-        await session.emit({"type": "click", "target": "Next page"})
+        await session.emit({"type": "click", "target": "Previous month"})
+        await session.emit({"type": "click", "target": "Previous month", "repeat": True})
+        await session.emit({"type": "click", "target": "Previous month", "repeat": True})
+        await session.emit({"type": "click", "target": "Previous month"})
         body = http.get(f"/recordings/{recording['id']}", headers=headers()).json()
 
-    assert [step.get("target") for step in body["steps"][1:]] == ["Next page", "Next page"]
+    assert [(step["description"], step.get("value")) for step in body["steps"][1:]] == [
+        ("Click Previous month (3 times)", "3"),
+        ("Click Previous month", None),
+    ]
+
+
+def test_typed_text_and_chosen_options_are_not_sent_to_the_organizer() -> None:
+    steps = [
+        SetupStep(id="1", type="input", target="Merchant ID", value="10023-private", description="Enter 10023-private"),
+        SetupStep(id="2", type="select_change", target="Format", value="CSV", description="Choose CSV in Format"),
+    ]
+    sent = step_lines(steps)
+    assert "10023-private" not in sent
+    assert "CSV" not in sent
+    assert "Merchant ID" in sent and "Format" in sent
+
+
+@pytest.mark.asyncio
+async def test_a_failed_download_is_reported_but_leaves_no_step() -> None:
+    provider = FakeProvider()
+    with TestClient(create_app(provider, RecordingConfig(service_key="test-key", timeout_seconds=60))) as http:
+        recording = create_recording(http)
+        session = provider.sessions[0]
+        await session.emit({"type": "download", "downloadId": "d-1", "state": "started", "value": "report.csv"})
+        await session.emit({"type": "download", "downloadId": "d-1", "state": "failed"})
+        body = http.get(f"/recordings/{recording['id']}", headers=headers()).json()
+
+    assert body["downloads"] == [{"id": "d-1", "name": "report.csv", "state": "failed"}]
+    assert [step["type"] for step in body["steps"]] == ["navigation"]
+
+
+@pytest.mark.asyncio
+async def test_a_stalled_organizer_leaves_the_recorded_steps(monkeypatch: pytest.MonkeyPatch) -> None:
+    import workflow_use_recording.service as recording_service
+
+    monkeypatch.setattr(recording_service, "ORGANIZE_TIMEOUT_SECONDS", 0.05)
+
+    class Stalled(StubOrganizer):
+        async def organize(self, steps: Sequence[SetupStep]) -> list[OrganizedStep] | None:
+            await asyncio.sleep(10)
+            return None
+
+    provider = FakeProvider()
+    with organized_client(provider, Stalled()) as http:
+        recording = create_recording(http)
+        stopped = http.post(f"/recordings/{recording['id']}/stop", headers=headers()).json()
+        body = settled(http, recording["id"])
+
+    assert stopped["organizing"] is True
+    assert body["organizing"] is False
+    assert body["steps"] == stopped["steps"]

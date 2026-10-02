@@ -66,25 +66,27 @@ CAPTURE_SCRIPT = r"""
   // naming a click after one of them glues the whole panel's text into one unreadable label.
   const CLICKABLE = "button,a,input,select,textarea,summary,label,[role=button],[role=link],[role=tab]," +
     "[role=menuitem],[role=menuitemcheckbox],[role=menuitemradio],[role=option],[role=checkbox],[role=radio]," +
-    "[role=switch],[role=treeitem],[role=combobox],[onclick]";
+    "[role=switch],[role=treeitem],[role=combobox],[role=row],[role=gridcell],[role=cell],[role=listitem]," +
+    "[onclick],[tabindex]:not([tabindex='-1'])";
   // innerText keeps the visual line breaks that textContent drops ("Continue with Google" + "or" stays apart).
-  const visibleLines = (node) => String(node instanceof HTMLElement ? node.innerText : node.textContent || "")
-    .split(/\n+/).map((line) => semanticText(line)).filter(Boolean);
+  // Inline siblings (table cells, spans) have no break between them, so their text is joined with spaces.
+  const visibleLines = (node) => {
+    const parts = node instanceof HTMLElement && node.children.length > 1 && !/\n/.test(node.innerText)
+      ? Array.from(node.children).map((child) => child instanceof HTMLElement ? child.innerText : child.textContent)
+      : String(node instanceof HTMLElement ? node.innerText : node.textContent || "").split(/\n+/);
+    return parts.map((line) => semanticText(line)).filter(Boolean);
+  };
   const visibleName = (node) => {
     const lines = visibleLines(node);
     const joined = lines.join(" ");
     return joined.length <= 80 ? joined : semanticText(lines[0] || "", 80);
   };
+  // The clicked element and its ancestors, through shadow roots: a web component's button reaches the
+  // document listener retargeted to its host element, but composedPath() still starts at the button.
+  const clickPath = (event) => event.composedPath().filter((node) => node instanceof Element);
   // Single-page apps attach click handlers in JavaScript, so a clickable card or table cell often has no
   // role; its pointer cursor is the visible sign. The cursor is inherited, so this is usually the clicked node.
-  const pointerTarget = (node) => {
-    let current = node;
-    for (let depth = 0; current instanceof Element && depth < 6; depth += 1) {
-      if (getComputedStyle(current).cursor === "pointer") return current;
-      current = current.parentElement;
-    }
-    return null;
-  };
+  const pointerTarget = (path) => path.slice(0, 6).find((node) => getComputedStyle(node).cursor === "pointer") || null;
   const target = (node) => {
     if (!(node instanceof Element)) return "";
     const valueBearing = node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement ||
@@ -108,16 +110,18 @@ CAPTURE_SCRIPT = r"""
     void window.workflowUseRecord(event).catch(() => undefined);
   };
   document.addEventListener("click", (event) => {
-    const clicked = event.target instanceof Element ? event.target : null;
-    const control = clicked?.closest(CLICKABLE) || null;
-    // A label stands for its field: clicking "Email" focuses the email box.
-    const field = control instanceof HTMLLabelElement && control.control ? control.control : control;
+    const path = clickPath(event);
+    const control = path.find((node) => node.matches(CLICKABLE)) || null;
+    // Clicking a label makes the browser click its field next; that second click is the step.
+    if (control instanceof HTMLLabelElement && control.control && control.control !== path[0]) return;
     // Without a control, only something styled as clickable counts. Plain text and empty panel space do nothing.
-    const node = field || pointerTarget(clicked);
+    const node = control || pointerTarget(path);
     if (!node) return;
     // Focusing a sign-in field is implied by its credential step.
     if (credentialKind(node)) return;
-    emit({ type: "click", target: target(node) });
+    // event.detail counts clicks in quick succession on the same spot (a double click, or paging a calendar).
+    const click = { type: "click", target: target(node) };
+    emit(event.detail > 1 ? { ...click, repeat: true } : click);
   }, true);
   document.addEventListener("input", (event) => {
     const node = event.target;
