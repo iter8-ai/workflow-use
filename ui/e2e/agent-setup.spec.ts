@@ -1057,7 +1057,7 @@ test("keeps a passed draft test publishable after a rename", async ({ page }) =>
   await page.goto(`${baseUrl}/host?scenario=edit`);
   const setup = page.frameLocator("iframe");
   await setup.getByLabel("Step 1 description").fill("Updated reports section");
-  await setup.getByRole("button", { name: "Test draft" }).click();
+  await setup.getByRole("button", { name: "Test changes" }).click();
   await expect(setup.getByText("Test completed")).toBeVisible();
   await setup.getByLabel("I checked the result").check();
   await expect(setup.getByRole("button", { name: "Publish changes" })).toBeEnabled();
@@ -1108,7 +1108,7 @@ test("tests a draft, checks the result, and shows the scheduled publish notice",
   const setup = page.frameLocator("iframe");
   await expect(setup.getByRole("heading", { name: "Edit web agent" })).toBeVisible();
   await setup.getByLabel("Step 1 description").fill("Open the updated reports section");
-  await setup.getByRole("button", { name: "Test draft" }).click();
+  await setup.getByRole("button", { name: "Test changes" }).click();
   await expect(setup.getByText("Test completed")).toBeVisible();
   await setup.getByLabel("I checked the result").check();
   const label = await setup.locator(".result-check").boundingBox();
@@ -1119,6 +1119,11 @@ test("tests a draft, checks the result, and shows the scheduled publish notice",
   await page.screenshot({ path: "e2e-artifacts/edit-tested.png" });
   await setup.getByRole("button", { name: "Publish changes" }).click();
   await expect(setup.getByText("Timers will use v4 at the next run time.")).toBeVisible();
+  await expect(setup.getByRole("dialog", { name: "Publish changes?" })).toHaveAccessibleDescription("Publish 1 change to this agent.");
+  await setup.getByRole("button", { name: "Publish", exact: true }).click();
+  await expect(setup.getByRole("status").filter({ hasText: "Published v4." })).toHaveText("Published v4. Scheduled runs use it from the next run.");
+  await setup.getByLabel("Step 1 description").fill("Another edit");
+  await expect(setup.getByText("Published v4.", { exact: false })).toHaveCount(0);
 });
 
 test("shows the conflict modal and supports overwrite or discard", async ({ page }) => {
@@ -1127,32 +1132,32 @@ test("shows the conflict modal and supports overwrite or discard", async ({ page
   const setup = page.frameLocator("iframe");
   await expect(setup.getByRole("heading", { name: "Edit web agent" })).toBeVisible();
   await setup.getByLabel("Step 1 description").fill("Changed locally");
-  await setup.getByRole("button", { name: "Test draft" }).click();
+  await setup.getByRole("button", { name: "Test changes" }).click();
   await expect(setup.getByText("Test completed")).toBeVisible();
   await setup.getByLabel("I checked the result").check();
   await setup.getByRole("button", { name: "Publish changes" }).click();
   await setup.getByRole("button", { name: "Publish", exact: true }).click();
-  await expect(setup.getByRole("heading", { name: "Agent change conflict" })).toBeVisible();
+  await expect(setup.getByRole("heading", { name: "This agent changed while you were editing" })).toBeVisible();
   await expect(setup.getByRole("dialog")).toHaveCount(1);
-  await expect(setup.getByText("teammate@example.test", { exact: true })).toBeVisible();
-  await expect(setup.getByText("01.10.2026 at 10:00", { exact: true })).toBeVisible();
-  await expect(setup.getByRole("button", { name: "Overwrite their changes" })).toBeVisible();
-  await expect(setup.getByRole("button", { name: "Discard my changes" })).toBeVisible();
+  await expect(setup.getByText("teammate@example.test saved it at 01.10.2026 at 10:00.", { exact: true })).toBeVisible();
+  await expect(setup.getByText("teammate@example.test saved it at 01.10.2026 at 10:00.", { exact: true })).toBeVisible();
+  await expect(setup.getByRole("button", { name: "Publish mine anyway" })).toBeVisible();
+  await expect(setup.getByRole("button", { name: "Reload their version" })).toBeVisible();
   await page.screenshot({ path: "e2e-artifacts/edit-conflict.png" });
-  await setup.getByRole("button", { name: "Overwrite their changes" }).click();
+  await setup.getByRole("button", { name: "Publish mine anyway" }).click();
   await expect(setup.getByRole("heading", { name: "Edit web agent" })).toBeVisible();
 
   await page.goto(`${baseUrl}/host?scenario=edit-conflict`);
   const discarded = page.frameLocator("iframe");
   await expect(discarded.getByRole("heading", { name: "Edit web agent" })).toBeVisible();
   await discarded.getByLabel("Step 1 description").fill("Discarded locally");
-  await discarded.getByRole("button", { name: "Test draft" }).click();
+  await discarded.getByRole("button", { name: "Test changes" }).click();
   await expect(discarded.getByText("Test completed")).toBeVisible();
   await discarded.getByLabel("I checked the result").check();
   await discarded.getByRole("button", { name: "Publish changes" }).click();
   await discarded.getByRole("button", { name: "Publish", exact: true }).click();
-  await expect(discarded.getByRole("heading", { name: "Agent change conflict" })).toBeVisible();
-  await discarded.getByRole("button", { name: "Discard my changes" }).click();
+  await expect(discarded.getByRole("heading", { name: "This agent changed while you were editing" })).toBeVisible();
+  await discarded.getByRole("button", { name: "Reload their version" }).click();
   await expect(discarded.getByLabel("Step 1 description")).toHaveValue("Open the reports section");
   await expect(discarded.getByRole("heading", { name: "Publish changes?" })).toHaveCount(0);
 });
@@ -1162,7 +1167,7 @@ test("retries a failed draft test and then enables checked publish", async ({ pa
   const setup = page.frameLocator("iframe");
   await expect(setup.getByRole("heading", { name: "Edit web agent" })).toBeVisible();
   await setup.getByLabel("Step 1 description").fill("Retry the updated reports section");
-  await setup.getByRole("button", { name: "Test draft" }).click();
+  await setup.getByRole("button", { name: "Test changes" }).click();
   await expect(setup.getByText("Test failed")).toBeVisible();
   await setup.getByRole("button", { name: "Run test again" }).click();
   await expect(setup.getByText("Test completed")).toBeVisible();
@@ -1178,7 +1183,7 @@ test("reviews raw agent Details changes and enables publishing without editing s
   const rail = setup.locator(".edit-rail");
   await expect(rail.getByText("Website address", { exact: true })).toBeVisible();
   await expect(rail.getByText("Goal", { exact: true })).toBeVisible();
-  await setup.getByRole("button", { name: "Test draft" }).click();
+  await setup.getByRole("button", { name: "Test changes" }).click();
   await expect(setup.getByText("Test completed")).toBeVisible();
   await setup.getByLabel("I checked the result").check();
   await expect(setup.getByRole("button", { name: "Publish changes" })).toBeEnabled();
@@ -1194,7 +1199,7 @@ test("keeps a published raw agent editable when its stored setup has empty steps
   await expect(setup.getByRole("heading", { name: "Advanced instructions" })).toBeVisible();
   await expect(setup.getByText("Sleep stage · 5 s", { exact: true })).toBeVisible();
   await setup.getByLabel("Agent stage prompt").fill("Updated legacy prompt after reopening");
-  await setup.getByRole("button", { name: "Test draft" }).click();
+  await setup.getByRole("button", { name: "Test changes" }).click();
   await expect(setup.getByText("Test completed")).toBeVisible();
   await setup.getByLabel("I checked the result").check();
   await expect(setup.getByRole("button", { name: "Publish changes" })).toBeEnabled();
@@ -1206,13 +1211,13 @@ test("keeps raw stages and internal agents safe", async ({ page }) => {
   const setup = page.frameLocator("iframe");
   await expect(setup.getByRole("heading", { name: "Advanced instructions" })).toBeVisible();
   for (const label of ["Download stage", "Sleep stage · 5 s", "Reload stage"]) {
-    await expect(setup.locator(".raw-preserved").filter({ hasText: label })).toHaveText(`${label}unchanged`);
+    await expect(setup.locator(".raw-preserved").filter({ hasText: label })).toHaveText(`${label}Kept as is`);
   }
   await expect(setup.locator("pre.raw-preserved")).toHaveCount(0);
   await page.screenshot({ path: "e2e-artifacts/edit-raw.png" });
   await setup.getByLabel("Agent stage prompt").fill("Updated legacy prompt");
   await expect(setup.getByText("Agent stages")).toBeVisible();
-  await setup.getByRole("button", { name: "Test draft" }).click();
+  await setup.getByRole("button", { name: "Test changes" }).click();
   await expect(setup.getByText("Test completed")).toBeVisible();
   const rawSaved = await page.evaluate(() => window.__savedAgents);
   expect(JSON.stringify(rawSaved)).toContain("Updated legacy prompt");
@@ -1233,7 +1238,7 @@ test("renames without creating a version and re-demonstrates from a selected ste
   const redemonstrateFrom = setup.getByLabel("Re-demonstrate from step");
   await redemonstrateFrom.selectOption({ value: "1" });
   await expect(redemonstrateFrom).toHaveValue("1");
-  await setup.getByRole("button", { name: "Start re-demonstration" }).click();
+  await setup.getByRole("button", { name: "Re-demonstrate" }).click();
   await expect(setup.getByTitle("Virtual browser")).toBeVisible();
   await expect(setup.getByTitle("Virtual browser")).toHaveAttribute("src", "https://live.browserbase.com/session");
   await setup.getByRole("button", { name: "Finish re-demonstration" }).click();
@@ -1241,12 +1246,177 @@ test("renames without creating a version and re-demonstrates from a selected ste
   await expect(setup.getByLabel("Step 2 description")).toHaveValue("Download the refreshed statement");
   await expect.poll(() => page.evaluate(() => window.__renameRequests)).toEqual(["Renamed report agent"]);
   await expect.poll(() => page.evaluate(() => window.__publishRequests)).toEqual([]);
-  await expect(setup.getByRole("button", { name: "Start re-demonstration" })).toBeEnabled();
-  await setup.getByRole("button", { name: "Start re-demonstration" }).click();
+  await expect(setup.getByRole("button", { name: "Re-demonstrate" })).toBeEnabled();
+  await setup.getByRole("button", { name: "Re-demonstrate" }).click();
   await expect(setup.getByTitle("Virtual browser")).toBeVisible();
   await setup.getByRole("button", { name: "Finish re-demonstration" }).click();
   await expect(setup.getByRole("alert")).toHaveCount(0);
 });
+
+test("guards leaving edits and closes immediately without changes", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByRole("button", { name: "Close edit page" }).click();
+  await expect.poll(() => page.evaluate(() => window.__closeRequests)).toEqual([{ agentId: "agent-1" }]);
+  await expect(setup.getByRole("dialog")).toHaveCount(0);
+  await page.goto(`${baseUrl}/host?scenario=edit`);
+  await setup.getByLabel("Step 1 description").fill("Unsaved instruction");
+  const back = setup.getByRole("button", { name: "Back to web agents" });
+  await back.click();
+  await expect(setup.getByRole("dialog", { name: "Discard your changes?" })).toBeVisible();
+  expect(await page.evaluate(() => window.__closeRequests)).toEqual([]);
+  await setup.getByRole("button", { name: "Keep editing" }).click();
+  await expect(back).toBeFocused();
+  await expect(setup.getByLabel("Step 1 description")).toHaveValue("Unsaved instruction");
+  await setup.getByRole("button", { name: "Close edit page" }).click();
+  await setup.getByRole("button", { name: "Discard changes", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__closeRequests)).toEqual([{ agentId: "agent-1" }]);
+});
+
+test("guards leaving a running test or re-demonstration with no draft changes", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-watch`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByRole("button", { name: "Test changes" }).click();
+  await expect(setup.getByRole("status").filter({ hasText: "Test is running." })).toBeVisible();
+  await expect(setup.getByRole("link", { name: "Watch the test" })).toHaveAttribute("target", "_blank");
+  await expect(setup.getByRole("link", { name: "Watch the test" })).toHaveAttribute("rel", "noreferrer");
+  await setup.getByRole("button", { name: "Close edit page" }).click();
+  await expect(setup.getByRole("dialog", { name: "Discard your changes?" })).toBeVisible();
+  await setup.getByRole("button", { name: "Keep editing" }).click();
+  expect(await page.evaluate(() => window.__closeRequests)).toEqual([]);
+  await page.goto(`${baseUrl}/host?scenario=edit`);
+  await setup.getByRole("button", { name: "Re-demonstrate", exact: true }).click();
+  await setup.getByRole("button", { name: "Back to web agents" }).click();
+  await expect(setup.getByRole("dialog", { name: "Discard your changes?" })).toBeVisible();
+  await setup.getByRole("button", { name: "Keep editing" }).click();
+  await expect(setup.getByRole("button", { name: "Finish re-demonstration" })).toBeVisible();
+  expect(await page.evaluate(() => window.__closeRequests)).toEqual([]);
+});
+
+test("explains publish availability and moves primary emphasis after a passed test", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-fail-pass`);
+  const setup = page.frameLocator("iframe");
+  const publish = setup.getByRole("button", { name: "Publish changes" });
+  await expect(publish).toBeDisabled();
+  await expect(publish).toHaveAccessibleDescription("Make a change to publish.");
+  await expect(setup.getByRole("button", { name: "Test changes" })).toHaveClass(/button-primary/);
+  await setup.getByLabel("Step 1 description").fill("Updated instruction");
+  await expect(publish).toHaveAccessibleDescription("Test your changes before publishing.");
+  await setup.getByRole("button", { name: "Test changes" }).click();
+  await expect(setup.getByRole("alert")).toContainText("The website rejected the request.");
+  await expect(publish).toBeDisabled();
+  await expect(publish).toHaveAccessibleDescription("Test your changes before publishing.");
+  await setup.getByRole("button", { name: "Run test again" }).click();
+  await expect(publish).toHaveAccessibleDescription("Confirm you checked the result.");
+  await expect(publish).toBeDisabled();
+  await expect(publish).toHaveClass(/button-primary/);
+  await expect(setup.getByRole("button", { name: "Test again" })).toHaveClass(/button-quiet/);
+  await setup.getByLabel("I checked the result").check();
+  await expect(publish).toBeEnabled();
+  await setup.getByLabel("Step 1 expected outcome").fill("Updated outcome");
+  await expect(setup.getByLabel("I checked the result")).toHaveCount(0);
+  await expect(publish).toBeDisabled();
+  await expect(publish).toHaveAccessibleDescription("Test your changes before publishing.");
+  await page.goto(`${baseUrl}/host?scenario=edit-internal`);
+  await expect(publish).toHaveAccessibleDescription("Managed by Operations. Publishing changes is disabled.");
+  await expect(setup.getByRole("button", { name: "Test changes" })).toBeDisabled();
+  await expect(setup.getByLabel("Step 1 description")).toBeDisabled();
+});
+
+test("inserts an empty focused instruction and blocks testing until it is filled", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByRole("button", { name: "Insert step" }).click();
+  const instruction = setup.getByLabel("Step 3 description");
+  await expect(instruction).toHaveValue("");
+  await expect(instruction).toBeFocused();
+  await expect(instruction).toHaveAttribute("placeholder", "Describe the action");
+  await setup.getByRole("button", { name: "Test changes" }).click();
+  await expect(setup.getByRole("alert")).toHaveText("Add an instruction for step 3 before testing.");
+  expect(await page.evaluate(() => window.__savedAgents)).toEqual([]);
+  expect(await page.evaluate(() => window.__testArguments)).toEqual([]);
+  await instruction.fill("Open the downloaded file");
+  await setup.getByRole("button", { name: "Test changes" }).click();
+  await expect(setup.getByText("Test completed")).toBeVisible();
+});
+
+test("commits a rename with Enter and reverts it with Escape", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit`);
+  const setup = page.frameLocator("iframe");
+  const name = setup.getByLabel("Agent name");
+  await name.fill("Keyboard rename");
+  await name.press("Enter");
+  await expect(setup.getByRole("status").filter({ hasText: "Saved" })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.__renameRequests)).toEqual(["Keyboard rename"]);
+  await name.fill("Revert this name");
+  await name.press("Escape");
+  await expect(name).toHaveValue("Keyboard rename");
+  await name.blur();
+  expect(await page.evaluate(() => window.__renameRequests)).toEqual(["Keyboard rename"]);
+  await expect(setup.getByText("Live v3")).toBeVisible();
+  expect(await page.evaluate(() => window.__publishRequests)).toEqual([]);
+});
+
+test("cancels publish and conflict dialogs and returns focus to Publish changes", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-conflict`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByLabel("Step 1 description").fill("My changes");
+  await setup.getByRole("button", { name: "Test changes" }).click();
+  await expect(setup.getByText("Test completed")).toBeVisible();
+  await setup.getByLabel("I checked the result").check();
+  const publish = setup.getByRole("button", { name: "Publish changes" });
+  await publish.click();
+  const cancel = setup.getByRole("button", { name: "Cancel", exact: true });
+  await expect(cancel).toBeFocused();
+  await cancel.press("Escape");
+  await expect(setup.getByRole("dialog")).toHaveCount(0);
+  await expect(publish).toBeFocused();
+  await publish.click();
+  await setup.getByRole("button", { name: "Publish", exact: true }).click();
+  const conflict = setup.getByRole("dialog", { name: "This agent changed while you were editing" });
+  await expect(conflict).toHaveAccessibleDescription(/teammate@example.test saved it at .*permanently/);
+  await expect(cancel).toBeFocused();
+  await cancel.click();
+  await expect(conflict).toHaveCount(0);
+  await expect(publish).toBeFocused();
+  await expect(setup.getByLabel("Step 1 description")).toHaveValue("My changes");
+  await expect(publish).toBeEnabled();
+});
+
+test("announces an unscheduled publish without claiming scheduled runs", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByLabel("Step 1 description").fill("My changes");
+  await setup.getByRole("button", { name: "Test changes" }).click();
+  await expect(setup.getByText("Test completed")).toBeVisible();
+  await setup.getByLabel("I checked the result").check();
+  await setup.getByRole("button", { name: "Publish changes" }).click();
+  await setup.getByRole("button", { name: "Publish", exact: true }).click();
+  await expect(setup.getByRole("status").filter({ hasText: "Published v4." })).toHaveText("Published v4.");
+});
+
+for (const scenario of ["edit", "edit-raw"]) {
+  test(`uses full borders rather than accent side stripes in ${scenario}`, async ({ page }) => {
+    await page.goto(`${baseUrl}/host?scenario=${scenario}`);
+    const setup = page.frameLocator("iframe");
+    await setup.getByLabel("What should the agent do?").fill("Changed goal");
+    const checkBorders = async () => {
+      const violations = await setup.locator(".edit-agent").evaluate((root) => [root, ...root.querySelectorAll("*")].flatMap((element) => {
+        const style = getComputedStyle(element);
+        return parseFloat(style.borderLeftWidth) > 1 || parseFloat(style.borderRightWidth) > 1 ? [element.className] : [];
+      }));
+      expect(violations).toEqual([]);
+    };
+    await checkBorders();
+    await setup.getByRole("button", { name: "Test changes" }).click();
+    await expect(setup.getByText("Test completed")).toBeVisible();
+    await checkBorders();
+    await setup.getByLabel("I checked the result").check();
+    await setup.getByRole("button", { name: "Publish changes" }).click();
+    await expect(setup.getByRole("dialog", { name: "Publish changes?" })).toBeVisible();
+    await checkBorders();
+  });
+}
 
 async function describeAndDemonstrate(setup: FrameLocator): Promise<void> {
   await setup.getByLabel("Agent name").fill("Download monthly statement");
@@ -1297,6 +1467,9 @@ function hostPage(url: string): string {
   let recordingExists = false;
   let publishedConflict = false;
   let testAttempts = 0;
+  let editVersion = 3;
+  let editName = "Monthly report agent";
+  let publishedDraft = null;
   window.__loadAvailable = scenario !== "edit-load-error";
   const edit = scenario.startsWith("edit");
   const editSteps = [
@@ -1339,13 +1512,13 @@ function hostPage(url: string): string {
       else send({ schedule: true, mode: edit ? "edit" : "create", credentials: scenario !== "sign-in-unsupported", emailRoutes: !legacy, chooseSchedule: !legacy && scenario !== "no-text" });
     } else if (request.method === "loadAgent") {
       if (!window.__loadAvailable) { fail("Loading failed. Try again."); return; }
-      send({ agentId: "agent-1", name: "Monthly report agent", url: "https://portal.example.test/reports", goal: "Download the monthly report.", steps: scenario === "edit-raw" ? null : scenario === "edit-raw-empty" ? [] : editSteps, stages: [{ type: "agent", prompt: "Open reports", step_limit: 16 }, { type: "download" }, { type: "sleep", sleep_ms: 5000 }, { type: "reload" }], liveConfigId: "config-3", version: 3, internal, schedule: scenario === "edit-schedule" ? "Daily 09:00 UTC" : null, nextRunAt: scenario === "edit-schedule" ? "2026-10-02T09:00:00Z" : null });
-    } else if (request.method === "renameAgent") { window.__renameRequests.push(request.params.name); if (scenario === "edit-rename-error" && window.__renameRequests.length === 1) fail("Rename failed. Try again."); else send(null);
+      send({ agentId: "agent-1", name: editName, url: publishedDraft?.draft.url ?? "https://portal.example.test/reports", goal: publishedDraft?.draft.goal ?? "Download the monthly report.", steps: publishedDraft?.draft.steps ?? (scenario === "edit-raw" ? null : scenario === "edit-raw-empty" ? [] : editSteps), stages: publishedDraft?.config.stages ?? [{ type: "agent", prompt: "Open reports", step_limit: 16 }, { type: "download" }, { type: "sleep", sleep_ms: 5000 }, { type: "reload" }], liveConfigId: "config-3", version: editVersion, internal, schedule: scenario === "edit-schedule" ? "Daily 09:00 UTC" : null, nextRunAt: scenario === "edit-schedule" ? "2026-10-02T09:00:00Z" : null });
+    } else if (request.method === "renameAgent") { window.__renameRequests.push(request.params.name); if (scenario === "edit-rename-error" && window.__renameRequests.length === 1) fail("Rename failed. Try again."); else { editName = request.params.name; send(null); }
     } else if (request.method === "saveDraft") { window.__savedAgents.push(request.params); send({ draftId: "draft-1" });
     } else if (request.method === "publishDraft") {
       window.__publishRequests.push(request.params);
       if (scenario === "edit-conflict" && !request.params.overwrite && !publishedConflict) { publishedConflict = true; send({ conflict: { updatedBy: "teammate@example.test", updatedAt: "2026-10-01T10:00:00Z" } }); }
-      else send({ version: 4 });
+      else { editVersion += 1; publishedDraft = window.__savedAgents.at(-1); send({ version: editVersion }); }
     } else if (request.method === "requestCredentials") { window.__credentialRequests.push(request.params); send({ saved: request.params.kinds }); } else if (request.method === "startRecording") { window.__startUrls.push(request.params.url); if (edit ? recordingExists : recordingActive) { fail("Finish the current demonstration first."); return; } recordingActive = true; recordingExists = true; send({ id: "recording-1", status: "recording", liveViewUrl: "https://live.browserbase.com/session", steps: edit ? [] : steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
     else if (request.method === "getRecording" || request.method === "stopRecording") { if (request.method === "stopRecording" && edit) recordingActive = false; send({ id: "recording-1", status: request.method === "getRecording" && recordingActive ? "recording" : "stopped", liveViewUrl: "https://live.browserbase.com/session", steps: edit ? (request.method === "stopRecording" ? redemonstrationSteps : []) : steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
     else if (request.method === "cancelRecording") { recordingActive = false; recordingExists = false; send(undefined); }
@@ -1361,7 +1534,7 @@ function hostPage(url: string): string {
       else if (scenario === "signin-failure" && window.__testArguments.length === 1) send({ status: "failed", failure: { kind: "signin", message: "The username field was missing." }, stoppedAtStep: 2, screens: [screen] });
       else if ((emailScenario || scenario === "text-result") && window.__testArguments.length === 1) send({ status: "failed", failure: { kind: "result", message: "No file was downloaded." }, stoppedAtStep: null, screens: [screen] });
       else if (scenario === "failed" || (scenario === "edit-fail-pass" && testAttempts === 1)) send({ status: "failed", error: "The website rejected the request." });
-      else if (scenario === "watch") send({ status: "running", liveViewUrl: "https://www.browserbase.com/devtools-fullscreen/inspector.html" });
+      else if (scenario === "watch" || scenario === "edit-watch") send({ status: "running", liveViewUrl: "https://www.browserbase.com/devtools-fullscreen/inspector.html" });
       else send({ status: "succeeded", files: emailScenario || scenario === "described-success" ? [] : [{ name: "statement.pdf", url: "https://files.example.test/statement.pdf" }], screens: [screen], confirmation: scenario === "described-success" ? "The green toast says Export sent" : "Export sent" });
     } else if (request.method === "createEmailRoute") { window.__createdRoutes.push(request.params); send({ channelId: "route-1", address: "reports+agent@reiterate.com" }); }
     else if (request.method === "getEmailArrival") {
