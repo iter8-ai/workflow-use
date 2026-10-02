@@ -884,8 +884,8 @@ select {
 .test-steps:focus-visible, .date-chip:focus-visible, .done-options button:focus-visible, .done-options summary:focus-visible { outline: 3px solid #cfc5f2; outline-offset: -3px; }
 .text-button:disabled, .date-chip:disabled, .done-options button:disabled { opacity: .52; cursor: not-allowed; }
 @media (max-width: 1100px) {
-  .setup-header { flex-wrap: wrap; gap: 8px 16px; }
-  .setup-header .setup-progress { order: 3; width: 100%; padding: 6px 0; }
+  .setup-header { gap: 16px; }
+  .setup-header .setup-progress { min-width: 0; overflow-x: auto; }
 }
 @media (max-width: 900px) {
   .agent-setup-testing { height: auto; }

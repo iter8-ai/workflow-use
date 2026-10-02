@@ -917,6 +917,12 @@ test("shows the describe form and its primary action without scrolling on a lapt
   await expect(setup.getByRole("button", { name: "Close setup" })).toBeInViewport({ ratio: 1 });
   await expect(setup.getByRole("button", { name: "Continue to demonstration" })).toBeInViewport({ ratio: 1 });
   await page.screenshot({ path: "e2e-artifacts/describe-laptop.png" });
+
+  await page.setViewportSize({ width: 900, height: 640 });
+  await expect(setup.getByRole("button", { name: "Continue to demonstration" })).toBeInViewport({ ratio: 1 });
+  const header = await setup.locator(".setup-header").evaluate((element) => element.getBoundingClientRect().height);
+  expect(header).toBeLessThan(64);
+  await page.screenshot({ path: "e2e-artifacts/describe-900.png" });
 });
 
 test("fits a ten-step review on one desktop screen", async ({ page }) => {
