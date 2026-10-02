@@ -22,7 +22,7 @@ select {
 }
 
 .setup-header {
-  min-height: 56px;
+  min-height: 48px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -43,13 +43,29 @@ select {
   letter-spacing: -0.018em;
 }
 
-.setup-header h1 {
-  font-size: 1.25rem;
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.setup-header .setup-close {
+  width: 34px;
+  flex: 0 0 auto;
+  color: #5f667c;
+}
+
+.setup-header .setup-close:hover:not(:disabled) {
+  background: #f1f1f6;
+  color: #17182b;
 }
 
 .setup-shell {
   width: min(1480px, 100%);
-  min-height: calc(100vh - 121px);
+  min-height: calc(100vh - 113px);
   margin: 0 auto;
 }
 
@@ -107,8 +123,8 @@ select {
 }
 
 .setup-content {
-  min-height: calc(100vh - 180px);
-  padding: clamp(28px, 4vw, 56px) clamp(24px, 4vw, 64px) 56px;
+  min-height: calc(100vh - 113px);
+  padding: 24px clamp(24px, 4vw, 64px) 32px;
   background: #ffffff;
 }
 
@@ -124,6 +140,7 @@ select {
 
 .setup-panel-compact {
   width: min(720px, 100%);
+  gap: 14px;
 }
 
 .setup-panel > div > p,
@@ -135,7 +152,7 @@ select {
 }
 
 .setup-panel h2 {
-  font-size: 1.55rem;
+  font-size: 1.35rem;
 }
 
 .setup-panel h3 {
@@ -168,7 +185,7 @@ select {
 }
 
 .setup-panel textarea {
-  min-height: 92px;
+  min-height: 72px;
   resize: vertical;
 }
 
@@ -250,12 +267,14 @@ select {
 
 .credential-warning {
   margin: 0 !important;
-  padding: 12px 13px;
+  max-width: none !important;
+  padding: 9px 12px;
+  font-size: 0.86rem;
   border: 1px solid #dfc680;
   border-radius: 7px;
   background: #fff9e9;
   color: #684b16 !important;
-  font-weight: 650;
+  font-weight: 500;
 }
 
 .setup-error {
@@ -865,8 +884,8 @@ select {
 .test-steps:focus-visible, .date-chip:focus-visible, .done-options button:focus-visible, .done-options summary:focus-visible { outline: 3px solid #cfc5f2; outline-offset: -3px; }
 .text-button:disabled, .date-chip:disabled, .done-options button:disabled { opacity: .52; cursor: not-allowed; }
 @media (max-width: 1100px) {
-  .setup-header { flex-wrap: wrap; gap: 8px 16px; }
-  .setup-header .setup-progress { order: 3; width: 100%; padding: 6px 0; }
+  .setup-header { gap: 16px; }
+  .setup-header .setup-progress { min-width: 0; overflow-x: auto; }
 }
 @media (max-width: 900px) {
   .agent-setup-testing { height: auto; }

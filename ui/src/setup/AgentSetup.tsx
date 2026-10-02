@@ -583,11 +583,11 @@ export default function AgentSetup() {
   return (
     <main className={`agent-setup${screen === "demonstrate" ? " agent-setup-demonstrating" : screen === "test" ? " agent-setup-testing" : ""}`}>
       <header className="setup-header">
-        <div><h1>Set up your agent</h1></div>
+        <h1 className="visually-hidden">Set up your agent</h1>
         <nav aria-label="Agent setup progress" className="setup-progress">
           {screens.map((item, index) => <div className={screen === item.id ? "progress-item current" : screens.findIndex((screenItem) => screenItem.id === screen) > index ? "progress-item complete" : "progress-item"} key={item.id}><span>{index + 1}</span>{item.label}</div>)}
         </nav>
-        <button className="button button-quiet" type="button" ref={closeButtonRef} onClick={requestClose} disabled={busy}>Close setup</button>
+        <button className="icon-button setup-close" type="button" ref={closeButtonRef} onClick={requestClose} disabled={busy} aria-label="Close setup" title="Close setup"><svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg></button>
       </header>
       <div className="setup-shell">
 
