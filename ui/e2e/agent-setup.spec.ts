@@ -827,7 +827,7 @@ test.describe("in a time zone ahead of UTC", () => {
   test("formats the edit header's next run in local time", async ({ page }) => {
     await page.goto(`${baseUrl}/host?scenario=edit-schedule`);
     const setup = page.frameLocator("iframe");
-    await expect(setup.getByText("Daily 09:00 UTC · next run 02.10.2026 at 14:30", { exact: true })).toBeVisible();
+    await expect(setup.getByText(/Daily 09:00 UTC · next run .*14:30.*GMT\+5:30/)).toBeVisible();
   });
 
 });
@@ -911,6 +911,8 @@ test("does not test a sign-in agent when the host has no credential support", as
 });
 
 test("ignores a response posted by the setup iframe instead of its host", async ({ page }) => {
+  await page.clock.install({ time: new Date("2026-10-02T00:00:00Z") });
+  await page.clock.pauseAt(new Date("2026-10-02T00:01:00Z"));
   await page.goto(`${baseUrl}/host?scenario=delayed-ready`);
   const setup = page.frameLocator("iframe");
   const frame = page.frames().find((candidate) => candidate !== page.mainFrame());
@@ -933,6 +935,7 @@ test("ignores a response posted by the setup iframe instead of its host", async 
     );
   }, readyId);
   await expect(setup.getByText("Connecting to Reiterate")).toBeVisible();
+  await page.clock.runFor(300);
   await expect(setup.getByLabel("Agent name")).toBeVisible();
 });
 
@@ -1070,7 +1073,7 @@ test("keeps the editor cards in the main column and Changes in a sticky rail", a
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(`${baseUrl}/host?scenario=edit-schedule`);
   const setup = page.frameLocator("iframe");
-  await expect(setup.getByText("Daily 09:00 UTC · next run 02.10.2026 at 09:00", { exact: true })).toBeVisible();
+  await expect(setup.getByText(/Daily 09:00 UTC · next run .*09:00.*UTC/)).toBeVisible();
   const details = await setup.getByRole("heading", { name: "Details", exact: true }).boundingBox();
   const steps = await setup.getByRole("heading", { name: "Steps", exact: true }).boundingBox();
   const changes = await setup.getByRole("heading", { name: "Changes", exact: true }).boundingBox();
@@ -1169,10 +1172,10 @@ test("tests a draft, checks the result, and shows the scheduled publish notice",
   expect(Math.abs(check!.y + check!.height / 2 - publish!.y - publish!.height / 2)).toBeLessThan(2);
   await page.screenshot({ path: "e2e-artifacts/edit-tested.png" });
   await setup.getByRole("button", { name: "Publish changes" }).click();
-  await expect(setup.getByText("Timers will use v4 at the next run time.")).toBeVisible();
+  await expect(setup.getByText(/Scheduled runs will use v4 at .*09:00.*UTC/ )).toBeVisible();
   await expect(setup.getByRole("dialog", { name: "Publish changes?" })).toHaveAccessibleDescription("Publish 1 change to this agent.");
   await setup.getByRole("button", { name: "Publish", exact: true }).click();
-  await expect(setup.getByRole("status").filter({ hasText: "Published v4." })).toHaveText("Published v4. Scheduled runs use it from the next run.");
+  await expect(setup.getByRole("status").filter({ hasText: "Published v4." })).toHaveText(/Published v4\. Scheduled runs use it at .*09:00.*UTC\./);
   await setup.getByLabel("Step 1 description").fill("Another edit");
   await expect(setup.getByText("Published v4.", { exact: false })).toHaveCount(0);
 });
@@ -1234,7 +1237,7 @@ test("reviews raw agent Details changes and enables publishing without editing s
   await page.goto(`${baseUrl}/host?scenario=edit-raw`);
   const setup = page.frameLocator("iframe");
   await setup.getByLabel("Website address").fill("https://portal.example.test/new-reports");
-  await setup.getByLabel("What should the agent do?").fill("Download the updated report.");
+  await setup.getByLabel("Goal", { exact: true }).fill("Download the updated report.");
   const rail = setup.locator(".edit-rail");
   await expect(rail.getByText("Website address", { exact: true })).toBeVisible();
   await expect(rail.getByText("Goal", { exact: true })).toBeVisible();
@@ -1253,7 +1256,7 @@ test("keeps a published raw agent editable when its stored setup has empty steps
   const setup = page.frameLocator("iframe");
   await expect(setup.getByRole("heading", { name: "Advanced instructions" })).toBeVisible();
   await expect(setup.getByText("Sleep stage · 5 s", { exact: true })).toBeVisible();
-  await setup.getByLabel("Agent stage prompt").fill("Updated legacy prompt after reopening");
+  await setup.getByLabel("Agent instructions", { exact: true }).fill("Updated legacy prompt after reopening");
   await setup.getByRole("button", { name: "Test changes" }).click();
   await expect(setup.getByText("Test completed")).toBeVisible();
   await setup.getByLabel("I checked the result").check();
@@ -1263,7 +1266,7 @@ test("keeps a published raw agent editable when its stored setup has empty steps
 test("lets maximum actions be cleared and typed without changing other raw stages", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=edit-raw`);
   const setup = page.frameLocator("iframe");
-  const limit = setup.getByLabel("Maximum actions");
+  const limit = setup.getByLabel("Maximum actions", { exact: true });
   await limit.fill("");
   await expect(limit).toHaveValue("");
   await limit.pressSequentially("32");
@@ -1273,20 +1276,20 @@ test("lets maximum actions be cleared and typed without changing other raw stage
   const saved = await page.evaluate(() => window.__savedAgents);
   expect(saved[0].config.stages[0]).toEqual({ type: "agent", prompt: "Open reports", step_limit: 32 });
   expect(JSON.stringify(saved[0].config.stages.slice(1))).toBe(JSON.stringify([{ type: "download" }, { type: "sleep", sleep_ms: 5000 }, { type: "reload" }]));
-  await setup.getByRole("button", { name: "Revert Agent stages" }).click();
+  await setup.getByRole("button", { name: "Revert Maximum actions" }).click();
   await expect(limit).toHaveValue("16");
 });
 
 test("shows invalid maximum actions on blur or test and never saves them", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=edit-raw`);
   const setup = page.frameLocator("iframe");
-  const limit = setup.getByLabel("Maximum actions");
-  for (const value of ["", "0", "1.5", "abc"]) {
+  const limit = setup.getByLabel("Maximum actions", { exact: true });
+  for (const value of ["", "0", "1.5", "abc", "129"]) {
     await limit.fill(value);
     await limit.blur();
     await expect(limit).toHaveValue(value);
     await expect(limit).toHaveAttribute("aria-invalid", "true");
-    await expect(setup.getByRole("alert")).toHaveText("Enter a whole number of 1 or more.");
+    await expect(setup.getByRole("alert")).toHaveText("Enter a whole number from 1 to 128.");
     await setup.getByRole("button", { name: "Test changes" }).click();
     expect(await page.evaluate(() => window.__savedAgents)).toEqual([]);
   }
@@ -1306,8 +1309,10 @@ test("keeps raw stages and internal agents safe", async ({ page }) => {
   }
   await expect(setup.locator("pre.raw-preserved")).toHaveCount(0);
   await page.screenshot({ path: "e2e-artifacts/edit-raw.png" });
-  await setup.getByLabel("Agent stage prompt").fill("Updated legacy prompt");
-  await expect(setup.getByText("Agent stages")).toBeVisible();
+  await setup.getByLabel("Agent instructions", { exact: true }).fill("Updated legacy prompt");
+  await expect(setup.locator(".edit-rail p")).toHaveText("1 unpublished change");
+  await page.screenshot({ path: "e2e-artifacts/edit-raw-changed.png" });
+  await expect(setup.locator(".edit-rail").getByText("Agent instructions", { exact: true })).toBeVisible();
   await setup.getByRole("button", { name: "Test changes" }).click();
   await expect(setup.getByText("Test completed")).toBeVisible();
   const rawSaved = await page.evaluate(() => window.__savedAgents);
@@ -1521,7 +1526,7 @@ for (const scenario of ["edit", "edit-raw"]) {
   test(`uses full borders rather than accent side stripes in ${scenario}`, async ({ page }) => {
     await page.goto(`${baseUrl}/host?scenario=${scenario}`);
     const setup = page.frameLocator("iframe");
-    await setup.getByLabel("What should the agent do?").fill("Changed goal");
+    await setup.getByLabel("Goal", { exact: true }).fill("Changed goal");
     const checkBorders = async () => {
       const violations = await setup.locator(".edit-agent").evaluate((root) => [root, ...root.querySelectorAll("*")].flatMap((element) => {
         const style = getComputedStyle(element);
@@ -1537,6 +1542,149 @@ for (const scenario of ["edit", "edit-raw"]) {
     await setup.getByRole("button", { name: "Publish changes" }).click();
     await expect(setup.getByRole("dialog", { name: "Publish changes?" })).toBeVisible();
     await checkBorders();
+  });
+}
+
+test("shows failure evidence and enlarges the final screen with keyboard focus", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(`${baseUrl}/host?scenario=edit-fail-evidence`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByRole("button", { name: "Test changes" }).click();
+  await expect(setup.locator(".edit-result-failed > b")).toHaveText(["Test failed", "Website problem"]);
+  await expect(setup.getByText("Failure kind:", { exact: false })).toHaveCount(0);
+  await expect(setup.getByText("Stopped at step 2: Download the statement", { exact: true })).toBeVisible();
+  await expect(setup.getByText("The reports list opened, but no file was downloaded.")).toBeVisible();
+  const thumbnail = setup.getByRole("button", { name: "Enlarge final screen" });
+  await expect(thumbnail.getByRole("img")).toHaveAttribute("alt", "I looked for the export button.");
+  await expect(thumbnail.getByRole("img")).toHaveJSProperty("naturalWidth", 1);
+  await setup.locator(".edit-result-failed").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: "e2e-artifacts/edit-failed.png" });
+  await thumbnail.click();
+  const dialog = setup.getByRole("dialog", { name: "Final screen", exact: true });
+  await expect(dialog.getByRole("img")).toBeVisible();
+  const close = dialog.getByRole("button", { name: "Close screenshot" });
+  await expect(close).toBeFocused();
+  await close.press("Tab");
+  await expect(close).toBeFocused();
+  await close.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(thumbnail).toBeFocused();
+});
+
+test("shows success files, confirmation and a final screen, or honest empty evidence", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByRole("button", { name: "Test changes" }).click();
+  await expect(setup.getByRole("link", { name: "statement.pdf" })).toBeVisible();
+  await expect(setup.getByText("Export sent", { exact: true })).toBeVisible();
+  await expect(setup.getByRole("button", { name: "Enlarge final screen" }).getByRole("img")).toBeVisible();
+  await page.goto(`${baseUrl}/host?scenario=edit-empty-result`);
+  await setup.getByRole("button", { name: "Test changes" }).click();
+  await expect(setup.getByText("The test finished successfully. No result details were returned.")).toBeVisible();
+});
+
+test("keeps the edit header and a way back for loading errors and missing agents", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-load-error`);
+  const setup = page.frameLocator("iframe");
+  await expect(setup.getByRole("heading", { name: "Edit web agent", exact: true })).toBeVisible();
+  await expect(setup.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
+  await setup.getByRole("button", { name: "Back to web agents" }).click();
+  await expect.poll(() => page.evaluate(() => window.__closeRequests)).toEqual([{}]);
+  await page.goto(`${baseUrl}/host?scenario=edit-missing`);
+  await expect(setup.getByRole("heading", { name: "Edit web agent", exact: true })).toBeVisible();
+  await expect(setup.getByRole("alert")).toContainText("This agent no longer exists. It may have been deleted.");
+  await expect(setup.getByRole("button", { name: "Retry", exact: true })).toHaveCount(0);
+  await setup.getByRole("button", { name: "Back to web agents" }).click();
+  await expect.poll(() => page.evaluate(() => window.__closeRequests)).toEqual([{}]);
+});
+
+for (const [kind, label] of [
+  ["signin", "Sign-in problem"],
+  ["website", "Website problem"],
+  ["steps", "A step didn't work"],
+  ["result", "Result problem"],
+  ["check", "Completion check failed"],
+  ["service", "Reiterate service problem"],
+  ["unknown", "Cause unknown"],
+  ["missing", "Cause unknown"],
+  ["unrecognized", "Cause unknown"],
+]) {
+  test(`shows a plain edit failure label for ${kind}`, async ({ page }) => {
+    await page.goto(`${baseUrl}/host?scenario=edit-failure-label-${kind}`);
+    const setup = page.frameLocator("iframe");
+    await setup.getByRole("button", { name: "Test changes" }).click();
+    const result = setup.getByRole("alert");
+    await expect(result.locator("> b")).toHaveText(["Test failed", label]);
+    await expect(result).not.toContainText("Failure kind:");
+    await expect(result).not.toContainText(`: ${kind}`);
+  });
+}
+
+test("reviews and reverts raw fields independently and announces only changed counts", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-raw`);
+  const setup = page.frameLocator("iframe");
+  const prompt = setup.getByLabel("Agent instructions", { exact: true });
+  const limit = setup.getByLabel("Maximum actions", { exact: true });
+  const rail = setup.locator(".edit-rail");
+  const status = rail.getByRole("status");
+  await expect(status).toHaveText("No unpublished changes");
+  await expect(rail.locator("p")).toHaveText("No changes yet.");
+  await prompt.fill("Open updated reports\nDownload the report");
+  await expect(status).toHaveText("1 unpublished change");
+  await expect(rail.locator("p")).toHaveText("1 unpublished change");
+  await expect(rail.getByText("Open reports → Open updated reports", { exact: true })).toBeVisible();
+  await prompt.pressSequentially(" now");
+  await expect(status).toHaveText("1 unpublished change");
+  await limit.fill("32");
+  await expect(status).toHaveText("2 unpublished changes");
+  await expect(rail.locator("p")).toHaveText("2 unpublished changes");
+  await expect(rail.getByText("16 → 32", { exact: true })).toBeVisible();
+  await rail.getByRole("button", { name: "Revert Agent instructions", exact: true }).click();
+  await expect(prompt).toHaveValue("Open reports");
+  await expect(prompt).toBeFocused();
+  await expect(limit).toHaveValue("32");
+  await expect(status).toHaveText("1 unpublished change");
+  await rail.getByRole("button", { name: "Revert Maximum actions", exact: true }).click();
+  await expect(limit).toHaveValue("16");
+  await expect(limit).toBeFocused();
+  await expect(status).toHaveText("No unpublished changes");
+  await expect(rail.locator("p")).toHaveText("No changes yet.");
+  await setup.getByRole("button", { name: "Test changes" }).click();
+  await expect(setup.getByText("Test completed")).toBeVisible();
+  expect(JSON.stringify((await page.evaluate(() => window.__savedAgents))[0].config.stages)).toBe(JSON.stringify([{ type: "agent", prompt: "Open reports", step_limit: 16 }, { type: "download" }, { type: "sleep", sleep_ms: 5000 }, { type: "reload" }]));
+});
+
+test("moves focus to reverted structured fields and to Changes after removing an addition", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit`);
+  const setup = page.frameLocator("iframe");
+  const goal = setup.getByLabel("Goal", { exact: true });
+  await goal.fill("Changed goal");
+  await setup.getByRole("button", { name: "Revert Goal", exact: true }).click();
+  await expect(goal).toBeFocused();
+  const instruction = setup.getByLabel("Step 1 description");
+  await instruction.fill("Changed instruction");
+  await setup.getByRole("button", { name: "Revert Step 1 instruction", exact: true }).click();
+  await expect(instruction).toBeFocused();
+  await setup.getByRole("button", { name: "Insert step" }).click();
+  await setup.getByRole("button", { name: "Revert Step added", exact: true }).click();
+  await expect(setup.getByRole("heading", { name: "Changes", exact: true })).toBeFocused();
+});
+
+for (const scenario of ["edit", "edit-raw"]) {
+  test(`places Changes before Test & publish and fits the iframe at 960px in ${scenario}`, async ({ page }) => {
+    await page.setViewportSize({ width: 960, height: 900 });
+    await page.goto(`${baseUrl}/host?scenario=${scenario}`);
+    const setup = page.frameLocator("iframe");
+    await setup.getByLabel("Goal", { exact: true }).fill("Changed goal");
+    const rail = await setup.locator(".edit-rail").boundingBox();
+    const publish = await setup.getByRole("heading", { name: "Test & publish", exact: true }).boundingBox();
+    expect(rail!.y + rail!.height).toBeLessThan(publish!.y);
+    expect(await setup.locator("html").evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    await expect(setup.getByRole("button", { name: "Close edit page" })).toBeInViewport();
+    if (scenario === "edit") {
+      await setup.locator(".edit-rail").scrollIntoViewIfNeeded();
+      await page.screenshot({ path: "e2e-artifacts/edit-narrow.png" });
+    }
   });
 }
 
@@ -1639,6 +1787,7 @@ function hostPage(url: string): string {
       if (scenario === "delayed-ready") setTimeout(() => send({ schedule: true }), 300);
       else send({ schedule: true, mode: edit ? "edit" : "create", credentials: scenario !== "sign-in-unsupported", emailRoutes: !legacy, chooseSchedule: !legacy && scenario !== "no-text" });
     } else if (request.method === "loadAgent") {
+      if (scenario === "edit-missing") { fail("This agent no longer exists. It may have been deleted."); return; }
       if (!window.__loadAvailable) { fail("Loading failed. Try again."); return; }
       send({ agentId: "agent-1", name: editName, url: publishedDraft?.draft.url ?? "https://portal.example.test/reports", goal: publishedDraft?.draft.goal ?? "Download the monthly report.", steps: publishedDraft?.draft.steps ?? (scenario === "edit-raw" ? null : scenario === "edit-raw-empty" ? [] : editSteps), stages: publishedDraft?.config.stages ?? [{ type: "agent", prompt: "Open reports", step_limit: 16 }, { type: "download" }, { type: "sleep", sleep_ms: 5000 }, { type: "reload" }], liveConfigId: "config-3", version: editVersion, internal, schedule: scenario === "edit-schedule" ? "Daily 09:00 UTC" : null, nextRunAt: scenario === "edit-schedule" ? "2026-10-02T09:00:00Z" : null });
     } else if (request.method === "renameAgent") { window.__renameRequests.push(request.params.name); if (scenario === "edit-rename-error" && window.__renameRequests.length === 1) fail("Rename failed. Try again."); else { editName = request.params.name; send(null); }
@@ -1648,12 +1797,18 @@ function hostPage(url: string): string {
       if (scenario === "edit-conflict" && !request.params.overwrite && !publishedConflict) { publishedConflict = true; send({ conflict: { updatedBy: "teammate@example.test", updatedAt: "2026-10-01T10:00:00Z" } }); }
       else { editVersion += 1; publishedDraft = window.__savedAgents.at(-1); if (scenario === "edit-slow-publish") setTimeout(() => send({ version: editVersion }), 2000); else send({ version: editVersion }); }
     } else if (request.method === "requestCredentials") { window.__credentialRequests.push(request.params); send({ saved: request.params.kinds }); } else if (request.method === "startRecording") { window.__startUrls.push(request.params.url); if (edit ? recordingExists : recordingActive) { fail("Finish the current demonstration first."); return; } recordingActive = true; recordingExists = true; send({ id: "recording-1", status: "recording", liveViewUrl: "https://live.browserbase.com/session", steps: edit ? [] : steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
-    else if (request.method === "getRecording" || request.method === "stopRecording") { if (request.method === "stopRecording" && edit) recordingActive = false; send({ id: "recording-1", status: request.method === "getRecording" && recordingActive ? "recording" : "stopped", liveViewUrl: "https://live.browserbase.com/session", steps: edit ? (request.method === "stopRecording" ? redemonstrationSteps : []) : steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
+    else if (request.method === "getRecording" || request.method === "stopRecording") { if (request.method === "stopRecording") recordingActive = false; send({ id: "recording-1", status: request.method === "getRecording" && recordingActive ? "recording" : "stopped", liveViewUrl: "https://live.browserbase.com/session", steps: edit ? (request.method === "stopRecording" ? redemonstrationSteps : []) : steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
     else if (request.method === "cancelRecording") { recordingActive = false; recordingExists = false; send(undefined); }
     else if (request.method === "saveAgent") { if (window.__savedSchedule || scenario === "rerun-save-rejection" && window.__savedAgents.length > 0) fail("This agent is scheduled. Edit it in agent settings."); else { window.__savedAgents.push(request.params); send({ id: "agent-1" }); } }
     else if (request.method === "testAgent") { testAttempts += 1; window.__testArguments.push(request.params.arguments); exportSentAt = Date.now(); if (scenario === "email-cutoff" && window.__testArguments.length > 1) setTimeout(() => send({ id: "run-" + window.__testArguments.length }), 1000); else send({ id: "run-" + window.__testArguments.length }); }
     else if (request.method === "getTestRun") {
-      if (scenario === "service-failure") send({ status: "failed", failure: { kind: "service", message: "The AI service did not respond." }, stoppedAtStep: null, screens: [] });
+      if (scenario === "edit-fail-evidence") send({ status: "failed", failure: { kind: "website", message: "The download button was missing." }, stoppedAtStep: 2, confirmation: "The reports list opened, but no file was downloaded.", screens: [{ ...screen, thought: "Earlier screen" }, screen] });
+      else if (scenario.startsWith("edit-failure-label-")) {
+        const kind = scenario.slice("edit-failure-label-".length);
+        send({ status: "failed", failure: kind === "missing" ? null : { kind, message: "The test could not finish." } });
+      }
+      else if (scenario === "edit-empty-result") send({ status: "succeeded", files: [], screens: [], confirmation: null });
+      else if (scenario === "service-failure") send({ status: "failed", failure: { kind: "service", message: "The AI service did not respond." }, stoppedAtStep: null, screens: [] });
       if (scenario === "service-failure-midrun") send({ status: "failed", failure: { kind: "service", message: "The AI service did not respond." }, stoppedAtStep: 2, screens: [] });
       else if (scenario === "described-failure") send({ status: "failed", failure: { kind: "steps", message: "Success criterion not met: the page still shows Export pending" }, stoppedAtStep: 2, screens: [screen] });
       else if (scenario === "unknown-failure") send({ status: "failed", error: "The test stopped, but its cause is unknown. Try again.", failure: { kind: "unknown", message: "The test stopped, but its cause is unknown. Try again." }, stoppedAtStep: 2, confirmation: null, files: [], screens: [screen] });

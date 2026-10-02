@@ -635,9 +635,13 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
   const modalRef = useRef<HTMLDivElement>(null);
   const recordingRef = useRef<Recording | null>(null);
   const dialogTriggerRef = useRef<HTMLElement | null>(null);
-  const insertedStepRef = useRef<HTMLTextAreaElement>(null);
+  const insertedStepRef = useRef<HTMLTextAreaElement | null>(null);
   const [insertedStepId, setInsertedStepId] = useState<string | null>(null);
-  const dialogOpen = publishOpen || conflict !== null || confirmClose;
+  const [screenOpen, setScreenOpen] = useState(false);
+  const revertFocusRef = useRef<string | null>(null);
+  const changesHeadingRef = useRef<HTMLHeadingElement>(null);
+  const fieldRefs = useRef<Record<string, HTMLInputElement | HTMLTextAreaElement | null>>({});
+  const dialogOpen = publishOpen || conflict !== null || confirmClose || screenOpen;
 
   const load = async (): Promise<void> => {
     setBusy(true); setError(null);
@@ -683,7 +687,7 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        if (!busy) { setPublishOpen(false); setConflict(null); setConfirmClose(false); }
+        if (!busy) { setPublishOpen(false); setConflict(null); setConfirmClose(false); setScreenOpen(false); }
       } else if (event.key === "Tab") {
         const controls = Array.from(dialog?.querySelectorAll<HTMLElement>("button:not(:disabled)") ?? []);
         const first = controls[0], last = controls[controls.length - 1];
@@ -698,14 +702,32 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
   }, [dialogOpen, busy, conflict]);
   useEffect(() => { insertedStepRef.current?.focus(); }, [insertedStepId]);
 
-  if (agent === null || draft === null) return <main className="setup-unavailable edit-agent edit-loading">{error ? <div role="alert"><p>{error}</p><button className="button button-primary" onClick={() => void load()}>Retry</button></div> : <p className="edit-status" role="status"><span className="edit-spinner" aria-hidden="true" />Loading agent…</p>}</main>;
+  useEffect(() => {
+    const key = revertFocusRef.current;
+    if (key === null) return;
+    revertFocusRef.current = null;
+    (fieldRefs.current[key] ?? changesHeadingRef.current)?.focus();
+  }, [draft, stages, stageLimitInputs]);
+
+  if (agent === null || draft === null) return <main className="agent-setup edit-agent">
+    <header className="setup-header edit-header"><h1>Edit web agent</h1></header>
+    <section className="edit-layout">
+      {error ? <div className="edit-card" role="alert"><p>{error}</p><div className="edit-actions">
+        {!error.includes("no longer exists") && <button className="button button-primary" disabled={busy} onClick={() => void load()}>Retry</button>}
+        <button className="button button-quiet" disabled={busy} onClick={() => void bridge.request("close", {}).catch((e) => setError(errorMessage(e)))}>Back to web agents</button>
+      </div></div> : <p className="edit-status" role="status"><span className="edit-spinner" aria-hidden="true" />Loading agent…</p>}
+    </section>
+  </main>;
   const live: SetupDraft = { name: agent.name, url: agent.url, goal: agent.goal, steps: agent.steps ?? [], inputs: [] };
   const raw = agent.steps === null || agent.steps.length === 0;
   const changes = [...draftChanges(draft, live), ...(raw ? rawStageChanges(stages, agent.stages) : [])];
   const changed = changes.length > 0;
+  const changeCount = `${changes.length} unpublished ${changes.length === 1 ? "change" : "changes"}`;
+  const lastScreen = testRun?.screens?.at(-1);
+  const nextRunTime = agent.nextRunAt ? formatNextRun(agent.nextRunAt) : null;
   const succeeded = testRun?.status === "succeeded";
   const recordingActive = recording?.status === "recording";
-  const readOnly = agent.internal || busy || recordingActive || testRun?.status === "running";
+  const readOnly = agent.internal || busy || dialogOpen || recordingActive || testRun?.status === "running";
   const canPublish = !agent.internal && changed && checked && succeeded && !recordingActive;
   const publishHelp = agent.internal ? "Managed by Operations. Publishing changes is disabled." : !changed ? "Make a change to publish." : !succeeded ? "Test your changes before publishing." : !checked ? "Confirm you checked the result." : "Ready to publish your changes.";
   const selectedFromStep = Math.min(fromStep, Math.max(0, draft.steps.length - 1));
@@ -751,7 +773,7 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
       if ("conflict" in result) { setPublishOpen(false); setConflict(result.conflict); } else {
         setPublishOpen(false); setConflict(null);
         await load();
-        setNotice(`Published v${result.version}.${agent.schedule ? " Scheduled runs use it from the next run." : ""}`);
+        setNotice(`Published v${result.version}.${agent.schedule ? ` Scheduled runs use it ${nextRunTime ? `at ${nextRunTime}` : "from the next run"}.` : ""}`);
       }
     } catch (e) { setError(errorMessage(e)); }
     finally { setBusy(false); setOperation(null); }
@@ -773,7 +795,24 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
     finally { setBusy(false); }
   };
   const revert = (key: string): void => {
-    if (raw && key === "stages") { setStages(agent.stages); setStageLimitInputs({}); setStageLimitErrors({}); resetTest(); return; }
+    revertFocusRef.current = key;
+    if (raw && key.startsWith("stage:")) {
+      const [, stageIndex, field] = key.split(":");
+      const index = Number(stageIndex);
+      const original = agent.stages[index];
+      setStages((current) => current.map((stage, i) => {
+        if (i !== index || !isObject(stage) || !isObject(original)) return stage;
+        const next = { ...stage };
+        if (Object.prototype.hasOwnProperty.call(original, field)) next[field] = original[field];
+        else delete next[field];
+        return next;
+      }));
+      if (field === "step_limit") {
+        setStageLimitInputs((current) => { const next = { ...current }; delete next[index]; return next; });
+        setStageLimitErrors((current) => ({ ...current, [index]: false }));
+      }
+      resetTest(); return;
+    }
     if (key === "url" || key === "goal") update({ [key]: live[key] });
     else if (key === "steps") {
       const ordered = live.steps.flatMap((step) => draft.steps.filter((item) => item.id === step.id));
@@ -792,7 +831,7 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
 
   const close = async (): Promise<void> => {
     setBusy(true); setError(null);
-    try { await bridge.request("close", { agentId: agent.agentId }); setConfirmClose(false); }
+    try { await bridge.request("close", { agentId: agent.agentId }); setConfirmClose(false); setScreenOpen(false); }
     catch (e) { setError(errorMessage(e)); }
     finally { setBusy(false); }
   };
@@ -813,7 +852,7 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
       <div className="edit-heading">
         <h1 className="visually-hidden">Edit web agent</h1>
         <div className="edit-title">
-          <label className="edit-name"><span>Agent name</span><input value={draft.name} size={Math.max(12, draft.name.length)} disabled={agent.internal || renaming || busy} aria-invalid={renameError !== null} aria-describedby={renameError ? "rename-error" : undefined}
+          <label className="edit-name"><span>Agent name</span><input value={draft.name} size={Math.max(12, draft.name.length)} disabled={agent.internal || renaming || busy} aria-invalid={renameError !== null} aria-describedby={renameError ? "edit-name-help rename-error" : "edit-name-help"}
             onChange={(e) => { setDraft({ ...draft, name: e.target.value }); setRenameSaved(false); setNotice(null); }}
             onBlur={(e) => void rename(e.target.value)}
             onKeyDown={(e) => {
@@ -822,8 +861,9 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
             }} /></label>
           <span className="edit-rename-status" role="status">{renaming ? "Saving…" : renameSaved ? "Saved" : ""}</span>
           <span className="edit-version">Live v{agent.version}</span>
-          {agent.schedule && <span className="edit-schedule">{agent.schedule}{agent.nextRunAt ? ` · next run ${formatConflictDate(agent.nextRunAt)}` : ""}</span>}
+          {agent.schedule && <span className="edit-schedule">{agent.schedule}{agent.nextRunAt ? ` · next run ${nextRunTime}` : ""}</span>}
         </div>
+        <p className="edit-name-help" id="edit-name-help">Name saves automatically</p>
         {renameError && <p id="rename-error" className="edit-rename-error" role="alert">{renameError}</p>}
       </div>
       <button className="icon-button" aria-label="Close edit page" title="Close edit page" disabled={dialogOpen} onClick={(e) => requestClose(e.currentTarget)}><EditIcon name="close" /></button>
@@ -834,13 +874,13 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
       {notice && <p className="edit-result edit-result-succeeded" role="status">{notice}</p>}
       <div className="edit-grid"><div className="edit-main">
         <section className="edit-card"><h2>Details</h2>
-          <label>Website address<input aria-label="Website address" value={draft.url} disabled={readOnly} onChange={(e) => update({ url: e.target.value })} /></label>
-          <label>Goal{raw && <span className="field-note">Describes the agent. Change its actions in Advanced instructions.</span>}<textarea aria-label="What should the agent do?" value={draft.goal} disabled={readOnly} onChange={(e) => update({ goal: e.target.value })} /></label>
+          <label>Website address<input ref={(field) => { fieldRefs.current.url = field; }} aria-label="Website address" value={draft.url} disabled={readOnly} onChange={(e) => update({ url: e.target.value })} /></label>
+          <label>Goal{raw && <span id="edit-goal-help" className="field-note">Describes the agent. Change its actions in Advanced instructions.</span>}<textarea ref={(field) => { fieldRefs.current.goal = field; }} aria-label="Goal" aria-describedby={raw ? "edit-goal-help" : undefined} value={draft.goal} disabled={readOnly} onChange={(e) => update({ goal: e.target.value })} /></label>
         </section>
         {raw ? <section className="edit-card"><h2>Advanced instructions</h2>
           {stages.map((stage, index) => { const item = isObject(stage) ? stage : null; return item?.type === "agent" ? <div className="raw-stage" key={index}>
-            <label>Agent instructions<textarea aria-label="Agent stage prompt" value={String(item.prompt ?? "")} disabled={readOnly} onChange={(e) => updateStage(index, { prompt: e.target.value })} /></label>
-            <label>Maximum actions<input aria-label="Maximum actions" type="text" inputMode="numeric" value={stageLimitInputs[index] ?? String(item.step_limit ?? 1)} disabled={readOnly} aria-invalid={stageLimitErrors[index] ?? false} aria-describedby={stageLimitErrors[index] ? `stage-limit-error-${index}` : undefined}
+            <label>Agent instructions<textarea ref={(field) => { fieldRefs.current[`stage:${index}:prompt`] = field; }} aria-label="Agent instructions" value={String(item.prompt ?? "")} disabled={readOnly} onChange={(e) => updateStage(index, { prompt: e.target.value })} /></label>
+            <label>Maximum actions<input ref={(field) => { fieldRefs.current[`stage:${index}:step_limit`] = field; }} aria-label="Maximum actions" type="text" inputMode="numeric" value={stageLimitInputs[index] ?? String(item.step_limit ?? 1)} disabled={readOnly} aria-invalid={stageLimitErrors[index] ?? false} aria-describedby={`stage-limit-help-${index}${stageLimitErrors[index] ? ` stage-limit-error-${index}` : ""}`}
               onChange={(e) => {
                 const value = e.target.value;
                 setStageLimitInputs((current) => ({ ...current, [index]: value }));
@@ -849,15 +889,15 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
                 else resetTest();
               }}
               onBlur={(e) => setStageLimitErrors((current) => ({ ...current, [index]: !validStepLimit(e.target.value) }))} />
-              {stageLimitErrors[index] && <span id={`stage-limit-error-${index}`} className="edit-rename-error" role="alert">Enter a whole number of 1 or more.</span>}
-              <span className="field-note">The agent stops after this many browser actions.</span></label>
+              {stageLimitErrors[index] && <span id={`stage-limit-error-${index}`} className="edit-rename-error" role="alert">Enter a whole number from 1 to 128.</span>}
+              <span id={`stage-limit-help-${index}`} className="field-note">The agent stops after this many browser actions.</span></label>
           </div> : <div className="raw-preserved" key={index}><span>{preservedStageLabel(item)}</span><span className="raw-unchanged">Kept as is</span></div>; })}
         </section> : <section className="edit-card"><h2>Steps</h2>
           <div className="edit-steps">{draft.steps.map((step, index) => <div className="edit-step" key={step.id}>
             <b>{index + 1}</b>
             <div>
-              <label><span className="edit-field-label">Instruction</span><textarea ref={step.id === insertedStepId ? insertedStepRef : undefined} rows={1} placeholder="Describe the action" aria-label={`Step ${index + 1} description`} value={step.description} disabled={readOnly} onChange={(e) => update({ steps: draft.steps.map((item) => item.id === step.id ? { ...item, description: e.target.value } : item) })} /></label>
-              <label><span className="edit-field-label">Expected outcome (optional)</span><textarea rows={1} placeholder="What should happen?" aria-label={`Step ${index + 1} expected outcome`} value={step.expectedOutcome ?? ""} disabled={readOnly} onChange={(e) => update({ steps: draft.steps.map((item) => item.id === step.id ? { ...item, expectedOutcome: e.target.value } : item) })} /></label>
+              <label><span className="edit-field-label">Instruction</span><textarea ref={(field) => { fieldRefs.current[`step:${step.id}:description`] = field; fieldRefs.current[`removed:${step.id}`] = field; if (step.id === insertedStepId) insertedStepRef.current = field; }} rows={1} placeholder="Describe the action" aria-label={`Step ${index + 1} description`} value={step.description} disabled={readOnly} onChange={(e) => update({ steps: draft.steps.map((item) => item.id === step.id ? { ...item, description: e.target.value } : item) })} /></label>
+              <label><span className="edit-field-label">Expected outcome (optional)</span><textarea ref={(field) => { fieldRefs.current[`step:${step.id}:outcome`] = field; }} rows={1} placeholder="What should happen?" aria-label={`Step ${index + 1} expected outcome`} value={step.expectedOutcome ?? ""} disabled={readOnly} onChange={(e) => update({ steps: draft.steps.map((item) => item.id === step.id ? { ...item, expectedOutcome: e.target.value } : item) })} /></label>
             </div>
             <div className="edit-step-controls">
               <button className="icon-button" aria-label={`Move step ${index + 1} up`} title={`Move step ${index + 1} up`} disabled={readOnly || index === 0} onClick={() => update({ steps: moveStep(draft.steps, index, -1) })}><EditIcon name="up" /></button>
@@ -876,10 +916,25 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
           {recording?.status === "expired" && <p className="edit-result edit-result-failed" role="alert">Demonstration expired. Re-demonstrate again.</p>}
           {recordingActive && <div className="browser-frame edit-recording">{browserbaseLiveViewUrl(recording.liveViewUrl) ? <iframe title="Virtual browser" src={browserbaseLiveViewUrl(recording.liveViewUrl)!} allow="clipboard-read; clipboard-write" /> : <p>Opening the virtual browser.</p>}</div>}
         </section>}
-        <section className="edit-card"><h2>Test &amp; publish</h2><p>Timers continue using the live version until you publish.</p>
-          {testRun?.status === "running" && <div className="edit-status" role="status"><span className="edit-spinner" aria-hidden="true" />Test is running.{testRun.liveViewUrl && <a href={testRun.liveViewUrl} target="_blank" rel="noreferrer">Watch the test</a>}</div>}
-          {testRun?.status === "failed" && <div className="edit-result edit-result-failed" role="alert"><b>Test failed</b><p>{testRun.failure?.message ?? testRun.error}</p></div>}
-          {succeeded && <div className="edit-result edit-result-succeeded" role="status"><b>Test completed</b>{testRun.files && testRun.files.length > 0 && <ul className="edit-files">{testRun.files.map((file) => <li key={file.url}><a href={file.url} target="_blank" rel="noreferrer">{file.name}</a></li>)}</ul>}</div>}
+        <aside className="edit-rail"><section className="edit-card"><h2 ref={changesHeadingRef} tabIndex={-1}>Changes</h2>
+          {changed && <p>{changeCount}</p>}
+          <span className="visually-hidden" role="status">{changed ? changeCount : "No unpublished changes"}</span>
+          {changes.length === 0 ? <p>No changes yet.</p> : changes.map((change) => <div className="change-item" key={change.key}><b>{change.label}</b><span>{change.from || "Empty"} → {change.to || "Empty"}</span><button className="text-button" aria-label={`Revert ${change.label}`} disabled={readOnly} onClick={() => revert(change.key)}>Revert</button></div>)}
+        </section></aside>
+        <section className="edit-card"><h2>Test &amp; publish</h2><p>Scheduled runs continue using the live version until you publish.</p>
+          {testRun?.status === "running" && <div className="edit-status" role="status"><span className="edit-spinner" aria-hidden="true" />Test is running.{testRun.liveViewUrl && <a href={testRun.liveViewUrl} target="_blank" rel="noreferrer" aria-label="Watch the test (opens in a new tab)">Watch the test</a>}</div>}
+          {testRun && testRun.status !== "running" && <div className={`edit-result edit-result-${succeeded ? "succeeded" : "failed"}`} role={succeeded ? "status" : "alert"}>
+            <b>{succeeded ? "Test completed" : "Test failed"}</b>
+            {!succeeded && <>
+              <b>{editFailureLabel(testRun.failure?.kind)}</b>
+              {(testRun.failure?.message || testRun.error) && <p>{testRun.failure?.message || testRun.error}</p>}
+            </>}
+            {testRun.stoppedAtStep != null && <p>Stopped at step {testRun.stoppedAtStep}{draft.steps[testRun.stoppedAtStep - 1]?.description ? `: ${draft.steps[testRun.stoppedAtStep - 1]!.description}` : ""}</p>}
+            {testRun.confirmation && <p>{testRun.confirmation}</p>}
+            {testRun.files && testRun.files.length > 0 && <ul className="edit-files">{testRun.files.map((file) => <li key={file.url}><a href={file.url} target="_blank" rel="noreferrer">{file.name}</a></li>)}</ul>}
+            {lastScreen && <button className="edit-screen-thumbnail" aria-label="Enlarge final screen" onClick={(e) => { dialogTriggerRef.current = e.currentTarget; setScreenOpen(true); }}><img src={lastScreen.image} alt={lastScreen.thought || "Final screen"} /></button>}
+            {!testRun.failure?.message && !testRun.error && !testRun.confirmation && !testRun.files?.length && !lastScreen && <p>{succeeded ? "The test finished successfully. No result details were returned." : "The test stopped. No result details were returned. Try again."}</p>}
+          </div>}
           <div className="edit-actions">
             <button className={`button ${succeeded ? "button-quiet" : "button-primary"}`} aria-busy={operation === "test"} disabled={busy || agent.internal || testRun?.status === "running" || recordingActive} onClick={() => void test()}>{operation === "test" ? "Starting test…" : testRun?.status === "failed" ? "Run test again" : succeeded ? "Test again" : "Test changes"}</button>
             {succeeded && <label className="result-check"><input aria-label="I checked the result" type="checkbox" checked={checked} disabled={readOnly} onChange={(e) => setChecked(e.target.checked)} /> I checked the result</label>}
@@ -887,17 +942,18 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
           </div>
           <p id="edit-publish-help">{publishHelp}</p>
         </section>
-      </div><aside className="edit-rail"><section className="edit-card"><h2>Changes</h2>
-        {changes.length === 0 ? <p>No changes yet.</p> : changes.map((change) => <div className="change-item" key={change.key}><b>{change.label}</b><span>{change.from || "Empty"} → {change.to || "Empty"}</span><button className="text-button" aria-label={`Revert ${change.label}`} disabled={readOnly} onClick={() => revert(change.key)}>Revert</button></div>)}
-      </section></aside></div>
+      </div></div>
     </section>
+    {screenOpen && lastScreen && <div className="edit-modal" role="dialog" aria-modal="true" aria-labelledby="edit-screen-title"><div className="edit-modal-card edit-screen-dialog" ref={modalRef} tabIndex={-1}>
+      <h2 id="edit-screen-title">Final screen</h2><button className="button button-quiet" onClick={() => setScreenOpen(false)}>Close screenshot</button><img src={lastScreen.image} alt={lastScreen.thought || "Final screen"} />
+    </div></div>}
     {confirmClose && <div className="close-confirmation" role="dialog" aria-modal="true" aria-labelledby="close-edit-title" aria-describedby="close-edit-description"><div className="close-confirmation-card" ref={modalRef} tabIndex={-1}>
       <h2 id="close-edit-title">Discard your changes?</h2><p id="close-edit-description">Your unpublished changes and any active test or re-demonstration will be left behind.</p>
       <div className="edit-actions"><button className="button button-quiet" onClick={() => setConfirmClose(false)} disabled={busy}>Keep editing</button><button className="button button-danger" onClick={() => void close()} disabled={busy}>Discard changes</button></div>
     </div></div>}
     {publishOpen && <div className="edit-modal" role="dialog" aria-modal="true" aria-labelledby="publish-edit-title" aria-describedby="publish-edit-description"><div className="edit-modal-card" ref={modalRef} tabIndex={-1}>
       <h2 id="publish-edit-title">Publish changes?</h2><p id="publish-edit-description">Publish {changes.length} {changes.length === 1 ? "change" : "changes"} to this agent.</p>
-      {agent.schedule && <p className="edit-notice">Timers will use v{agent.version + 1} at the next run time.</p>}
+      {agent.schedule && <p className="edit-notice">Scheduled runs will use v{agent.version + 1} {nextRunTime ? `at ${nextRunTime}` : "at the next run time"}.</p>}
       <div className="edit-actions"><button className="button button-quiet" disabled={busy} onClick={() => setPublishOpen(false)}>Cancel</button><button className="button button-primary" disabled={busy} aria-busy={operation === "publish"} onClick={() => void publish(false)}>{operation === "publish" ? "Publishing…" : "Publish"}</button></div>
     </div></div>}
     {conflict && <div className="edit-modal" role="dialog" aria-modal="true" aria-labelledby="conflict-edit-title" aria-describedby="conflict-edit-description"><div className="edit-modal-card conflict-modal" ref={modalRef} tabIndex={-1}>
@@ -908,16 +964,44 @@ function EditScreen({ bridge }: { bridge: HostBridge }): JSX.Element {
   </main>;
 }
 
-function validStepLimit(value: string): boolean { return value.trim() !== "" && Number.isInteger(Number(value)) && Number(value) >= 1; }
+function validStepLimit(value: string): boolean { return value.trim() !== "" && Number.isInteger(Number(value)) && Number(value) >= 1 && Number(value) <= 128; }
 
 function EditIcon({ name }: { name: "back" | "up" | "down" | "close" }): JSX.Element {
   const path = { back: "M19 12H5m6-6-6 6 6 6", up: "M12 19V5m-6 6 6-6 6 6", down: "M12 5v14m-6-6 6 6 6-6", close: "M6 6l12 12M18 6L6 18" }[name];
   return <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none"><path d={path} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>;
 }
 
+function editFailureLabel(kind: string | null | undefined): string {
+  switch (kind) {
+    case "signin": return "Sign-in problem";
+    case "website": return "Website problem";
+    case "steps": return "A step didn't work";
+    case "result": return "Result problem";
+    case "check": return "Completion check failed";
+    case "service": return "Reiterate service problem";
+    default: return "Cause unknown";
+  }
+}
 function isObject(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null; }
 function moveStep(steps: SetupStep[], index: number, delta: number): SetupStep[] { const next = [...steps]; const target = index + delta; if (target < 0 || target >= next.length) return next; [next[index], next[target]] = [next[target]!, next[index]!]; return next; }
-function rawStageChanges(current: unknown[], live: unknown[]): Array<{ key: string; label: string; from: string; to: string }> { return JSON.stringify(current) === JSON.stringify(live) ? [] : [{ key: "stages", label: "Agent stages", from: "Live instructions", to: "Edited instructions" }]; }
+function rawStageChanges(current: unknown[], live: unknown[]): Array<{ key: string; label: string; from: string; to: string }> {
+  return current.flatMap((stage, index) => {
+    const original = live[index];
+    if (!isObject(stage) || stage.type !== "agent" || !isObject(original)) return [];
+    return (["prompt", "step_limit"] as const).flatMap((field) => {
+      if (stage[field] === original[field]) return [];
+      let from = String(original[field] ?? ""), to = String(stage[field] ?? "");
+      if (field === "prompt") {
+        const before = from.split("\n"), after = to.split("\n");
+        const line = Array.from({ length: Math.max(before.length, after.length) }, (_, i) => i).find((i) => before[i] !== after[i]) ?? 0;
+        const excerpt = (text: string): string => text.length > 80 ? `${text.slice(0, 79)}…` : text;
+        from = excerpt(before[line] ?? ""); to = excerpt(after[line] ?? "");
+      }
+      return [{ key: `stage:${index}:${field}`, label: `${field === "prompt" ? "Agent instructions" : "Maximum actions"}${current.filter((item) => isObject(item) && item.type === "agent").length > 1 ? ` (stage ${index + 1})` : ""}`, from, to }];
+    });
+  });
+}
+function formatNextRun(value: string): string { return new Intl.DateTimeFormat(undefined, { hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", timeZoneName: "short" }).format(new Date(value)); }
 function preservedStageLabel(stage: Record<string, unknown> | null): string {
   switch (stage?.type) {
     case "download": return "Download stage";
