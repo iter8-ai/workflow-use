@@ -1790,8 +1790,8 @@ test("gives raw instructions most of the screen and grows for a long prompt", as
   expect((await page.evaluate(() => window.__savedAgents))[0].config.stages[0].prompt).toBe(longPrompt);
 });
 
-test("changes saved sign-in kinds, invalidates the test, and requires a fresh checked test to publish", async ({ page }) => {
-  await page.goto(`${baseUrl}/host?scenario=edit-raw`);
+test("saves sign-in details with the same kinds, invalidates the test, and requires a fresh checked test to publish", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-raw-credentials-save`);
   const setup = page.frameLocator("iframe");
   const card = setup.getByRole("region", { name: "Sign-in details" });
   await expect(card.locator("li")).toHaveText(["Username · saved", "Password · saved"]);
@@ -1808,6 +1808,7 @@ test("changes saved sign-in kinds, invalidates the test, and requires a fresh ch
   await expect(change.getByRole("button")).toHaveCount(0);
   await expect(setup.locator(".edit-changes").getByRole("status")).toHaveText("1 unpublished change");
   await expect(setup.getByRole("button", { name: "Publish changes" })).toBeDisabled();
+  await expect(setup.getByRole("button", { name: "Publish changes" })).toHaveAccessibleDescription("Test your changes before publishing.");
   await page.screenshot({ path: "e2e-artifacts/edit-credentials.png" });
   await setup.getByRole("button", { name: "Close edit page" }).click();
   await expect(setup.getByRole("dialog", { name: "Discard your changes?" })).toBeVisible();
@@ -1822,6 +1823,60 @@ test("changes saved sign-in kinds, invalidates the test, and requires a fresh ch
   await expect(setup.getByText("Published v4.", { exact: true })).toBeVisible();
   await expect(setup.locator(".edit-changes").getByRole("status")).toHaveText("No unpublished changes");
   await expect(card.getByRole("status")).toHaveCount(0);
+});
+
+for (const scenario of ["edit-credentials-cancel", "edit-credentials-legacy-same", "edit-credentials-legacy-reordered"]) {
+  test(`keeps changes and a checked test intact for ${scenario}`, async ({ page }) => {
+    await page.goto(`${baseUrl}/host?scenario=${scenario}`);
+    const setup = page.frameLocator("iframe");
+    const card = setup.getByRole("region", { name: "Sign-in details" });
+    const change = card.getByRole("button", { name: "Change sign-in details", exact: true });
+    const publish = setup.getByRole("button", { name: "Publish changes" });
+    await change.click();
+    await expect(change).toBeEnabled();
+    await expect(card.locator("li")).toHaveText(["Username · saved", "Password · saved"]);
+    await expect(card.getByRole("status")).toHaveCount(0);
+    await expect(setup.getByText("Sign-in details: updated", { exact: true })).toHaveCount(0);
+    await expect(setup.getByText("No changes yet.", { exact: true })).toBeVisible();
+    await expect(setup.locator(".edit-changes").getByRole("status")).toHaveText("No unpublished changes");
+    await expect(publish).toBeDisabled();
+    await expect(publish).toHaveAccessibleDescription("Make a change to publish.");
+
+    await setup.getByRole("button", { name: "Test changes" }).click();
+    await setup.getByLabel("I checked the result").check();
+    await change.click();
+    await expect(change).toBeEnabled();
+    await expect(setup.getByText("Test completed", { exact: true })).toBeVisible();
+    await expect(setup.getByLabel("I checked the result")).toBeChecked();
+    await expect(setup.getByText("No changes yet.", { exact: true })).toBeVisible();
+    await expect(publish).toHaveAccessibleDescription("Make a change to publish.");
+
+    await setup.getByLabel("Goal", { exact: true }).fill("Download the latest report.");
+    await setup.getByRole("button", { name: "Test changes" }).click();
+    await setup.getByLabel("I checked the result").check();
+    await change.click();
+    await expect(change).toBeEnabled();
+    await expect(setup.getByLabel("I checked the result")).toBeChecked();
+    await expect(setup.locator(".edit-changes").getByRole("status")).toHaveText("1 unpublished change");
+    await expect(setup.getByText("Sign-in details: updated", { exact: true })).toHaveCount(0);
+    await expect(publish).toBeEnabled();
+    await expect(publish).toHaveAccessibleDescription("Ready to publish your changes.");
+  });
+}
+
+test("infers a sign-in change when an older host returns a new saved kind", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-credentials-legacy-add`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByRole("button", { name: "Test changes" }).click();
+  await setup.getByLabel("I checked the result").check();
+  await setup.getByRole("button", { name: "Add sign-in details", exact: true }).click();
+  await expect(setup.locator(".edit-credentials li")).toHaveText(["Username · saved", "Password · saved"]);
+  await expect(setup.getByText("Sign-in details: updated", { exact: true })).toBeVisible();
+  await expect(setup.locator(".edit-changes").getByRole("status")).toHaveText("1 unpublished change");
+  await expect(setup.getByText("Test completed", { exact: true })).toHaveCount(0);
+  await expect(setup.getByLabel("I checked the result")).toHaveCount(0);
+  await expect(setup.getByRole("button", { name: "Publish changes" })).toBeDisabled();
+  await expect(setup.getByRole("button", { name: "Publish changes" })).toHaveAccessibleDescription("Test your changes before publishing.");
 });
 
 for (const [scenario, kinds] of [
@@ -1960,7 +2015,7 @@ function hostPage(url: string): string {
   ];
   const redemonstrationSteps = [{ id: "download-refreshed", type: "click", description: "Download the refreshed statement", target: "Download statement" }];
   const internal = scenario === "edit-internal";
-  let savedCredentials = ["edit-credentials-empty", "edit-raw-no-signin"].includes(scenario) ? [] : ["username", "password"];
+  let savedCredentials = ["edit-credentials-empty", "edit-raw-no-signin", "edit-credentials-legacy-add"].includes(scenario) ? [] : ["username", "password"];
   if (scenario === "edit-credentials-placeholders") {
     savedCredentials = ["username"];
     editSteps[0].description += " with $password";
@@ -2008,7 +2063,15 @@ function hostPage(url: string): string {
       window.__publishRequests.push(request.params);
       if (scenario === "edit-conflict" && !request.params.overwrite && !publishedConflict) { publishedConflict = true; send({ conflict: { updatedBy: "teammate@example.test", updatedAt: "2026-10-01T10:00:00Z" } }); }
       else { editVersion += 1; publishedDraft = window.__savedAgents.at(-1); if (scenario === "edit-slow-publish") setTimeout(() => send({ version: editVersion }), 2000); else send({ version: editVersion }); }
-    } else if (request.method === "requestCredentials") { window.__credentialRequests.push(request.params); if (scenario === "edit-credentials-error") { fail("Sign-in details belong to a different website. Restore the website address first."); return; } savedCredentials = request.params.kinds; send({ saved: savedCredentials }); } else if (request.method === "startRecording") { window.__startUrls.push(request.params.url); if (edit ? recordingExists : recordingActive) { fail("Finish the current demonstration first."); return; } recordingActive = true; recordingExists = true; send({ id: "recording-1", status: "recording", liveViewUrl: "https://live.browserbase.com/session", steps: edit ? [] : steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
+    } else if (request.method === "requestCredentials") {
+      window.__credentialRequests.push(request.params);
+      if (scenario === "edit-credentials-error") { fail("Sign-in details belong to a different website. Restore the website address first."); return; }
+      if (scenario === "edit-credentials-cancel") { send({ saved: savedCredentials, changed: false }); return; }
+      if (scenario === "edit-credentials-legacy-same") { send({ saved: savedCredentials }); return; }
+      if (scenario === "edit-credentials-legacy-reordered") { savedCredentials = [...savedCredentials].reverse(); send({ saved: savedCredentials }); return; }
+      savedCredentials = request.params.kinds;
+      send({ saved: savedCredentials, ...(edit && scenario !== "edit-credentials-legacy-add" ? { changed: true } : {}) });
+    } else if (request.method === "startRecording") { window.__startUrls.push(request.params.url); if (edit ? recordingExists : recordingActive) { fail("Finish the current demonstration first."); return; } recordingActive = true; recordingExists = true; send({ id: "recording-1", status: "recording", liveViewUrl: "https://live.browserbase.com/session", steps: edit ? [] : steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
     else if (scenario === "organized" && (request.method === "getRecording" || request.method === "stopRecording")) {
       // Polls: one while recording (download started), then completed; stop starts organizing; the next read has stages.
       window.__organizedReads = (window.__organizedReads ?? 0) + 1;

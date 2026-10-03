@@ -784,8 +784,11 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
     setBusy(true); setOperation("credentials"); setCredentialError(null);
     try {
       const result = await bridge.request("requestCredentials", { kinds: signInKinds.length ? signInKinds : ["username", "password"], replace: true }, { timeoutMs: interactiveRequestTimeoutMs });
+      const previousSaved = agent.credentials?.saved ?? [];
       setAgent((current) => current === null ? current : { ...current, credentials: { saved: result.saved } });
-      setCredentialsChanged(true); resetTest();
+      if (result.changed ?? (result.saved.length !== previousSaved.length || result.saved.some((kind) => !previousSaved.includes(kind)))) {
+        setCredentialsChanged(true); resetTest();
+      }
     } catch (e) { setCredentialError(errorMessage(e)); }
     finally { setBusy(false); setOperation(null); }
   };
