@@ -133,6 +133,54 @@ export function applyOrganizedSteps(current: SetupStep[], recorded: SetupStep[],
   });
 }
 
+export type PeriodChoice = { label: string; description: string };
+
+const monthPattern = "(January|February|March|April|May|June|July|August|September|October|November|December)";
+const monthIndex = (name: string): number => ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"].indexOf(name.toLowerCase()) + 1;
+// Most specific first: "September 21, 2026" must not be read as "September 2026". Each gives [day, month, year].
+const datePatterns: Array<[RegExp, (match: RegExpExecArray) => [number | null, number, number]]> = [
+  [new RegExp(String.raw`\b${monthPattern} (\d{1,2})(?:st|nd|rd|th)?,? (\d{4})\b`, "i"), (m) => [Number(m[2]), monthIndex(m[1]!), Number(m[3])]],
+  [new RegExp(String.raw`\b(\d{1,2})(?:st|nd|rd|th)? ${monthPattern},? (\d{4})\b`, "i"), (m) => [Number(m[1]), monthIndex(m[2]!), Number(m[3])]],
+  [/\b(\d{4})-(\d{2})-(\d{2})\b/, (m) => [Number(m[3]), Number(m[2]), Number(m[1])]],
+  [/\b(\d{1,2})[./](\d{1,2})[./](\d{4})\b/, (m) => [Number(m[1]), Number(m[2]), Number(m[3])]],
+  [new RegExp(String.raw`\b${monthPattern},? (\d{4})\b`, "i"), (m) => [null, monthIndex(m[1]!), Number(m[2])]],
+];
+
+/**
+ * A demonstrated click on a dated item ("Monthly invoice due September 21, 2026") repeats that exact date
+ * on every run. Offer periods relative to the run instead; the user picks one and it replaces the instruction.
+ */
+export function periodChoices(description: string): { date: string; choices: PeriodChoice[] } | null {
+  const clicked = /^Click\s+(.+?)\.?$/i.exec(description.trim())?.[1];
+  if (clicked === undefined) return null;
+  for (const [pattern, parts] of datePatterns) {
+    const match = pattern.exec(clicked);
+    if (match === null) continue;
+    const [day, month, year] = parts(match);
+    const item = clicked.replace(match[0], " ").replace(/\s+/g, " ").trim()
+      .replace(/\s*\b(?:due|dated|from|for|of|on)$/i, "").replace(/^(?:the|a|an)\s+/i, "").trim();
+    const subject = /^[A-Z][a-z]/.test(item) ? item[0]!.toLowerCase() + item.slice(1) : item;
+    const choices: PeriodChoice[] = subject !== "" ? [
+      { label: "Most recent", description: `Click the most recent ${subject}` },
+      { label: "Last month", description: `Click last month's ${subject}` },
+      { label: "This month", description: `Click this month's ${subject}` },
+    ] : day === null ? [
+      { label: "Last month", description: "Click last month" },
+      { label: "This month", description: "Click this month" },
+    ] : day === 1 ? [
+      { label: "Last month", description: "Click the first day of last month" },
+      { label: "This month", description: "Click the first day of this month" },
+    ] : day === new Date(Date.UTC(year, month, 0)).getUTCDate() ? [
+      { label: "Last month", description: "Click the last day of last month" },
+    ] : [
+      { label: "Yesterday", description: "Click yesterday's date" },
+      { label: "Today", description: "Click today's date" },
+    ];
+    return { date: match[0], choices };
+  }
+  return null;
+}
+
 // A credential word followed by an assigned value, or directly by a token containing a
 // digit or symbol (e.g. "password correct-horse-9", "code 482913"). Sign-in wording
 // ("Enter the password and log in") and $placeholders stay allowed.

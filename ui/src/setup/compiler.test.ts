@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { applyOrganizedSteps, compileAgent, doneWhenOptions, draftChanges, findUnambiguousEmailStep, groupSteps, replaceStepsFrom, requiredCredentials, type SetupDraft, type SetupStep } from "./compiler";
+import { applyOrganizedSteps, compileAgent, doneWhenOptions, draftChanges, findUnambiguousEmailStep, groupSteps, periodChoices, replaceStepsFrom, requiredCredentials, type SetupDraft, type SetupStep } from "./compiler";
 
 const baseDraft = (): SetupDraft => ({
   name: "Download monthly statement",
@@ -501,4 +501,32 @@ test("steps added after organizing get a neutral heading instead of joining the 
     { id: "b", type: "click", description: "Click Export", target: "Export", stage: "" },
   ];
   assert.match((compileAgent(draft).stages[0] as { prompt: string }).prompt, /Sign in:\n1\. Click Log in\.\nThen:\n2\. Click Export\./);
+});
+
+test("a click on a dated item offers periods the user picks instead of the demonstrated date", () => {
+  assert.deepEqual(periodChoices("Click Monthly invoice due September 21, 2026"), {
+    date: "September 21, 2026",
+    choices: [
+      { label: "Most recent", description: "Click the most recent monthly invoice" },
+      { label: "Last month", description: "Click last month's monthly invoice" },
+      { label: "This month", description: "Click this month's monthly invoice" },
+    ],
+  });
+  assert.equal(periodChoices("Click the 21.09.2026 statement")?.choices[0]?.description, "Click the most recent statement");
+  assert.equal(periodChoices("Click Statement 2026-09-21")?.date, "2026-09-21");
+  assert.equal(periodChoices("Click VAT return for September 2026")?.choices[0]?.description, "Click the most recent VAT return");
+});
+
+test("a click on a calendar date offers dates relative to the run", () => {
+  assert.deepEqual(periodChoices("Click 1 September 2026")?.choices.map((choice) => choice.description), ["Click the first day of last month", "Click the first day of this month"]);
+  assert.deepEqual(periodChoices("Click 30 September 2026")?.choices.map((choice) => choice.description), ["Click the last day of last month"]);
+  assert.deepEqual(periodChoices("Click September 17, 2026")?.choices.map((choice) => choice.description), ["Click yesterday's date", "Click today's date"]);
+  assert.deepEqual(periodChoices("Click September 2026")?.choices.map((choice) => choice.description), ["Click last month", "Click this month"]);
+});
+
+test("steps without a fixed date in a click get no period choice", () => {
+  assert.equal(periodChoices("Click Download PDF"), null);
+  assert.equal(periodChoices("Click the most recent monthly invoice"), null);
+  assert.equal(periodChoices("Enter the date 21.09.2026"), null);
+  assert.equal(periodChoices("Click Report 2026"), null);
 });

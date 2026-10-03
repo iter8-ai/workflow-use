@@ -786,7 +786,7 @@ test("rewrites a fixed date and requires a fresh test before scheduling", async 
   await completeToTest(setup);
   await setup.getByRole("button", { name: "Run test" }).click();
   await expect(setup.getByRole("button", { name: "Continue to schedule" })).toBeVisible();
-  await setup.getByRole("button", { name: "Use last month" }).click();
+  await setup.getByRole("group", { name: "Period for step 10" }).getByRole("button", { name: "Last month" }).click();
   await expect(setup.getByText("Click the first day of last month", { exact: true })).toBeVisible();
   await expect(setup.getByText("Changes require a new test.")).toBeVisible();
   await expect(setup.getByRole("button", { name: "Continue to schedule" })).toHaveCount(0);
@@ -794,6 +794,43 @@ test("rewrites a fixed date and requires a fresh test before scheduling", async 
   await expect(setup.getByRole("button", { name: "Continue to schedule" })).toBeVisible();
   const saved = await page.evaluate(() => window.__savedAgents);
   expect(saved.at(-1).config.stages[0].prompt).not.toContain("1 September 2026");
+});
+
+test("lets the user pick the period for a dated click while reviewing", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=dated-invoice`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByLabel("Agent name").fill("Figma invoice");
+  await setup.getByLabel("Website address").fill("https://portal.example.test/reports");
+  await setup.getByLabel("What should the agent do?").fill("Download the monthly invoice.");
+  await setup.getByRole("button", { name: "Continue to demonstration" }).click();
+  await setup.getByRole("button", { name: "Finish demonstration" }).click();
+  await setup.getByRole("button", { name: "Continue to review" }).click();
+  const period = setup.getByRole("group", { name: "Period for step 2" });
+  await expect(period).toContainText("Fixed date: every run picks September 21, 2026");
+  await expect(period.getByRole("button")).toHaveText(["Most recent", "Last month", "This month"]);
+  await period.getByRole("button", { name: "Most recent" }).click();
+  await expect(setup.getByLabel("Step 2 description")).toHaveValue("Click the most recent monthly invoice");
+  await expect(period).toHaveCount(0);
+  await setup.getByRole("button", { name: "Continue to test" }).click();
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await expect.poll(() => page.evaluate(() => window.__savedAgents.length)).toBe(1);
+  const prompt = await page.evaluate(() => window.__savedAgents[0].config.stages[0].prompt);
+  expect(prompt).toContain("2. Click the most recent monthly invoice.");
+  expect(prompt).not.toContain("2026");
+});
+
+test("lets the user pick the period for a dated click while editing", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-dated`);
+  const setup = page.frameLocator("iframe");
+  const period = setup.getByRole("group", { name: "Period for step 2" });
+  await period.getByRole("button", { name: "Most recent" }).click();
+  await expect(setup.getByLabel("Step 2 description")).toHaveValue("Click the most recent monthly invoice");
+  await expect(setup.locator(".change-item")).toContainText(["Step 2 instructionClick Monthly invoice due September 21, 2026 → Click the most recent monthly invoice"]);
+  await setup.getByRole("button", { name: "Test changes" }).click();
+  await expect.poll(() => page.evaluate(() => window.__savedAgents.length)).toBe(1);
+  const saved = await page.evaluate(() => window.__savedAgents[0]);
+  expect(saved.config.stages[0].prompt).toContain("2. Click the most recent monthly invoice.");
+  expect(saved.config.stages[0].prompt).not.toContain("2026");
 });
 
 test("keeps the browser, final step, and primary action visible at desktop and narrow widths", async ({ page }) => {
@@ -2013,6 +2050,7 @@ function hostPage(url: string): string {
     { id: "open-reports", type: "click", description: "Open the reports section", target: "Reports", expectedOutcome: "The reports list is visible", ...(staged ? { stage: "Open reports" } : {}) },
     { id: "download", type: "click", description: "Download the statement", target: "Download statement", ...(staged ? { stage: "Download" } : {}) },
   ];
+  if (scenario === "edit-dated") editSteps[1] = { id: "invoice", type: "click", description: "Click Monthly invoice due September 21, 2026", target: "Monthly invoice due September 21, 2026" };
   const redemonstrationSteps = [{ id: "download-refreshed", type: "click", description: "Download the refreshed statement", target: "Download statement" }];
   const internal = scenario === "edit-internal";
   let savedCredentials = ["edit-credentials-empty", "edit-raw-no-signin", "edit-credentials-legacy-add"].includes(scenario) ? [] : ["username", "password"];
@@ -2038,6 +2076,7 @@ function hostPage(url: string): string {
       { id: "user", type: "credential", description: "Enter the saved username in Email", target: "Email", value: "username" },
       { id: "pass", type: "credential", description: "Enter the saved password in Password", target: "Password", value: "password" },
     ] : []),
+    ...(scenario === "dated-invoice" ? [{ id: "invoice", type: "click", description: "Click Monthly invoice due September 21, 2026", target: "Monthly invoice due September 21, 2026" }] : []),
     ...(scenario === "fixed-dates" ? [{ id: "first-day", type: "click", description: "Click 1 September 2026", target: "1 September 2026" }] : []),
     ...(["step-failure", "unknown-failure"].includes(scenario) ? [{ id: "export", type: "click", description: "Find the export button", target: "Export" }] : []),
     emailScenario
