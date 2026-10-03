@@ -354,3 +354,84 @@ async def test_sign_in_capture_covers_a_document_that_is_already_open() -> None:
         await browser.close()
 
     assert [event["secret"] for event in sign_ins] == ["popup-password"]
+
+
+@pytest.mark.asyncio
+async def test_clicks_in_a_sign_in_dialog_name_the_control_not_the_whole_dialog() -> None:
+    playwright = pytest.importorskip("playwright.async_api")
+    events: list[dict[str, Any]] = []
+
+    async def record(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    # Shaped like a hosted sign-in page: everything sits inside one role="main" panel.
+    fixture = (
+        '<div role="main" style="padding:40px"><h1>Welcome</h1>'
+        '<button type="button">Continue with Google</button><p id="or">or</p>'
+        '<form onsubmit="return false"><label for="email">Email</label><input id="email" name="email" type="email">'
+        '<label for="pw">Password</label><input id="pw" type="password"><button type="submit">Log in</button></form>'
+        '<span role="link" tabindex="0">Use single sign-on</span>'
+        '<a href="#reset">Reset password</a>'
+        '<div class="card" style="cursor:pointer"><b>Invoices</b><small>Monthly statements</small></div></div>'
+    )
+    async with playwright.async_playwright() as runtime:
+        browser = await runtime.chromium.launch()
+        context = await browser.new_context()
+        await context.expose_binding("workflowUseRecord", lambda _, event: record(event))
+        await context.add_init_script(CAPTURE_SCRIPT)
+        page = await context.new_page()
+        await page.goto("data:text/html," + quote(fixture))
+        await page.locator('[role="main"]').click(position={"x": 5, "y": 5})
+        await page.locator("#or").click()
+        await page.get_by_text("Email", exact=True).click()
+        await page.get_by_text("Password", exact=True).click()
+        await page.get_by_role("button", name="Continue with Google").click()
+        await page.get_by_text("Use single sign-on").click()
+        await page.get_by_text("Monthly statements").click()
+        await asyncio.sleep(0.05)
+        await browser.close()
+
+    clicks = [event["target"] for event in events if event["type"] == "click"]
+    assert clicks == ["Continue with Google", "Use single sign-on", "Monthly statements"]
+
+
+@pytest.mark.asyncio
+async def test_clicks_on_web_components_labels_rows_and_double_clicks_are_named() -> None:
+    playwright = pytest.importorskip("playwright.async_api")
+    events: list[dict[str, Any]] = []
+
+    async def record(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    fixture = (
+        '<x-button></x-button><label for="notes">Notes</label><input id="notes" name="notes">'
+        '<label><input type="checkbox"> Remember me</label>'
+        '<div role="grid"><div role="row" id="row"><span>INV-1001</span><span>12.00</span></div></div>'
+        '<button>Next page</button>'
+        "<script>customElements.define('x-button', class extends HTMLElement { constructor() { super();"
+        " this.attachShadow({ mode: 'open' }).innerHTML = '<button>Save changes</button>'; } });</script>"
+    )
+    async with playwright.async_playwright() as runtime:
+        browser = await runtime.chromium.launch()
+        context = await browser.new_context()
+        await context.expose_binding("workflowUseRecord", lambda _, event: record(event))
+        await context.add_init_script(CAPTURE_SCRIPT)
+        page = await context.new_page()
+        await page.goto("data:text/html," + quote(fixture))
+        await page.get_by_role("button", name="Save changes").click()
+        await page.get_by_text("Notes", exact=True).click()
+        await page.get_by_text("Remember me").click()
+        await page.get_by_text("INV-1001").click()
+        await page.get_by_role("button", name="Next page").dblclick()
+        await asyncio.sleep(0.05)
+        await browser.close()
+
+    clicks = [(event["target"], event.get("repeat", False)) for event in events if event["type"] == "click"]
+    assert clicks == [
+        ("Save changes", False),
+        ("Notes", False),
+        ("Remember me", False),
+        ("INV-1001 12.00", False),
+        ("Next page", False),
+        ("Next page", True),
+    ]

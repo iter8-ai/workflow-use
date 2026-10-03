@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { compileAgent, credentialKinds, doneWhenOptions, draftChanges, findUnambiguousEmailStep, replaceStepsFrom, requiredCredentials, type CredentialKind, type DoneWhen, type SetupDraft, type SetupStep } from "./compiler";
-import { browserbaseLiveViewUrl, createHostBridge, HostRequestTimeoutError, type EditAgent as EditAgentData, type HostBridge, type Recording, type TestRun } from "./host";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { applyOrganizedSteps, compileAgent, credentialKinds, doneWhenOptions, draftChanges, findUnambiguousEmailStep, groupSteps, replaceStepsFrom, requiredCredentials, type CredentialKind, type DoneWhen, type SetupDraft, type SetupStep } from "./compiler";
+import { browserbaseLiveViewUrl, createHostBridge, HostRequestTimeoutError, type EditAgent as EditAgentData, type HostBridge, type RecordedDownload, type Recording, type TestRun } from "./host";
 import { AgentScreenBar } from "./AgentScreenBar";
 import { parseAgentThought } from "./agentThought";
 import { HelpTip } from "./HelpTip";
@@ -161,6 +161,30 @@ export default function AgentSetup() {
   useEffect(() => {
     recordingRef.current = recording;
   }, [recording]);
+
+  // After the demonstration, the recorder groups the steps into stages and rewords them. Keep reading the
+  // recording until that finishes, then bring the result in without undoing edits made in the meantime.
+  useEffect(() => {
+    if (bridge === undefined || bridge === null || recording?.status !== "stopped" || recording.organizing !== true) {
+      return;
+    }
+    let active = true;
+    const recorded = recording.steps;
+    const timer = window.setTimeout(() => {
+      void bridge.request("getRecording", { id: recording.id }).then((next) => {
+        if (!active) return;
+        setRecording(next);
+        if (next.organizing !== true) setSteps((current) => applyOrganizedSteps(current, recorded, next.steps));
+      }).catch(() => {
+        // The recorded steps are already usable; organizing is only a readability improvement.
+        if (active) setRecording((current) => current === null ? null : { ...current, organizing: false });
+      });
+    }, 1_500);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [bridge, recording]);
 
   useEffect(() => {
     if (bridge === undefined || bridge === null || recording?.status !== "recording") {
@@ -350,6 +374,8 @@ export default function AgentSetup() {
       if (!credentialsAllowed && requiredCredentials(steps).length > 0) {
         throw new Error("This Reiterate page is out of date and cannot save sign-in details. Reload Reiterate and set up the agent again.");
       }
+      // What gets tested is what is on screen now; a late reorganization would no longer match it.
+      setRecording((current) => current?.organizing === true ? { ...current, organizing: false } : current);
       setScreen("test");
     } catch (compileError) {
       setError(errorMessage(compileError));
@@ -601,7 +627,7 @@ export default function AgentSetup() {
           {notice !== null && <p className="setup-notice" role="status">{notice}</p>}
           {screen === "describe" && <Describe name={name} url={url} goal={goal} busy={busy || connecting} onName={(value) => setDraftField(setName, value)} onUrl={(value) => setDraftField(setUrl, value)} onGoal={(value) => setDraftField(setGoal, value)} onContinue={() => void startRecording()} />}
           {screen === "demonstrate" && <Demonstrate recording={recording} steps={steps} liveViewUrl={liveViewUrl} busy={busy} onStop={() => void stopRecording()} onReview={continueToReview} onReset={() => void reset()} />}
-          {screen === "review" && <Review steps={steps} busy={busy} onUpdateStep={updateStep} onRemoveStep={removeStep} onBack={() => setScreen("demonstrate")} onContinue={continueToTest} />}
+          {screen === "review" && <Review steps={steps} organizing={recording?.organizing === true} busy={busy} onUpdateStep={updateStep} onRemoveStep={removeStep} onBack={() => setScreen("demonstrate")} onContinue={continueToTest} />}
           {screen === "test" && <Test steps={steps} url={url} scheduleRecovery={scheduleRecovery} emailRoutesAllowed={emailRoutesAllowed} textAllowed={chooseScheduleAllowed} doneWhen={doneWhen} emailStatus={emailStatus} emailFrom={emailFrom} emailFiles={emailFiles} canContinue={canContinue} onDoneWhen={chooseDoneWhen} onChooseEmail={() => void chooseEmailDoneWhen()} onAllowEmail={() => void allowEmailSender()} onChangeCredentials={() => void changeCredentials()} run={testRun} busy={busy} onRun={() => void runTest()} onSchedule={() => void schedule()} onBack={() => setScreen("review")} onEditStep={editTestStep} />}
           {screen === "schedule" && !scheduleSaved && <div className="setup-panel"><div className="stage-title"><h2>Schedule</h2><p>Your test passed. Scheduled runs repeat the tested steps.</p></div><p>Finish setup to run manually, or choose a daily schedule.</p>{scheduleAllowed && <><label className="result-check"><input type="checkbox" aria-label="Schedule daily" checked={cron !== ""} disabled={busy || scheduleRecovery} onChange={(event) => setCron(event.target.checked ? localTimeToUtcCron(dailyTime) : "")} />Schedule daily</label>{cron !== "" && <label>Time of day<input type="time" aria-label="Time of day" value={dailyTime} disabled={busy || scheduleRecovery} onChange={(event) => { setDailyTime(event.target.value); if (event.target.value) setCron(localTimeToUtcCron(event.target.value)); }} /><span className="field-note">Your local time. The schedule is stored in UTC.</span></label>}</>}<div className="setup-actions"><button className="button button-quiet" type="button" onClick={() => setScreen("test")} disabled={busy || scheduleRecovery}>Back to test</button><button className="button button-primary" type="button" onClick={() => void saveInlineSchedule()} disabled={!canContinue || busy || (cron !== "" && dailyTime === "")}>{cron.trim() ? "Schedule agent" : "Finish setup"}</button></div></div>}
           {scheduleSaved && <div className="setup-panel"><div className="stage-title"><h2>Your agent is ready</h2><p>{cron.trim() ? "The schedule is saved. It will repeat the tested workflow." : "Run this agent manually whenever you need it."}</p></div><div className="setup-actions"><button className="button button-primary" type="button" onClick={() => void close()} disabled={busy}>Open agent</button></div></div>}
@@ -667,6 +693,19 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
     const timer = window.setInterval(() => void bridge.request("getRecording", { id: recording.id }).then(setRecording).catch((e) => setError(errorMessage(e))), 1500);
     return () => window.clearInterval(timer);
   }, [bridge, recording?.id, recording?.status]);
+  // A re-demonstration's steps are organized like a new one. They replace the old steps as soon as the
+  // demonstration stops; stages and clearer wording follow when ready, unless those steps were edited meanwhile.
+  useEffect(() => {
+    if (recording?.status !== "stopped" || recording.organizing !== true) return;
+    let active = true;
+    const recorded = recording.steps;
+    const timer = window.setTimeout(() => void bridge.request("getRecording", { id: recording.id }).then((next) => {
+      if (!active) return;
+      setRecording(next);
+      if (next.organizing !== true) setDraft((current) => current === null ? current : { ...current, steps: applyOrganizedSteps(current.steps, recorded, next.steps) });
+    }).catch(() => { if (active) setRecording((current) => current === null ? null : { ...current, organizing: false }); }), 1500);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [bridge, recording]);
   useEffect(() => {
     if (testRun?.status !== "running" || agent === null) return;
     let active = true;
@@ -777,6 +816,8 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
     const emptyStep = raw ? -1 : draft.steps.findIndex((step) => !step.description.trim());
     if (emptyStep !== -1) { setError(`Add an instruction for step ${emptyStep + 1} before testing.`); return; }
     setBusy(true); setOperation("test"); setError(null); setTestRun(null); setChecked(false);
+    // The test runs the steps shown now; a late reorganization would no longer match it.
+    setRecording((current) => current?.organizing === true ? { ...current, organizing: false } : current);
     try {
       const config = raw ? { url: draft.url, prompt: "", options: { version: 1, engine: "computer" }, stages, parameters: {} } : compileAgent(draft);
       await bridge.request("saveDraft", { draft, config });
@@ -809,7 +850,7 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
   const stopRecording = async (): Promise<void> => {
     if (recording === null) return;
     setBusy(true);
-    try { const stopped = await bridge.request("stopRecording", { id: recording.id }); setRecording(stopped); if (stopped.steps.length > 0) update({ steps: replaceStepsFrom(draft.steps, selectedFromStep, stopped.steps) }); }
+    try { const stopped = await bridge.request("stopRecording", { id: recording.id }); setRecording(stopped); if (stopped.steps.length > 0) update({ steps: replaceStepsFrom(draft.steps, selectedFromStep, draft.steps.some((step) => step.stage != null) ? stopped.steps.map((step) => ({ ...step, stage: step.stage ?? "" })) : stopped.steps) }); }
     catch (e) { setError(errorMessage(e)); }
     finally { setBusy(false); }
   };
@@ -898,7 +939,7 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
           </div> : null; })}
           {stages.some((stage) => !isObject(stage) || stage.type !== "agent") && <p className="raw-preserved">Then: {stages.filter((stage) => !isObject(stage) || stage.type !== "agent").map((stage) => preservedStageLabel(isObject(stage) ? stage : null)).join(" · ")} — kept as is</p>}
         </section> : <section className="edit-card edit-instructions"><h2>Steps</h2>
-          <div className="edit-steps">{draft.steps.map((step, index) => <div className="edit-step" key={step.id}>
+          <div className="edit-steps">{draft.steps.map((step, index) => <Fragment key={step.id}>{step.stage != null && step.stage !== draft.steps[index - 1]?.stage && <input className="edit-stage" aria-label={`Stage name for step ${index + 1}`} value={step.stage} maxLength={60} disabled={readOnly} placeholder="Stage name" onChange={(e) => update({ steps: renameStageAt(draft.steps, index, e.target.value) })} />}<div className="edit-step">
             <b>{index + 1}</b>
             <div>
               <label><span className="edit-field-label">Instruction</span><textarea ref={(field) => { fieldRefs.current[`step:${step.id}:description`] = field; fieldRefs.current[`removed:${step.id}`] = field; if (step.id === insertedStepId) insertedStepRef.current = field; }} rows={1} placeholder="Describe the action" aria-label={`Step ${index + 1} description`} value={step.description} disabled={readOnly} onChange={(e) => update({ steps: draft.steps.map((item) => item.id === step.id ? { ...item, description: e.target.value } : item) })} /></label>
@@ -909,7 +950,7 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
               <button className="icon-button" aria-label={`Move step ${index + 1} down`} title={`Move step ${index + 1} down`} disabled={readOnly || index === draft.steps.length - 1} onClick={() => update({ steps: moveStep(draft.steps, index, 1) })}><EditIcon name="down" /></button>
               <button className="icon-button" aria-label={`Remove step ${index + 1}`} title={`Remove step ${index + 1}`} disabled={readOnly} onClick={() => update({ steps: draft.steps.filter((item) => item.id !== step.id) })}><EditIcon name="close" /></button>
             </div>
-          </div>)}</div>
+          </div></Fragment>)}</div>
           <div className="redemo-controls">
             <div className="edit-actions"><button className="button button-quiet" disabled={readOnly} onClick={insertStep}>Insert step</button><label>Re-demonstrate from step<select aria-label="Re-demonstrate from step" value={selectedFromStep} disabled={readOnly || draft.steps.length === 0} onChange={(e) => setFromStep(Number(e.target.value))}>{draft.steps.map((_, index) => <option key={index} value={index}>{index + 1}</option>)}</select></label>
               <button className="button button-quiet" disabled={readOnly} onClick={() => void startRecording()}>Re-demonstrate</button>
@@ -920,6 +961,7 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
           {recording?.blockedReason && <p className="edit-result edit-result-failed" role="alert">Cannot continue: {recording.blockedReason}</p>}
           {recording?.status === "expired" && <p className="edit-result edit-result-failed" role="alert">Demonstration expired. Re-demonstrate again.</p>}
           {recordingActive && <div className="browser-frame edit-recording">{browserbaseLiveViewUrl(recording.liveViewUrl) ? <iframe title="Virtual browser" src={browserbaseLiveViewUrl(recording.liveViewUrl)!} allow="clipboard-read; clipboard-write" /> : <p>Opening the virtual browser.</p>}</div>}
+          {recordingActive && <DownloadNotice downloads={recording.downloads ?? []} />}
         </section>}
       </div><aside className="edit-rail">
         <section className="edit-card edit-credentials" aria-labelledby="edit-credentials-title"><h2 id="edit-credentials-title">Sign-in details</h2>
@@ -1015,7 +1057,21 @@ function editFailureLabel(kind: string | null | undefined): string {
   }
 }
 function isObject(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null; }
-function moveStep(steps: SetupStep[], index: number, delta: number): SetupStep[] { const next = [...steps]; const target = index + delta; if (target < 0 || target >= next.length) return next; [next[index], next[target]] = [next[target]!, next[index]!]; return next; }
+function moveStep(steps: SetupStep[], index: number, delta: number): SetupStep[] {
+  const next = [...steps]; const target = index + delta;
+  if (target < 0 || target >= next.length) return next;
+  const moved = next[index]!, neighbour = next[target]!;
+  // A step moved past the edge of its stage joins the stage it moved into.
+  next[index] = neighbour; next[target] = moved.stage === neighbour.stage ? moved : { ...moved, stage: neighbour.stage };
+  return next;
+}
+/** Rename the stage that starts at index: every following step with the same stage name. */
+function renameStageAt(steps: SetupStep[], index: number, name: string): SetupStep[] {
+  const stage = steps[index]?.stage;
+  let end = index;
+  while (end < steps.length && steps[end]!.stage === stage) end += 1;
+  return steps.map((step, i) => i >= index && i < end ? { ...step, stage: name } : step);
+}
 function rawStageChanges(current: unknown[], live: unknown[]): Array<{ key: string; label: string; from: string; to: string }> {
   return current.flatMap((stage, index) => {
     const original = live[index];
@@ -1089,11 +1145,12 @@ function Demonstrate(props: { recording: Recording | null; steps: SetupStep[]; l
             ? <p>{browserMessage}</p>
             // Clipboard access must be delegated explicitly or paste does nothing in the remote browser.
             : <iframe title="Virtual browser" src={props.liveViewUrl} allow="clipboard-read; clipboard-write" />}
+          <DownloadNotice downloads={props.recording?.downloads ?? []} />
         </div>
         <aside className="captured-steps" aria-label="Captured demonstration steps">
           <h3>Recorded steps <span className="captured-steps-count">{props.steps.length}</span></h3>
           <div className="captured-steps-list" ref={stepsRef} onScroll={onStepsScroll} tabIndex={0} aria-label="Recorded steps list">
-            {props.steps.length === 0 ? <p>Actions will appear here while you demonstrate.</p> : <ol>{props.steps.map((step) => <li key={step.id}>{step.description}</li>)}</ol>}
+            {props.steps.length === 0 ? <p>Actions will appear here while you demonstrate.</p> : <ol>{props.steps.map((step) => <li key={step.id} className={step.type === "download" ? "captured-download" : undefined}>{step.description}</li>)}</ol>}
           </div>
         </aside>
       </div>
@@ -1106,7 +1163,23 @@ function Demonstrate(props: { recording: Recording | null; steps: SetupStep[]; l
   );
 }
 
-function Review(props: { steps: SetupStep[]; busy: boolean; onUpdateStep(id: string, updates: Partial<SetupStep>): void; onRemoveStep(id: string): void; onBack(): void; onContinue(): void }): JSX.Element {
+/** The live view has no download bar, so the setup page says when the demonstration browser saves a file. */
+function DownloadNotice(props: { downloads: RecordedDownload[] }): JSX.Element | null {
+  const latest = props.downloads.at(-1);
+  if (latest === undefined) return null;
+  const others = props.downloads.length - 1;
+  const text = latest.state === "started" ? `Downloading ${latest.name}…`
+    : latest.state === "failed" ? `The download of ${latest.name} failed. Try it again in the browser.`
+    : `Downloaded ${latest.name}`;
+  return (
+    <div className={`download-notice download-${latest.state}`} role={latest.state === "failed" ? "alert" : "status"}>
+      <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18"><path d={latest.state === "completed" ? "M5 12.5l4.5 4.5L19 7.5" : latest.state === "failed" ? "M6 6l12 12M18 6L6 18" : "M12 4v11m-5-5 5 5 5-5M5 20h14"} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+      <span>{text}{others > 0 && <small> · {others + 1} files this demonstration</small>}</span>
+    </div>
+  );
+}
+
+function Review(props: { steps: SetupStep[]; organizing: boolean; busy: boolean; onUpdateStep(id: string, updates: Partial<SetupStep>): void; onRemoveStep(id: string): void; onBack(): void; onContinue(): void }): JSX.Element {
   function setFieldKind(step: SetupStep, kind: CredentialKind | ""): void {
     const field = step.target ?? "the field";
     // Switching to a sign-in field drops the typed value; it is saved separately in Reiterate.
@@ -1114,23 +1187,31 @@ function Review(props: { steps: SetupStep[]; busy: boolean; onUpdateStep(id: str
       ? { type: "input", value: "", description: `Fill in ${field}` }
       : { type: "credential", value: kind, description: `Enter the saved ${credentialLabel(kind)} in ${field}` });
   }
+  function renameStage(group: ReturnType<typeof groupSteps>[number], name: string): void {
+    for (const { step } of group.steps) props.onUpdateStep(step.id, { stage: name });
+  }
+  const groups = groupSteps(props.steps);
   return (
     <div className="setup-panel">
       <div className="stage-title">
         <h2>Review the draft</h2>
         <p>Make each instruction clear. Typed text and choices are repeated on every run; sign-in fields use details you save in Reiterate.</p>
       </div>
+      {props.organizing && <p className="setup-notice organizing-notice" role="status"><span className="edit-spinner" aria-hidden="true" />Grouping your steps into stages and making them easier to read. You can edit while this finishes.</p>}
       <div className="review-list">
         <div className="review-columns" aria-hidden="true">
           <span>#</span>
           <span>Instruction</span>
           <span>Expected outcome <em>optional</em></span>
         </div>
-        <ol>
-          {props.steps.map((step, index) => {
+        {groups.map((group) => (
+        <section className="review-stage" key={group.steps[0]!.step.id} aria-label={group.stage ?? "Steps"}>
+        {group.stage !== null && <input className="review-stage-name" aria-label={`Stage name for steps ${group.steps[0]!.index + 1}–${group.steps.at(-1)!.index + 1}`} value={group.stage} maxLength={60} onChange={(event) => renameStage(group, event.target.value)} />}
+        <ol start={group.steps[0]!.index + 1}>
+          {group.steps.map(({ step, index }) => {
             const typedField = step.type === "input" || step.type === "credential";
             return (
-              <li className="review-step" key={step.id}>
+              <li className={`review-step${step.type === "download" ? " review-step-download" : ""}`} key={step.id}>
                 <span className="review-step-number">{index + 1}</span>
                 <textarea rows={1} aria-label={`Step ${index + 1} description`} value={step.description} onChange={(event) => props.onUpdateStep(step.id, { description: event.target.value })} />
                 <textarea rows={1} aria-label={`Step ${index + 1} expected outcome`} placeholder="Add what should be visible" value={step.expectedOutcome ?? ""} onChange={(event) => props.onUpdateStep(step.id, { expectedOutcome: event.target.value || undefined })} />
@@ -1165,6 +1246,8 @@ function Review(props: { steps: SetupStep[]; busy: boolean; onUpdateStep(id: str
             );
           })}
         </ol>
+        </section>
+        ))}
       </div>
       <div className="setup-actions">
         <button className="button button-quiet" type="button" onClick={props.onBack} disabled={props.busy}>Back to demonstration</button>
@@ -1253,7 +1336,7 @@ function Test(props: {
       </section>
       <aside className="test-rail" aria-label="Test steps"><header><h3>{props.run ? "Test result" : "Your steps"}</h3><span>{props.run ? `${completedSteps ? props.steps.length : failedStep ? stopped! + 1 : 0} of ${props.steps.length} reached` : `${props.steps.length} steps`}</span></header>
         <div className={`run-status ${failed ? "bad" : passed ? "good" : ""}`} role={failed ? "alert" : "status"}><small>{serviceFailure ? "Reiterate problem · not your steps" : kind === "steps" ? "Step needs clearer wording" : kind === "signin" ? "Sign-in problem" : kind === "result" ? "No file came back" : kind === "check" ? "Done-when check not met" : emailProblem ? props.emailStatus === "rejected" ? "Email not accepted" : "Email not received" : passed ? "Test passed" : running ? "Test running" : emailRun ? "Waiting for email" : failed ? "Test failed" : "Not tested yet"}</small><strong>{statusText}</strong><p>{props.run ? statusDetail : "Run the test to watch the agent work through these steps in a fresh browser."}</p>{!serviceFailure && props.run?.failure?.message && kind !== "result" && kind !== "check" && <blockquote><b>The agent said</b>{props.run.failure.message}</blockquote>}{emailRun && props.emailStatus === "rejected" && props.emailFrom && <button type="button" className="button button-primary" onClick={props.onAllowEmail} disabled={locked}>Accept emails from {props.emailFrom}</button>}{kind === "signin" && <button type="button" className="button button-quiet" onClick={props.onChangeCredentials} disabled={locked}>Change sign-in details</button>}</div>
-        <div className="test-steps" ref={rowsRef} tabIndex={0} aria-label="Test steps list">{props.steps.map((step, index) => { const done = completedSteps || (failedStep && index < stopped!); const isFailed = failedStep && index === stopped; const relativeDate = lastMonthRewrite(step.description); return <div key={step.id} className={`test-step ${done ? "done" : isFailed ? "failed" : props.run?.status === "failed" && !serviceFailure && failedStep && index > stopped! ? "notrun" : serviceFailure ? "notrun" : ""}`}><span>{done ? "✓" : isFailed ? "!" : index + 1}</span><div>{isFailed ? <textarea aria-label={`Step ${index + 1} instruction`} disabled={locked} value={step.description} onChange={(event) => props.onEditStep(step.id, event.target.value)} /> : step.description}{step.type === "credential" && <small>Uses the {credentialLabel(step.value)} saved in Reiterate, stored encrypted. <button type="button" className="text-button" onClick={props.onChangeCredentials} disabled={locked}>Change</button></small>}{isFailed && <small>Stopped here · <button type="button" className="text-button" onClick={() => setScreenIndex(null)}>Show screen</button></small>}{relativeDate && <small>Fixed date: every run picks this day <button type="button" className="date-chip" disabled={locked} onClick={() => props.onEditStep(step.id, relativeDate)}>Use last month</button></small>}</div></div> })}
+        <div className="test-steps" ref={rowsRef} tabIndex={0} aria-label="Test steps list">{props.steps.map((step, index) => { const done = completedSteps || (failedStep && index < stopped!); const isFailed = failedStep && index === stopped; const relativeDate = lastMonthRewrite(step.description); const startsStage = step.stage != null && step.stage !== props.steps[index - 1]?.stage && (Boolean(step.stage.trim()) || index > 0); return <Fragment key={step.id}>{startsStage && <div className="test-stage">{step.stage?.trim() || "Then"}</div>}<div className={`test-step ${done ? "done" : isFailed ? "failed" : props.run?.status === "failed" && !serviceFailure && failedStep && index > stopped! ? "notrun" : serviceFailure ? "notrun" : ""}`}><span>{done ? "✓" : isFailed ? "!" : index + 1}</span><div>{isFailed ? <textarea aria-label={`Step ${index + 1} instruction`} disabled={locked} value={step.description} onChange={(event) => props.onEditStep(step.id, event.target.value)} /> : step.description}{step.type === "credential" && <small>Uses the {credentialLabel(step.value)} saved in Reiterate, stored encrypted. <button type="button" className="text-button" onClick={props.onChangeCredentials} disabled={locked}>Change</button></small>}{isFailed && <small>Stopped here · <button type="button" className="text-button" onClick={() => setScreenIndex(null)}>Show screen</button></small>}{relativeDate && <small>Fixed date: every run picks this day <button type="button" className="date-chip" disabled={locked} onClick={() => props.onEditStep(step.id, relativeDate)}>Use last month</button></small>}</div></div></Fragment> })}
           <div className={`done-when ${passed ? "done" : kind === "result" || kind === "check" || emailProblem ? "failed" : ""}`}><b>Done when</b><div>{props.doneWhen.kind === "file" ? "A file is downloaded in the browser" : props.doneWhen.kind === "described" ? `The agent confirms: ${props.doneWhen.value}` : props.doneWhen.kind === "text" ? `“${props.doneWhen.value}” appears on the page` : props.doneWhen.kind === "email" ? `The export arrives at ${props.doneWhen.address}` : `The agent clicks “${props.doneWhen.value}”`}</div>{files.map((file) => { const link = safeFileUrl(file.url); return link && <a href={link} target="_blank" rel="noreferrer" key={`${file.name}:${file.url}`}>↓ {file.name}</a>; })}{!running && <details className="done-options" ref={optionsRef}><summary>Change</summary><p>{props.run === null ? "Suggested from your steps." : "Suggested from your steps and from what the agent saw at the end of this test."}</p>{options.map((option) => <div key={option.label}><button type="button" className={option.doneWhen && JSON.stringify(option.doneWhen) === JSON.stringify(props.doneWhen) ? "selected" : ""} disabled={locked} onClick={() => choose(option)}><strong>{option.label}</strong><span className="option-badges">{option.recommended && <em>Recommended</em>}{option.strength && <em className={option.strength}>{option.strength === "strong" ? "Strong evidence" : option.strength === "medium" ? "Some evidence" : "Weak evidence"}</em>}</span><small>{option.why}</small></button>{option.action === "custom" && <textarea rows={2} aria-label="Success criterion" disabled={locked} maxLength={300} placeholder="For example: a message says the export was emailed to me" value={customText} onChange={(event) => setCustomText(event.target.value)} onBlur={() => { if (customText.trim()) props.onDoneWhen({ kind: "described", value: customText.trim() }); }} />}</div>)}</details>}</div>
         </div>
         <footer><button type="button" className="text-button" onClick={props.onBack} disabled={locked}>Back to review</button><span /><button type="button" className={`button ${props.canContinue ? "button-quiet" : "button-primary"}`} onClick={props.onRun} disabled={locked}>{running ? "Running…" : props.run ? "Run test again" : "Run test"}</button>{props.canContinue && <button type="button" className="button button-primary" onClick={props.onSchedule}>Continue to schedule</button>}</footer>

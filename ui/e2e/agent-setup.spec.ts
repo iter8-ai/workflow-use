@@ -52,6 +52,59 @@ test("takes a user through demonstration, review, testing, and host scheduling",
   await expect.poll(() => page.evaluate(() => window.__closeRequests)).toEqual([{ agentId: "agent-1" }]);
 });
 
+test("shows the demonstration's download and groups the finished steps into stages", async ({ page }) => {
+  await page.clock.install();
+  await page.goto(`${baseUrl}/host?scenario=organized`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByLabel("Agent name").fill("Monthly statement");
+  await setup.getByLabel("Website address").fill("https://portal.example.test/reports");
+  await setup.getByLabel("What should the agent do?").fill("Download the monthly statement.");
+  await setup.getByRole("button", { name: "Continue to demonstration" }).click();
+
+  await page.clock.runFor(2_100);
+  await expect(setup.getByRole("status").filter({ hasText: "Downloading statement-2026-09.csv…" })).toBeVisible();
+  await page.clock.runFor(2_100);
+  await expect(setup.getByRole("status").filter({ hasText: "Downloaded statement-2026-09.csv" })).toBeVisible();
+  await expect(setup.getByLabel("Recorded steps list")).toContainText("Download statement-2026-09.csv");
+
+  await setup.getByRole("button", { name: "Finish demonstration" }).click();
+  await setup.getByRole("button", { name: "Continue to review" }).click();
+  await expect(setup.getByText("Grouping your steps into stages")).toBeVisible();
+  await expect(setup.getByLabel("Step 2 description")).toHaveValue("Click Continue with GoogleorEmailPasswordLog in");
+  await page.clock.runFor(1_600);
+  await expect(setup.getByText("Grouping your steps into stages")).toHaveCount(0);
+  await expect(setup.getByLabel("Step 2 description")).toHaveValue("Click Email login");
+  await expect(setup.getByLabel("Stage name for steps 1–2")).toHaveValue("Sign in");
+  await expect(setup.getByLabel("Stage name for steps 3–5")).toHaveValue("Download the statement");
+  await setup.getByLabel("Stage name for steps 1–2").fill("Log in");
+
+  await setup.getByRole("button", { name: "Continue to test" }).click();
+  await expect(setup.locator(".test-stage")).toHaveText(["Log in", "Download the statement"]);
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await expect.poll(() => page.evaluate(() => window.__savedAgents.length)).toBe(1);
+  const saved = await page.evaluate(() => window.__savedAgents[0]);
+  expect(saved.draft.steps.map((step: { stage?: string }) => step.stage)).toEqual(["Log in", "Log in", "Download the statement", "Download the statement", "Download the statement"]);
+  expect(saved.config.stages[0].prompt).toContain("Log in:\n1. Navigate to");
+  expect(saved.config.stages[0].prompt).toContain("Download the statement:\n3. Click Reports.");
+  expect(saved.config.stages[0].prompt).toContain("Do not start the download again.");
+  expect(saved.config.stages[0].prompt).toContain('2. Click Email login. Its recorded label was "Continue with GoogleorEmailPasswordLog in".');
+});
+
+test("edits stage names and keeps a moved step in the stage it moves into", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-staged`);
+  const setup = page.frameLocator("iframe");
+  await expect(setup.getByLabel("Stage name for step 1")).toHaveValue("Open reports");
+  await setup.getByLabel("Stage name for step 2").fill("Download the statement");
+  await setup.getByRole("button", { name: "Move step 2 up" }).click();
+  await expect(setup.getByLabel("Stage name for step 1")).toHaveValue("Open reports");
+  await expect(setup.getByLabel("Stage name for step 2")).toHaveCount(0);
+  await setup.getByRole("button", { name: "Test changes" }).click();
+  await expect.poll(() => page.evaluate(() => window.__savedAgents.length)).toBe(1);
+  const saved = await page.evaluate(() => window.__savedAgents[0]);
+  expect(saved.draft.steps.map((step: { id: string; stage?: string }) => [step.id, step.stage])).toEqual([["download", "Open reports"], ["open-reports", "Open reports"]]);
+  expect(saved.config.stages[0].prompt).toContain("Open reports:\n1. ");
+});
+
 test("nginx response policies allow finished-run PNG evidence", async ({ page }) => {
   const policies = [...readFileSync(new URL("../nginx.conf", import.meta.url), "utf8").matchAll(/add_header Content-Security-Policy "([^"]+)" always;/g)].map((match) => match[1]);
   expect(policies).toHaveLength(5);
@@ -1955,9 +2008,10 @@ function hostPage(url: string): string {
   let publishedDraft = null;
   window.__loadAvailable = scenario !== "edit-load-error";
   const edit = scenario.startsWith("edit");
+  const staged = scenario === "edit-staged";
   const editSteps = [
-    { id: "open-reports", type: "click", description: "Open the reports section", target: "Reports", expectedOutcome: "The reports list is visible" },
-    { id: "download", type: "click", description: "Download the statement", target: "Download statement" },
+    { id: "open-reports", type: "click", description: "Open the reports section", target: "Reports", expectedOutcome: "The reports list is visible", ...(staged ? { stage: "Open reports" } : {}) },
+    { id: "download", type: "click", description: "Download the statement", target: "Download statement", ...(staged ? { stage: "Download" } : {}) },
   ];
   const redemonstrationSteps = [{ id: "download-refreshed", type: "click", description: "Download the refreshed statement", target: "Download statement" }];
   const internal = scenario === "edit-internal";
@@ -2018,6 +2072,25 @@ function hostPage(url: string): string {
       savedCredentials = request.params.kinds;
       send({ saved: savedCredentials, ...(edit && scenario !== "edit-credentials-legacy-add" ? { changed: true } : {}) });
     } else if (request.method === "startRecording") { window.__startUrls.push(request.params.url); if (edit ? recordingExists : recordingActive) { fail("Finish the current demonstration first."); return; } recordingActive = true; recordingExists = true; send({ id: "recording-1", status: "recording", liveViewUrl: "https://live.browserbase.com/session", steps: edit ? [] : steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
+    else if (scenario === "organized" && (request.method === "getRecording" || request.method === "stopRecording")) {
+      // Polls: one while recording (download started), then completed; stop starts organizing; the next read has stages.
+      window.__organizedReads = (window.__organizedReads ?? 0) + 1;
+      if (request.method === "stopRecording") { recordingActive = false; window.__stoppedAt = window.__organizedReads; }
+      const stopped = !recordingActive;
+      const organizing = stopped && window.__organizedReads === window.__stoppedAt;
+      const recorded = [
+        { id: "open", type: "navigation", description: "Open portal.example.test", url: "https://portal.example.test/reports" },
+        { id: "garbled", type: "click", description: "Click Continue with GoogleorEmailPasswordLog in", target: "Continue with GoogleorEmailPasswordLog in" },
+        { id: "reports", type: "click", description: "Click Reports", target: "Reports" },
+        { id: "export", type: "click", description: "Click Export", target: "Export" },
+        { id: "file", type: "download", description: "Download statement-2026-09.csv", value: "statement-2026-09.csv" },
+      ];
+      const organized = [["Sign in", "Open the portal"], ["Sign in", "Click Email login"], ["Download the statement", "Click Reports"], ["Download the statement", "Click Export"], ["Download the statement", "Download the statement CSV"]];
+      const downloadState = window.__organizedReads === 1 && !stopped ? "started" : "completed";
+      send({ id: "recording-1", status: stopped ? "stopped" : "recording", liveViewUrl: "https://live.browserbase.com/session",
+        steps: stopped && !organizing ? recorded.map((step, index) => ({ ...step, stage: organized[index][0], description: organized[index][1] })) : recorded,
+        downloads: [{ id: "file", name: "statement-2026-09.csv", state: downloadState }], organizing, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null });
+    }
     else if (request.method === "getRecording" || request.method === "stopRecording") { if (request.method === "stopRecording") recordingActive = false; send({ id: "recording-1", status: request.method === "getRecording" && recordingActive ? "recording" : "stopped", liveViewUrl: "https://live.browserbase.com/session", steps: edit ? (request.method === "stopRecording" ? redemonstrationSteps : []) : steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
     else if (request.method === "cancelRecording") { recordingActive = false; recordingExists = false; send(undefined); }
     else if (request.method === "saveAgent") { if (window.__savedSchedule || scenario === "rerun-save-rejection" && window.__savedAgents.length > 0) fail("This agent is scheduled. Edit it in agent settings."); else { window.__savedAgents.push(request.params); send({ id: "agent-1" }); } }

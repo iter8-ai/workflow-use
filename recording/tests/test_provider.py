@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 from types import ModuleType, SimpleNamespace
 from typing import Any
@@ -127,3 +128,61 @@ async def _ignore_event(_event: dict[str, Any]) -> None:
 
 async def _start(runtime: FakeRuntime) -> FakeRuntime:
     return runtime
+
+
+@pytest.mark.asyncio
+async def test_a_download_in_the_demonstration_browser_is_reported_when_it_starts_and_finishes() -> None:
+    playwright = pytest.importorskip("playwright.async_api")
+    from urllib.parse import quote
+
+    from workflow_use_recording.provider import PlaywrightRecordingSession, _install_page_events
+
+    events: list[dict[str, Any]] = []
+
+    async def record(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    runtime = await playwright.async_playwright().start()
+    browser = await runtime.chromium.launch()
+    session = PlaywrightRecordingSession(browser=browser, runtime=runtime, live_view_url=None)
+    page = await (await browser.new_context()).new_page()
+    await _install_page_events(session, page, record)
+    link = '<a download="statement-2026-09.csv" href="data:text/csv;base64,YSxiCjEsMgo=">Export CSV</a>'
+    await page.goto("data:text/html," + quote(link))
+    await page.get_by_text("Export CSV").click()
+    for _ in range(100):
+        if any(event.get("state") == "completed" for event in events):
+            break
+        await asyncio.sleep(0.02)
+    await session.close()
+
+    downloads = [event for event in events if event.get("type") == "download"]
+    assert [(event["state"], event.get("value")) for event in downloads] == [
+        ("started", "statement-2026-09.csv"),
+        ("completed", None),
+    ]
+    assert downloads[0]["downloadId"] == downloads[1]["downloadId"]
+
+
+@pytest.mark.asyncio
+async def test_closing_the_browser_mid_download_does_not_hang() -> None:
+    from workflow_use_recording.provider import PlaywrightRecordingSession
+
+    never = asyncio.Event()
+    stopped: list[bool] = []
+
+    async def wait_forever() -> None:
+        await never.wait()
+
+    class Closeable:
+        async def close(self) -> None:
+            pass
+
+    class Runtime:
+        async def stop(self) -> None:
+            stopped.append(True)
+
+    session = PlaywrightRecordingSession(browser=Closeable(), runtime=Runtime(), live_view_url=None)
+    session.watch(wait_forever())
+    await asyncio.wait_for(session.close(), 2)
+    assert stopped == [True]

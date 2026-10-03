@@ -98,6 +98,8 @@ def test_create_returns_only_safe_live_view_response() -> None:
         ],
         "expiresAt": response.json()["expiresAt"],
         "blockedReason": None,
+        "downloads": [],
+        "organizing": False,
     }
     assert "test-key" not in response.text
 

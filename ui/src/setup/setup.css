@@ -976,3 +976,28 @@ select {
   .setup-header h1 { font-size: 1rem; }
   .setup-header .setup-progress { overflow-x: auto; }
 }
+
+/* The live view has no download bar; this notice sits over the bottom of the demonstration browser. */
+.browser-frame { position: relative; }
+.download-notice { position: absolute; left: 50%; bottom: 16px; z-index: 2; display: flex; align-items: center; gap: 8px; max-width: calc(100% - 32px); padding: 8px 14px; border: 1px solid #d9dbe7; border-radius: 999px; background: #ffffff; box-shadow: 0 4px 16px rgb(23 35 61 / 14%); color: #17233d; font-size: .88rem; font-weight: 600; transform: translateX(-50%); }
+.download-notice span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.download-notice small { color: #5f667c; font-weight: 500; }
+.download-notice.download-started svg { color: #6546c9; }
+.download-notice.download-completed { border-color: #b8dcc9; background: #edf7f2; }
+.download-notice.download-completed svg { color: #1d6b4a; }
+.download-notice.download-failed { border-color: #e4b0b7; background: #fff5f5; color: #922e3d; }
+.edit-card > .download-notice { position: static; transform: none; width: fit-content; margin-top: 8px; }
+.captured-steps li.captured-download { color: #1d6b4a; font-weight: 600; }
+
+/* Stages: a short heading over each run of steps with one purpose. */
+.organizing-notice { display: flex; align-items: center; gap: 8px; }
+.review-stage + .review-stage { border-top: 1px solid #d9dbe7; }
+.setup-panel input.review-stage-name { display: block; width: calc(100% - 16px); margin: 8px 8px 2px; padding: 4px 6px 4px 50px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: #4e38a0; font-size: .78rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.setup-panel input.review-stage-name:hover { border-color: #e4e5ee; }
+.setup-panel input.review-stage-name:focus { border-color: #cfc5f2; outline: none; text-transform: none; letter-spacing: 0; }
+.review-step-download .review-step-number { color: #1d6b4a; }
+.test-stage, .edit-stage { padding: 10px 14px 2px; color: #4e38a0; font-size: .72rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+input.edit-stage { width: 100%; margin-top: 6px; padding: 4px 6px; border: 1px solid transparent; border-radius: 6px; background: transparent; }
+input.edit-stage:hover:not(:disabled) { border-color: #e4e5ee; }
+input.edit-stage:focus { border-color: #cfc5f2; outline: none; text-transform: none; letter-spacing: 0; }
+@media (prefers-reduced-motion: reduce) { .organizing-notice .edit-spinner { animation: none; } }

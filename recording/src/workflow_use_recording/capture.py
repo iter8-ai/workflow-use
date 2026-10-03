@@ -62,11 +62,37 @@ CAPTURE_SCRIPT = r"""
     if (passwordInForm || /user.?name|login/.test(hint)) return "username";
     return null;
   };
+  // Controls a person clicks on purpose. Landmark and container roles (dialog, form, main, ...) are not here:
+  // naming a click after one of them glues the whole panel's text into one unreadable label.
+  const CLICKABLE = "button,a,input,select,textarea,summary,label,[role=button],[role=link],[role=tab]," +
+    "[role=menuitem],[role=menuitemcheckbox],[role=menuitemradio],[role=option],[role=checkbox],[role=radio]," +
+    "[role=switch],[role=treeitem],[role=combobox],[role=row],[role=gridcell],[role=cell],[role=listitem]," +
+    "[onclick],[tabindex]:not([tabindex='-1'])";
+  // innerText keeps the visual line breaks that textContent drops ("Continue with Google" + "or" stays apart).
+  // Inline siblings (table cells, spans) have no break between them, so their text is joined with spaces.
+  const visibleLines = (node) => {
+    const parts = node instanceof HTMLElement && node.children.length > 1 && !/\n/.test(node.innerText)
+      ? Array.from(node.children).map((child) => child instanceof HTMLElement ? child.innerText : child.textContent)
+      : String(node instanceof HTMLElement ? node.innerText : node.textContent || "").split(/\n+/);
+    return parts.map((line) => semanticText(line)).filter(Boolean);
+  };
+  const visibleName = (node) => {
+    const lines = visibleLines(node);
+    const joined = lines.join(" ");
+    return joined.length <= 80 ? joined : semanticText(lines[0] || "", 80);
+  };
+  // The clicked element and its ancestors, through shadow roots: a web component's button reaches the
+  // document listener retargeted to its host element, but composedPath() still starts at the button.
+  const clickPath = (event) => event.composedPath().filter((node) => node instanceof Element);
+  // Single-page apps attach click handlers in JavaScript, so a clickable card or table cell often has no
+  // role; its pointer cursor is the visible sign. The cursor is inherited, so this is usually the clicked node.
+  const pointerTarget = (path) => path.slice(0, 6).find((node) => getComputedStyle(node).cursor === "pointer") || null;
   const target = (node) => {
     if (!(node instanceof Element)) return "";
     const valueBearing = node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement ||
       node instanceof HTMLSelectElement || (node instanceof HTMLElement && node.isContentEditable);
-    const fallback = valueBearing ? node.tagName.toLowerCase() : node.textContent || node.tagName.toLowerCase();
+    const fallback = valueBearing ? node.tagName.toLowerCase()
+      : visibleName(node) || node.querySelector("img[alt]")?.getAttribute("alt") || node.tagName.toLowerCase();
     return semanticText(
       labelText(node) || node.getAttribute("title") ||
       node.getAttribute("name") || fallback
@@ -84,11 +110,18 @@ CAPTURE_SCRIPT = r"""
     void window.workflowUseRecord(event).catch(() => undefined);
   };
   document.addEventListener("click", (event) => {
-    const node = event.target instanceof Element
-      ? event.target.closest("button,a,input,select,textarea,[role]") || event.target : null;
+    const path = clickPath(event);
+    const control = path.find((node) => node.matches(CLICKABLE)) || null;
+    // Clicking a label makes the browser click its field next; that second click is the step.
+    if (control instanceof HTMLLabelElement && control.control && control.control !== path[0]) return;
+    // Without a control, only something styled as clickable counts. Plain text and empty panel space do nothing.
+    const node = control || pointerTarget(path);
+    if (!node) return;
     // Focusing a sign-in field is implied by its credential step.
     if (credentialKind(node)) return;
-    emit({ type: "click", target: target(node) });
+    // event.detail counts clicks in quick succession on the same spot (a double click, or paging a calendar).
+    const click = { type: "click", target: target(node) };
+    emit(event.detail > 1 ? { ...click, repeat: true } : click);
   }, true);
   document.addEventListener("input", (event) => {
     const node = event.target;
@@ -219,10 +252,10 @@ SIGN_IN_SCRIPT = r"""
 
 
 def page_event(event: object) -> object:
-    """Events from page JavaScript never carry sign-in values; those come only from the isolated world."""
+    """Events from page JavaScript never carry sign-in values or downloads; those come only from the browser."""
     if isinstance(event, dict):
         event = {key: value for key, value in event.items() if key != "secret"}
-        if event.get("type") == "sign_in_value":
+        if event.get("type") in {"sign_in_value", "download"}:
             return {}
     return event
 
