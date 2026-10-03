@@ -912,7 +912,7 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
       <div className="edit-heading">
         <h1 className="visually-hidden">Edit web agent</h1>
         <div className="edit-title">
-          <label className="edit-name"><span>Agent name</span><input value={draft.name} size={Math.max(12, draft.name.length)} disabled={agent.internal || renaming || busy} aria-invalid={renameError !== null} aria-describedby={renameError ? "edit-name-help rename-error" : "edit-name-help"}
+          <label className="edit-name"><span className="visually-hidden">Agent name</span><input value={draft.name} title="Rename agent" size={Math.max(12, draft.name.length)} disabled={agent.internal || renaming || busy} aria-invalid={renameError !== null} aria-describedby={renameError ? "edit-name-help rename-error" : "edit-name-help"}
             onChange={(e) => { setDraft({ ...draft, name: e.target.value }); setRenameSaved(false); setNotice(null); }}
             onBlur={(e) => void rename(e.target.value)}
             onKeyDown={(e) => {
@@ -923,7 +923,7 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
           <span className="edit-version">Live v{agent.version}</span>
           {agent.schedule && <span className="edit-schedule">{agent.schedule}{agent.nextRunAt ? ` · next run ${nextRunTime}` : ""}</span>}
         </div>
-        <p className="edit-name-help" id="edit-name-help">Name saves automatically</p>
+        <p className="visually-hidden" id="edit-name-help">Name saves automatically</p>
         {renameError && <p id="rename-error" className="edit-rename-error" role="alert">{renameError}</p>}
       </div>
       <button className="icon-button" aria-label="Close edit page" title="Close edit page" disabled={dialogOpen} onClick={(e) => requestClose(e.currentTarget)}><EditIcon name="close" /></button>
