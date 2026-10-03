@@ -1001,3 +1001,6 @@ input.edit-stage { width: 100%; margin-top: 6px; padding: 4px 6px; border: 1px s
 input.edit-stage:hover:not(:disabled) { border-color: #e4e5ee; }
 input.edit-stage:focus { border-color: #cfc5f2; outline: none; text-transform: none; letter-spacing: 0; }
 @media (prefers-reduced-motion: reduce) { .organizing-notice .edit-spinner { animation: none; } }
+
+/* One click replaces a demonstrated fixed date with a period relative to each run. */
+small.period-note { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 4px; color: #684b16; font-size: .8rem; }
