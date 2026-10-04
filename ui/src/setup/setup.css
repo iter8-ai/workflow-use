@@ -824,6 +824,8 @@ select {
 .redemo-controls label { display: flex; align-items: center; gap: 8px; color: #5f667c; font-size: .82rem; }
 .redemo-controls select { border: 1px solid #c8cad8; border-radius: 6px; padding: 6px; background: #fff; color: #17233d; }
 .edit-rail { display: grid; gap: 16px; grid-template-areas: "credentials" "publish" "details" "changes"; grid-template-rows: auto auto auto 1fr; align-self: stretch; align-items: start; min-width: 0; }
+/* Test & publish moves into the workbench while a test is on screen. */
+.edit-rail:not(:has(> .edit-publish)) { grid-template-areas: "credentials" "details" "changes"; grid-template-rows: auto auto 1fr; }
 .edit-credentials { grid-area: credentials; }
 .edit-publish { grid-area: publish; position: sticky; top: 18px; }
 .edit-publish .edit-actions:has(.result-check) { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
@@ -851,7 +853,7 @@ select {
 .edit-agent a { color: #5236ad; text-underline-offset: 3px; }
 .edit-agent a:hover { color: #37374d; }
 .edit-agent a:active { color: #17182b; }
-.edit-agent a:focus-visible, .edit-agent button:focus-visible, .edit-rail h2:focus { outline: 2px solid #6546c9; outline-offset: 2px; }
+.edit-agent a:focus-visible, .edit-agent button:focus-visible, .edit-rail h2:focus, .edit-publish h2:focus { outline: 2px solid #6546c9; outline-offset: 2px; }
 .edit-status { display: flex; align-items: center; gap: 8px; font-size: .875rem; color: #5f667c; }
 .edit-spinner { width: 14px; height: 14px; flex-shrink: 0; border: 1px solid #c8cad8; border-top-color: #6546c9; border-radius: 50%; animation: edit-spin 800ms linear infinite; }
 @keyframes edit-spin { to { transform: rotate(360deg); } }
@@ -891,7 +893,7 @@ select {
   .edit-agent .edit-spinner { animation: none; }
   .edit-agent .button, .edit-agent .icon-button, .edit-agent .text-button, .edit-agent input, .edit-agent textarea, .edit-agent select, .edit-agent a { transition: none; }
 }
-@media (width < 880px) { .edit-grid { grid-template-columns: minmax(0, 1fr); } .edit-rail { grid-template-areas: "publish" "credentials" "changes" "details"; } .edit-publish { position: static; } }
+@media (width < 880px) { .edit-grid { grid-template-columns: minmax(0, 1fr); } .edit-rail { grid-template-areas: "publish" "credentials" "changes" "details"; } .edit-rail:not(:has(> .edit-publish)) { grid-template-areas: "credentials" "changes" "details"; } .edit-publish { position: static; } }
 
 .field-note {
   color: #5f667c;
@@ -1148,11 +1150,16 @@ input.edit-stage:focus { border-color: #cfc5f2; outline: none; text-transform: n
 .activity-working { display: flex; align-items: center; gap: 8px; padding: 8px 14px; color: #5f667c; font-size: .84rem; }
 .activity-working .edit-spinner { width: 12px; height: 12px; }
 .activity-empty { margin: 0; padding: 12px 14px; color: #5f667c; font-size: .86rem; line-height: 1.45; }
-.edit-test { display: flex; height: clamp(460px, 72vh, 820px); scroll-margin-top: 16px; }
+/* A long result grows the workbench rather than pushing the test action out of it. */
+.edit-test { display: flex; min-height: clamp(460px, 72vh, 820px); scroll-margin-top: 16px; }
 .edit-test .workbench-grid { flex: 1; }
 .edit-test .test-rail > header span { margin-left: auto; }
+/* The activity takes the height the Test & publish card leaves; a zero basis keeps its list from sizing the workbench. */
+.edit-test-side { display: flex; min-width: 0; min-height: 0; flex-direction: column; gap: 16px; }
+.edit-test-side .test-rail { flex: 1 1 0px; min-height: 160px; }
+.edit-test-side .edit-publish { position: static; }
 @media (max-width: 900px) {
-  .edit-test { height: auto; }
-  .edit-test .test-rail { height: 360px; }
+  .edit-test { min-height: 0; }
+  .edit-test .test-rail { flex: none; height: 360px; }
 }
 @media (prefers-reduced-motion: reduce) { .browser-notice .edit-spinner, .activity-working .edit-spinner { animation: none; } }
