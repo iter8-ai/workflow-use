@@ -76,8 +76,33 @@ select {
 
 .setup-shell {
   width: min(1480px, 100%);
-  min-height: calc(100vh - 49px);
   margin: 0 auto;
+}
+
+/* The create flow is one column: the top bar, then a stage that fills the rest of the window without a stray page scroll. */
+.setup-flow {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+}
+
+.setup-flow > .setup-header {
+  flex-shrink: 0;
+}
+
+.setup-flow .setup-shell {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+}
+
+.setup-flow .setup-content {
+  flex: 1;
+}
+
+/* A new stage focuses its heading so keyboard and screen-reader users start there; the heading is not a control. */
+.stage-title h2:focus {
+  outline: none;
 }
 
 .setup-progress {
@@ -134,7 +159,6 @@ select {
 }
 
 .setup-content {
-  min-height: calc(100vh - 49px);
   padding: 18px 24px 24px;
   background: #ffffff;
 }
@@ -321,25 +345,68 @@ select {
   background: #d92d4c;
 }
 
-/* Demonstrate uses the whole iframe width so the remote browser is as large as possible. */
-.agent-setup-demonstrating .setup-shell {
-  width: 100%;
+/* Demonstrate uses the whole window so the remote browser is as large as possible. The page itself never scrolls:
+   the title row with the recording controls stays on top, and the browser and steps take the remaining height. */
+.agent-setup-demonstrating {
+  height: 100dvh;
 }
 
+.agent-setup-demonstrating .setup-shell {
+  width: 100%;
+  min-height: 0;
+}
+
+.agent-setup-demonstrating .setup-content {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  padding-bottom: 16px;
+}
+
+.setup-panel.demonstrate {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.setup-panel.demonstrate > .setup-error {
+  width: 100%;
+  margin: 0;
+}
 
 .demonstrate-heading {
   display: flex;
+  flex-shrink: 0;
   flex-wrap: wrap;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
-  gap: 8px 24px;
+  gap: 12px 24px;
+}
+
+.demonstrate-heading .stage-title {
+  flex: 1 1 420px;
+  min-width: 0;
+}
+
+/* Recording status and the way out of recording, together, before the remote browser in the Tab order. */
+.demonstrate-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.demonstrate-controls .recording-state {
+  margin-right: 6px;
 }
 
 .demonstration-grid {
   display: grid;
+  flex: 1;
   grid-template-columns: minmax(0, 1fr) clamp(260px, 22vw, 340px);
-  /* Fill the rest of the viewport; the steps panel scrolls inside this fixed height. */
-  height: clamp(520px, calc(100vh - 300px), 1600px);
+  min-height: 320px;
   border: 1px solid #d9dbe7;
   border-radius: 10px;
   overflow: hidden;
@@ -398,8 +465,8 @@ select {
 }
 
 .captured-steps-list:focus-visible {
-  outline: 3px solid #cfc5f2;
-  outline-offset: -3px;
+  outline: 2px solid #6546c9;
+  outline-offset: -2px;
 }
 
 .captured-steps ol {
@@ -407,8 +474,46 @@ select {
   gap: 10px;
   margin: 0;
   padding: 12px 16px 16px 38px;
+  list-style: decimal;
   color: #373d53;
   font-size: 0.88rem;
+}
+
+/* Numbered like the Review list, so a recorded step can be found again there. */
+.captured-steps li::marker {
+  color: #69708a;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.captured-steps .captured-steps-note {
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+  align-items: flex-start;
+  max-width: none;
+  margin: 0;
+  padding: 10px 16px 12px;
+  border-top: 1px solid #e4e5ee;
+  color: #5f667c;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.captured-steps-note svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+/* After the demonstration ends the remote browser stops recording; cover it so it no longer looks live. */
+.demonstrate-finished {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(247 247 251 / 84%);
 }
 
 .input-definition {
@@ -590,8 +695,8 @@ select {
 }
 
 .icon-button:focus-visible {
-  outline: 3px solid #cfc5f2;
-  outline-offset: 1px;
+  outline: 2px solid #6546c9;
+  outline-offset: 2px;
 }
 
 .icon-button:disabled {
@@ -813,10 +918,24 @@ select {
     width: 24px;
   }
 
+  /* Stacked, the browser and steps are taller than the window; the page scrolls and the controls stay at the top. */
+  .agent-setup-demonstrating {
+    height: auto;
+  }
+
+  .setup-panel.demonstrate,
+  .demonstration-grid {
+    flex: none;
+  }
+
   .demonstration-grid {
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(480px, 1fr) 260px;
-    height: auto;
+    grid-template-rows: minmax(480px, 1fr) auto;
+  }
+
+  .captured-steps-list {
+    height: 220px;
+    flex: none;
   }
 
   .captured-steps {
@@ -841,6 +960,11 @@ select {
 
   .input-grid {
     grid-template-columns: 1fr;
+  }
+
+  /* Status on its own line, then both recording actions together. */
+  .demonstrate-controls .recording-state {
+    flex-basis: 100%;
   }
 
   .review-list {
@@ -914,7 +1038,7 @@ select {
 .help-tip { position: relative; display: inline-flex; }
 .help-tip-button { display: grid; width: 28px; height: 28px; place-items: center; padding: 0; border: 0; border-radius: 50%; background: transparent; color: #69708a; cursor: pointer; transition: color 160ms ease, background-color 160ms ease; }
 .help-tip-button:hover, .help-tip-button[aria-expanded="true"] { background: #f3f0fc; color: #5236ad; }
-.help-tip-button:focus-visible { outline: 3px solid #cfc5f2; outline-offset: 2px; }
+.help-tip-button:focus-visible { outline: 2px solid #6546c9; outline-offset: 2px; }
 /* z-index 1: above the workbench that follows it, below the close (2) and edit (5) dialogs. */
 .help-tip-bubble { position: absolute; top: calc(100% + 6px); left: 0; z-index: 1; width: max-content; max-width: min(340px, calc(100vw - 48px)); padding: 9px 11px; border: 1px solid #d9dbe7; border-radius: 8px; background: #fff; box-shadow: 0 3px 8px rgb(23 24 43 / 10%); color: #363b50; font-size: .85rem; line-height: 1.45; }
 @media (prefers-reduced-motion: reduce) { .help-tip-button { transition: none; } }
@@ -943,7 +1067,7 @@ select {
 .test-step, .done-when, .test-caption { overflow-wrap: anywhere; }
 .date-chip { padding: 1px 7px; border: 1px solid #dfc680; border-radius: 999px; background: #fff; color: #684b16; font-size: .75rem; font-weight: 650; cursor: pointer; }
 .test-rail > footer .button { padding: 8px 10px; font-size: .8rem; }
-.test-rail > footer .text-button { font-size: .8rem; }
+.test-rail > footer .text-button { min-height: 32px; font-size: .8rem; }
 .done-options summary { width: fit-content; color: #5236ad; cursor: pointer; font-weight: 650; }
 .done-options button { width: 100%; }
 .done-options textarea { width: 100%; padding: 7px; border: 1px solid #c8cad7; border-radius: 6px; }
@@ -951,7 +1075,7 @@ select {
 .done-options em.strong { color: #1d6b4a; border-color: #b8dcc9; background: #edf7f2; }
 .done-options em.medium { color: #684b16; border-color: #dfc680; background: #fff9e9; }
 .done-options em.weak { color: #922e3d; border-color: #e4b0b7; background: #fff5f5; }
-.test-steps:focus-visible, .date-chip:focus-visible, .done-options button:focus-visible, .done-options summary:focus-visible { outline: 3px solid #cfc5f2; outline-offset: -3px; }
+.test-steps:focus-visible, .date-chip:focus-visible, .done-options button:focus-visible, .done-options summary:focus-visible { outline: 2px solid #6546c9; outline-offset: -2px; }
 .text-button:disabled, .date-chip:disabled, .done-options button:disabled { opacity: .52; cursor: not-allowed; }
 @media (max-width: 1100px) {
   .setup-header { gap: 16px; }
@@ -985,7 +1109,7 @@ select {
 .review-stage + .review-stage { border-top: 1px solid #d9dbe7; }
 .setup-panel input.review-stage-name { display: block; width: calc(100% - 16px); margin: 8px 8px 2px; padding: 4px 6px 4px 50px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: #4e38a0; font-size: .78rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
 .setup-panel input.review-stage-name:hover { border-color: #e4e5ee; }
-.setup-panel input.review-stage-name:focus { border-color: #cfc5f2; outline: none; text-transform: none; letter-spacing: 0; }
+.setup-panel input.review-stage-name:focus { border-color: #6546c9; outline: none; text-transform: none; letter-spacing: 0; }
 .review-step-download .review-step-number { color: #1d6b4a; }
 .test-stage, .edit-stage { padding: 10px 14px 2px; color: #4e38a0; font-size: .72rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
 input.edit-stage { width: 100%; margin-top: 6px; padding: 4px 6px; border: 1px solid transparent; border-radius: 6px; background: transparent; }
@@ -1009,7 +1133,7 @@ input.edit-stage:focus { border-color: #cfc5f2; outline: none; text-transform: n
 .rail-tabs [role="tab"]:hover { color: #17233d; }
 .rail-tabs [role="tab"][aria-selected="true"] { color: #17182b; box-shadow: inset 0 -2px 0 #6546c9; }
 .rail-tabs [role="tab"] span { margin-left: 2px; color: #69708a; font-size: .75rem; font-variant-numeric: tabular-nums; }
-.rail-tabs [role="tab"]:focus-visible, .activity-log:focus-visible { outline: 3px solid #cfc5f2; outline-offset: -3px; }
+.rail-tabs [role="tab"]:focus-visible, .activity-log:focus-visible { outline: 2px solid #6546c9; outline-offset: -2px; }
 .rail-panel { display: flex; flex: 1; min-height: 0; flex-direction: column; }
 .rail-panel[hidden], .test-steps[hidden] { display: none; }
 .activity-log { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 6px 0 10px; }

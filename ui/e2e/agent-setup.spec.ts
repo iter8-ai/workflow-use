@@ -423,6 +423,60 @@ test("gives the demonstration the full width and scrolls long step lists", async
   await page.screenshot({ path: "e2e-artifacts/demonstrate-many-steps.png" });
 });
 
+for (const [width, height] of [[1440, 900], [1366, 768], [1280, 720], [1024, 768]]) {
+  test(`shows the demonstration actions without scrolling at ${width}×${height}`, async ({ page }) => {
+    await page.setViewportSize({ width, height });
+    await page.goto(`${baseUrl}/host?scenario=many-steps`);
+    const setup = page.frameLocator("iframe");
+    await setup.getByLabel("Agent name").fill("Reports");
+    await setup.getByLabel("Website address").fill("https://portal.example.test/reports");
+    await setup.getByLabel("What should the agent do?").fill("Get the report.");
+    await setup.getByRole("button", { name: "Continue to demonstration" }).click();
+
+    // Fully on screen with the page still at the top: nobody has to scroll to find the way out of recording.
+    await expect(setup.getByRole("button", { name: "Finish demonstration" })).toBeInViewport({ ratio: 1 });
+    await expect(setup.getByRole("button", { name: "Start over" })).toBeInViewport({ ratio: 1 });
+    const page0 = await setup.locator("html").evaluate((element) => ({ top: element.scrollTop, scroll: element.scrollHeight, client: element.clientHeight }));
+    expect(page0.top).toBe(0);
+    expect(page0.scroll).toBeLessThanOrEqual(page0.client);
+    const browserBox = (await setup.getByTitle("Virtual browser").boundingBox())!;
+    expect(browserBox.height).toBeGreaterThan(height * 0.55);
+
+    await setup.getByRole("button", { name: "Finish demonstration" }).click();
+    await expect(setup.getByRole("button", { name: "Continue to review" })).toBeInViewport({ ratio: 1 });
+    await page.screenshot({ path: `e2e-artifacts/demonstrate-actions-${width}x${height}.png` });
+  });
+}
+
+test("keeps keyboard focus on the demonstration's next action and shows what was recorded", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=success`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByLabel("Agent name").fill("Reports");
+  await setup.getByLabel("Website address").fill("https://portal.example.test/reports");
+  await setup.getByLabel("What should the agent do?").fill("Get the report.");
+  await setup.getByRole("button", { name: "Continue to demonstration" }).press("Enter");
+
+  // The new stage starts on its heading, and the recording controls come before the remote browser.
+  await expect(setup.getByRole("heading", { name: "Demonstrate the task" })).toBeFocused();
+  await expect(setup.getByRole("navigation", { name: "Agent setup progress" }).locator('[aria-current="step"]')).toHaveText(/Demonstrate/);
+  await page.keyboard.press("Tab");
+  await expect(setup.getByRole("button", { name: "Start over" })).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(setup.getByRole("button", { name: "Finish demonstration" })).toBeFocused();
+
+  // The sign-in note moves out of the way into the steps rail; the steps are numbered like the review list.
+  await expect(setup.locator(".credential-warning")).toHaveCount(0);
+  await expect(setup.getByRole("complementary", { name: "Captured demonstration steps" })).toContainText("Sign in here if the site asks.");
+  await expect(setup.getByLabel("Recorded steps list").locator("ol")).toHaveCSS("list-style-type", "decimal");
+
+  await page.keyboard.press("Enter");
+  await expect(setup.getByRole("button", { name: "Continue to review" })).toBeFocused();
+  await expect(setup.getByText("2 steps recorded", { exact: true })).toBeVisible();
+  await expect(setup.getByRole("status").filter({ hasText: "Demonstration finished" })).toBeVisible();
+  await page.keyboard.press("Enter");
+  await expect(setup.getByRole("heading", { name: "Review the draft" })).toBeFocused();
+});
+
 test("shows the running test's latest screen without embedding the provider's viewer", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=watch`);
   const setup = page.frameLocator("iframe");
