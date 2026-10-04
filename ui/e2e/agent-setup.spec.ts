@@ -432,7 +432,7 @@ test("shows the running test's browser without letting the user interact with it
   await expect(setup.getByText("Test is running", { exact: true })).toBeVisible();
   await expect(setup.getByRole("button", { name: "Running…" })).toBeDisabled();
   const browser = setup.locator('iframe[title="Test browser (view only)"]');
-  await expect(browser).toHaveAttribute("src", "https://www.browserbase.com/devtools-fullscreen/inspector.html");
+  await expect(browser).toHaveAttribute("src", "https://www.browserbase.com/devtools-fullscreen/inspector.html?navbar=false");
   await expect(browser).toHaveAttribute("inert", "");
   await expect(browser).toHaveAttribute("tabindex", "-1");
   const topmost = await browser.evaluate((frame) => {

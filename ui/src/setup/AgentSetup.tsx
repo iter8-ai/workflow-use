@@ -1361,7 +1361,14 @@ function safeFileUrl(value: string): string | null {
 
 /** Shows the test's browser without letting the user click, type, or scroll into it. */
 function WatchOnlyBrowser(props: { url: string | null }): JSX.Element {
-  return <div className="browser-frame watch-only">{props.url === null ? <p>Opening the virtual browser.</p> : <><iframe title="Test browser (view only)" src={props.url} tabIndex={-1} {...{ inert: "" }} /><div className="watch-only-shield" aria-hidden="true" /></>}</div>;
+  return <div className="browser-frame watch-only">{props.url === null ? <p>Opening the virtual browser.</p> : <><iframe title="Test browser (view only)" src={withoutNavbar(props.url)} tabIndex={-1} {...{ inert: "" }} /><div className="watch-only-shield" aria-hidden="true" /></>}</div>;
+}
+
+// The test bar above already shows the address, so drop Browserbase's own navbar.
+function withoutNavbar(value: string): string {
+  const url = new URL(value);
+  url.searchParams.set("navbar", "false");
+  return url.toString();
 }
 
 // "portal.example.com" means https://portal.example.com; anything with a scheme is left for startUrlError to judge.
