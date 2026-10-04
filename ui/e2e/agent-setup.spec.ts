@@ -493,6 +493,8 @@ test("marks the blocked action and keeps the failed run's last screen", async ({
   const setup = page.frameLocator("iframe");
   await completeToTest(setup);
   await setup.getByRole("button", { name: "Run test" }).click();
+  // The first status check runs as soon as the test starts; later ones need the clock.
+  await expect(setup.getByRole("region", { name: "Agent browser", exact: true }).getByText("Opening the virtual browser.")).toBeVisible();
   for (let poll = 0; poll < 5; poll += 1) await page.clock.runFor(2_000);
   await expect(setup.getByText("Stuck at step 2")).toBeVisible();
   const browser = setup.getByRole("region", { name: "Agent browser", exact: true });
@@ -511,6 +513,8 @@ test("reports an unexpected browser loss without claiming the agent closed it", 
   const setup = page.frameLocator("iframe");
   await completeToTest(setup);
   await setup.getByRole("button", { name: "Run test" }).click();
+  // The first status check runs as soon as the test starts; later ones need the clock.
+  await expect(setup.getByRole("region", { name: "Agent browser", exact: true }).getByText("Opening the virtual browser.")).toBeVisible();
   for (let poll = 0; poll < 3; poll += 1) await page.clock.runFor(2_000);
   const browser = setup.getByRole("region", { name: "Agent browser", exact: true });
   await expect(browser.getByText("Browser connection lost")).toBeVisible();
@@ -528,6 +532,8 @@ test("says the connection was lost while status checks fail, then reconnects", a
   const setup = page.frameLocator("iframe");
   await completeToTest(setup);
   await setup.getByRole("button", { name: "Run test" }).click();
+  // The first status check runs as soon as the test starts; later ones need the clock.
+  await expect(setup.getByRole("region", { name: "Agent browser", exact: true }).getByText("Opening the virtual browser.")).toBeVisible();
   for (let poll = 0; poll < 3; poll += 1) await page.clock.runFor(2_000);
   const browser = setup.getByRole("region", { name: "Agent browser", exact: true });
   await expect(browser.getByText("Browser connection lost")).toBeVisible();
@@ -546,6 +552,8 @@ test("ignores a late reply with an older activity revision", async ({ page }) =>
   const setup = page.frameLocator("iframe");
   await completeToTest(setup);
   await setup.getByRole("button", { name: "Run test" }).click();
+  // The first status check runs as soon as the test starts; later ones need the clock.
+  await expect(setup.getByRole("region", { name: "Agent browser", exact: true }).getByText("Opening the virtual browser.")).toBeVisible();
   for (let poll = 0; poll < 3; poll += 1) await page.clock.runFor(2_000);
   const browser = setup.getByRole("region", { name: "Agent browser", exact: true });
   await expect(browser.getByText("Agent is closing the browser")).toBeVisible();
@@ -576,6 +584,9 @@ for (const width of [1440, 1024]) {
     const setup = page.frameLocator("iframe");
     await completeToTest(setup);
     await setup.getByRole("button", { name: "Run test" }).click();
+    await expect(setup.getByRole("region", { name: "Agent browser", exact: true }).getByText("Opening the virtual browser.")).toBeVisible();
+  // The first status check runs as soon as the test starts; later ones need the clock.
+  await expect(setup.getByRole("region", { name: "Agent browser", exact: true }).getByText("Opening the virtual browser.")).toBeVisible();
     await page.clock.runFor(2_000);
     const browser = (await setup.getByRole("region", { name: "Agent browser", exact: true }).boundingBox())!;
     const rail = (await setup.getByRole("complementary", { name: "Test steps" }).boundingBox())!;
@@ -596,6 +607,8 @@ test("stacks the browser above the activity on a narrow screen without sideways 
   const setup = page.frameLocator("iframe");
   await completeToTest(setup);
   await setup.getByRole("button", { name: "Run test" }).click();
+  // The first status check runs as soon as the test starts; later ones need the clock.
+  await expect(setup.getByRole("region", { name: "Agent browser", exact: true }).getByText("Opening the virtual browser.")).toBeVisible();
   for (let poll = 0; poll < 4; poll += 1) await page.clock.runFor(2_000);
   const browser = (await setup.getByRole("region", { name: "Agent browser", exact: true }).boundingBox())!;
   const rail = (await setup.getByRole("complementary", { name: "Test steps" }).boundingBox())!;
