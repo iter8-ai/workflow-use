@@ -811,7 +811,88 @@ for (const width of [1440, 1024]) {
     expect(await setup.locator("html").evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
     await page.screenshot({ path: `e2e-artifacts/edit-action-visible-${width}.png` });
   });
+
+  test(`edit: keeps the page at the top with Close visible when a failed test runs again at ${width} px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.clock.install({ time: clockStart });
+    await page.goto(`${baseUrl}/host?scenario=edit-activity-website-failure`);
+    // Polls advance only with runFor, one status check per two seconds.
+    await page.clock.pauseAt(clockPaused);
+    const setup = page.frameLocator("iframe");
+    const browser = setup.getByRole("region", { name: "Test run" }).getByRole("region", { name: "Agent browser", exact: true });
+    // The retry starts from inside the workbench, so the page must stay where it was: at the top, Close and the action on screen.
+    const expectAtTop = async (action: string): Promise<void> => {
+      expect(await setup.locator("html").evaluate((element) => element.scrollTop)).toBe(0);
+      for (const name of ["Close edit page", action]) {
+        const box = (await setup.getByRole("button", { name, exact: true }).boundingBox())!;
+        expect(box.y).toBeGreaterThanOrEqual(0);
+        expect(box.y + box.height).toBeLessThanOrEqual(900);
+      }
+    };
+
+    await setup.getByRole("button", { name: "Test changes", exact: true }).click();
+    for (let poll = 0; poll < 5; poll += 1) await page.clock.runFor(2_000);
+    await expect(setup.getByText("Test failed", { exact: true })).toBeVisible();
+    await expectAtTop("Run test again");
+
+    await setup.getByRole("button", { name: "Run test again", exact: true }).click();
+    await expect(browser.getByText("Opening the virtual browser.")).toBeVisible();
+    await expect(setup.getByRole("button", { name: "Test changes", exact: true })).toBeDisabled();
+    await expectAtTop("Test changes");
+    await page.clock.runFor(2_000);
+    await expect(browser.getByRole("img", { name: "Latest screen of the agent’s browser" })).toBeVisible();
+    await expectAtTop("Test changes");
+    for (let poll = 0; poll < 4; poll += 1) await page.clock.runFor(2_000);
+    await expect(setup.getByText("Test failed", { exact: true })).toBeVisible();
+    await expect(browser.getByText("The page when the test stopped.")).toBeVisible();
+    await expectAtTop("Run test again");
+  });
 }
+
+// Shorter than the workbench, whose top is still on screen: scrolling it "into view" would move the page 72 px and hide Close.
+test("edit: does not scroll an on-screen workbench when a test starts or runs again", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 450 });
+  await page.clock.install({ time: clockStart });
+  await page.goto(`${baseUrl}/host?scenario=edit-activity-website-failure`);
+  // Polls advance only with runFor, one status check per two seconds.
+  await page.clock.pauseAt(clockPaused);
+  const setup = page.frameLocator("iframe");
+  const browser = setup.getByRole("region", { name: "Test run" }).getByRole("region", { name: "Agent browser", exact: true });
+  const expectAtTop = async (): Promise<void> => {
+    expect(await setup.locator("html").evaluate((element) => element.scrollTop)).toBe(0);
+    const close = (await setup.getByRole("button", { name: "Close edit page" }).boundingBox())!;
+    expect(close.y).toBeGreaterThanOrEqual(0);
+  };
+
+  await setup.getByRole("button", { name: "Test changes", exact: true }).click();
+  await expect(browser.getByText("Opening the virtual browser.")).toBeVisible();
+  await expectAtTop();
+  for (let poll = 0; poll < 5; poll += 1) await page.clock.runFor(2_000);
+  await expect(setup.getByText("Test failed", { exact: true })).toBeVisible();
+  await expectAtTop();
+  // A plain click event, so Playwright does not scroll the button into view first.
+  await setup.getByRole("button", { name: "Run test again", exact: true }).dispatchEvent("click");
+  await expect(browser.getByText("Opening the virtual browser.")).toBeVisible();
+  await expectAtTop();
+});
+
+test("edit: brings the workbench into view when a test starts after scrolling away", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 500 });
+  await page.clock.install({ time: clockStart });
+  await page.goto(`${baseUrl}/host?scenario=edit-activity-website-failure`);
+  // Polls advance only with runFor, one status check per two seconds.
+  await page.clock.pauseAt(clockPaused);
+  const setup = page.frameLocator("iframe");
+  await expect(setup.getByRole("heading", { name: "Changes" })).toBeVisible();
+  await setup.locator("html").evaluate((element) => { element.scrollTop = element.scrollHeight; });
+  expect(await setup.locator("html").evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await setup.getByRole("button", { name: "Test changes", exact: true }).click();
+  const workbench = setup.getByRole("region", { name: "Test run" });
+  await expect(workbench.getByText("Opening the virtual browser.")).toBeVisible();
+  const box = (await workbench.boundingBox())!;
+  expect(box.y).toBeGreaterThanOrEqual(0);
+  expect(box.y).toBeLessThan(500);
+});
 
 test("a service failure after steps ran does not claim no steps were tried", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=service-failure-midrun`);

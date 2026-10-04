@@ -727,7 +727,11 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
   useEffect(() => {
     if (testRun?.id === undefined) return;
     setScreenIndex(null);
-    testViewRef.current?.scrollIntoView({ block: "nearest" });
+    // Bring the workbench back only when its top is off screen. A retry starts inside it, and scrolling then hid Close.
+    const view = testViewRef.current;
+    if (view === null) return;
+    const { top } = view.getBoundingClientRect();
+    if (top < 0 || top >= window.innerHeight) view.scrollIntoView({ block: "nearest" });
   }, [testRun?.id]);
   useEffect(() => { recordingRef.current = recording; }, [recording]);
   useEffect(() => () => { const current = recordingRef.current; if (current?.status === "recording") void bridge.request("cancelRecording", { id: current.id }).catch(() => undefined); }, [bridge]);
