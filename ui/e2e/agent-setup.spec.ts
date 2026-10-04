@@ -694,9 +694,13 @@ test("edit: tests changes in the same workbench and keeps the last test on scree
   await expect(setup.getByText("Test completed", { exact: true })).toBeVisible();
   await expect(browser.getByRole("img", { name: "Agent browser screen" })).toBeVisible();
   await expect(activity.getByText("Browser closed")).toBeVisible();
+  await expect(browser.getByText("The page when the test passed.")).toBeVisible();
   await setup.getByLabel("Goal", { exact: true }).fill("Download the October statement.");
   await expect(workbench.getByText("Changed since this test")).toBeVisible();
   await expect(activity.getByText("Browser closed")).toBeVisible();
+  // The kept run still passed; only the draft is newer than it.
+  await expect(browser.getByText("The page when the test passed.")).toBeVisible();
+  await expect(browser.getByText("The page when the test stopped.")).toHaveCount(0);
 });
 
 test("a service failure after steps ran does not claim no steps were tried", async ({ page }) => {
