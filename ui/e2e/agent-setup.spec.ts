@@ -471,7 +471,8 @@ test("follows the agent, shows its own closed screen while the run finishes, the
   await page.clock.runFor(2_000);
   await expect(setup.getByText("The agent completed every step")).toBeVisible();
   await expect(browser.getByRole("img", { name: "Agent browser screen" })).toBeVisible();
-  await expect(browser.getByText("Downloaded the September statement.")).toBeVisible();
+  await expect(browser.getByText("Final screen", { exact: true })).toBeVisible();
+  await expect(browser).not.toContainText("Downloaded the September statement.");
   await expect(setup.getByRole("tab", { name: /Steps/ })).toHaveAttribute("aria-selected", "true");
   await setup.getByRole("tab", { name: "Activity" }).click();
   await expect(activity.getByText("Browser closed")).toBeVisible();
@@ -482,7 +483,10 @@ test("follows the agent, shows its own closed screen while the run finishes, the
   await expect(browser.getByText("Opening the virtual browser.")).toBeVisible();
   await expect(activity.getByText("Browser closed")).toHaveCount(0);
   await expect(activity.getByText("Type text")).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => window.__testArguments)).toHaveLength(2);
+  for (let poll = 0; poll < 5; poll += 1) await page.clock.runFor(2_000);
+  await expect(setup.getByText("The agent completed every step")).toBeVisible();
+  await expect(setup.getByRole("link", { name: "statement-run-2.pdf" })).toBeVisible();
+  await expect(setup.getByRole("link", { name: "statement.pdf" })).toHaveCount(0);
 });
 
 test("marks the blocked action and keeps the failed run's last screen", async ({ page }) => {
@@ -498,7 +502,8 @@ test("marks the blocked action and keeps the failed run's last screen", async ({
   for (let poll = 0; poll < 5; poll += 1) await page.clock.runFor(2_000);
   await expect(setup.getByText("Stuck at step 2")).toBeVisible();
   const browser = setup.getByRole("region", { name: "Agent browser", exact: true });
-  await expect(browser.getByText("The Export button was missing.")).toBeVisible();
+  await expect(browser.getByText("Final screen", { exact: true })).toBeVisible();
+  await expect(browser).not.toContainText("The Export button was missing.");
   await setup.getByRole("tab", { name: "Activity" }).click();
   const activity = setup.getByRole("log", { name: "Agent activity" });
   await expect(activity.getByText("Blocked", { exact: true })).toBeVisible();
@@ -524,25 +529,66 @@ test("reports an unexpected browser loss without claiming the agent closed it", 
   await page.screenshot({ path: "e2e-artifacts/test-activity-lost.png" });
 });
 
-test("says the connection was lost while status checks fail, then reconnects", async ({ page }) => {
-  await page.clock.install({ time: clockStart });
-  await page.goto(`${baseUrl}/host?scenario=activity-poll-lost`);
-  // Polls advance only with runFor, one status check per two seconds.
-  await page.clock.pauseAt(clockPaused);
-  const setup = page.frameLocator("iframe");
-  await completeToTest(setup);
-  await setup.getByRole("button", { name: "Run test" }).click();
-  // The first status check runs as soon as the test starts; later ones need the clock.
-  await expect(setup.getByRole("region", { name: "Agent browser", exact: true }).getByText("Opening the virtual browser.")).toBeVisible();
-  for (let poll = 0; poll < 3; poll += 1) await page.clock.runFor(2_000);
-  const browser = setup.getByRole("region", { name: "Agent browser", exact: true });
-  await expect(browser.getByText("Browser connection lost")).toBeVisible();
-  await expect(browser.getByText(/^Reconnecting/)).toBeVisible();
-  await expect(browser.getByRole("img", { name: "Latest screen of the agent’s browser" })).toHaveCount(0);
-  for (let poll = 0; poll < 2; poll += 1) await page.clock.runFor(2_000);
-  await expect(browser.getByRole("img", { name: "Latest screen of the agent’s browser" })).toBeVisible();
-  await expect(browser.getByText("Browser connection lost")).toHaveCount(0);
-});
+for (const scenario of ["activity-poll-lost", "edit-activity-poll-lost"]) {
+  test(`${scenario}: says the connection was lost while status checks fail, then reconnects`, async ({ page }) => {
+    await page.clock.install({ time: clockStart });
+    await page.goto(`${baseUrl}/host?scenario=${scenario}`);
+    // Polls advance only with runFor, one status check per two seconds.
+    await page.clock.pauseAt(clockPaused);
+    const setup = page.frameLocator("iframe");
+    if (scenario.startsWith("edit-")) {
+      await setup.getByLabel("Step 1 description").fill("Open the reports page");
+      await setup.getByRole("button", { name: "Test changes" }).click();
+    } else {
+      await completeToTest(setup);
+      await setup.getByRole("button", { name: "Run test" }).click();
+    }
+    const browser = setup.getByRole("region", { name: "Agent browser", exact: true });
+    const activity = setup.getByRole("log", { name: "Agent activity" });
+    await expect(browser.getByText("Opening the virtual browser.")).toBeVisible();
+    for (let poll = 0; poll < 3; poll += 1) await page.clock.runFor(2_000);
+    await expect(browser.getByText("Browser connection lost")).toBeVisible();
+    await expect(browser.getByText(/^Reconnecting/)).toBeVisible();
+    await expect(activity.getByText("Reconnecting…")).toBeVisible();
+    await expect(browser.getByRole("img", { name: "Latest screen of the agent’s browser" })).toHaveCount(0);
+    await expect(setup.getByText("The connection to Reiterate was lost.")).toHaveCount(0);
+    for (let poll = 0; poll < 4; poll += 1) await page.clock.runFor(2_000);
+    await expect(browser.getByText("Browser connection lost")).toBeVisible();
+    await page.clock.runFor(2_000);
+    await expect(browser.getByRole("img", { name: "Latest screen of the agent’s browser" })).toBeVisible();
+    await expect(browser.getByText("Browser connection lost")).toHaveCount(0);
+    await expect(activity.getByText("Working")).toBeVisible();
+    await expect(setup.getByText("The connection to Reiterate was lost.")).toHaveCount(0);
+  });
+}
+
+for (const scenario of ["activity-final-unreadable", "edit-activity-final-unreadable"]) {
+  test(`${scenario}: keeps the last activity and says it may be incomplete when the final update can't be read`, async ({ page }) => {
+    await page.clock.install({ time: clockStart });
+    await page.goto(`${baseUrl}/host?scenario=${scenario}`);
+    // Polls advance only with runFor, one status check per two seconds.
+    await page.clock.pauseAt(clockPaused);
+    const setup = page.frameLocator("iframe");
+    if (scenario.startsWith("edit-")) {
+      await setup.getByLabel("Step 1 description").fill("Open the reports page");
+      await setup.getByRole("button", { name: "Test changes" }).click();
+    } else {
+      await completeToTest(setup);
+      await setup.getByRole("button", { name: "Run test" }).click();
+    }
+    await expect(setup.getByRole("region", { name: "Agent browser", exact: true }).getByText("Opening the virtual browser.")).toBeVisible();
+    for (let poll = 0; poll < 5; poll += 1) await page.clock.runFor(2_000);
+    if (!scenario.startsWith("edit-")) {
+      await expect(setup.getByText("The agent completed every step")).toBeVisible();
+      await setup.getByRole("tab", { name: "Activity" }).click();
+    } else {
+      await expect(setup.getByText("Test completed", { exact: true })).toBeVisible();
+    }
+    const activity = setup.getByRole("log", { name: "Agent activity" });
+    await expect(activity.getByText("Type text")).toBeVisible();
+    await expect(activity.getByText(/may be incomplete/)).toBeVisible();
+  });
+}
 
 test("ignores a late reply with an older activity revision", async ({ page }) => {
   await page.clock.install({ time: clockStart });
@@ -714,11 +760,15 @@ test("shows the failed step and keeps a multi-character inline edit focused", as
   await expect(setup.getByText("Changes require a new test.")).toBeVisible();
   await expect(setup.getByRole("button", { name: "Continue to schedule" })).toHaveCount(0);
   await expect(setup.getByAltText("Agent browser screen")).toBeVisible();
-  await expect(setup.getByText("I looked for the export button.")).toBeVisible();
+  const screenBar = setup.getByRole("group", { name: "Screens" });
+  await expect(screenBar.getByText("2 / 2")).toBeVisible();
   await setup.getByRole("button", { name: "Previous screen" }).click();
-  await expect(setup.getByText("I opened Reports.")).toBeVisible();
+  await expect(screenBar.getByText("1 / 2")).toBeVisible();
+  await expect(setup.getByText("Earlier screen", { exact: true })).toBeVisible();
   await setup.getByRole("button", { name: "Next screen" }).click();
-  await expect(setup.getByText("I looked for the export button.")).toBeVisible();
+  await expect(setup.getByText("Final screen", { exact: true })).toBeVisible();
+  await expect(setup.locator("body")).not.toContainText("I opened Reports.");
+  await expect(setup.locator("body")).not.toContainText("I looked for the export button.");
   await setup.getByRole("button", { name: "Run test again" }).click();
   await expect.poll(() => page.evaluate(() => window.__savedAgents.length)).toBe(2);
   const saved = await page.evaluate(() => window.__savedAgents.at(-1));
@@ -1027,7 +1077,7 @@ test("keeps the browser, final step, and primary action visible at desktop and n
   await page.screenshot({ path: "e2e-artifacts/test-passed-narrow.png" });
 });
 
-test("shows the agent's note for each finished screen as a readable bar", async ({ page }) => {
+test("pages through finished screens with fixed labels and never shows the agent's notes", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=agent-notes`);
   const setup = page.frameLocator("iframe");
   await completeToTest(setup);
@@ -1041,35 +1091,26 @@ test("shows the agent's note for each finished screen as a readable bar", async 
 
   await setup.getByRole("button", { name: "Run test" }).click();
   const bar = setup.locator(".test-caption");
-  await expect(bar.locator(".caption-kind")).toHaveText("Finished");
-  await expect(bar.locator(".caption-summary")).toHaveText("Opened Reports, kept the last-month filter, and downloaded the statement.");
-  await expect(bar).not.toContainText("{");
-  await expect(bar).not.toContainText("Download started: statement.pdf");
+  const notes = /Opened Reports|Confirming the download|Opening the reports|Checking the date filter|Click · Type|\{/;
+  await expect(bar.locator(".caption-kind")).toHaveText("Final screen");
   await expect(bar.getByText("3 / 3")).toBeVisible();
-  await bar.getByRole("button", { name: "More" }).click();
-  await expect(bar).toContainText("Saw “Download started: statement.pdf”");
-  await expect(bar).toContainText("Confirming the download The statement download started.");
-  await page.screenshot({ path: "e2e-artifacts/test-agent-note-expanded.png" });
-  await bar.getByRole("button", { name: "Less" }).click();
-  expect((await bar.boundingBox())?.height ?? 0).toBeLessThan(56);
-  await page.screenshot({ path: "e2e-artifacts/test-agent-note.png" });
-
-  await bar.getByRole("button", { name: "Previous screen" }).click();
-  await expect(bar.locator(".caption-kind")).toHaveText("Actions");
-  await expect(bar.locator(".caption-summary")).toHaveText("Click · Type · Press keys");
+  await expect(bar).not.toContainText(notes);
   await expect(bar.getByRole("button", { name: "More" })).toHaveCount(0);
+  await page.screenshot({ path: "e2e-artifacts/test-final-screen.png" });
 
   await bar.getByRole("button", { name: "Previous screen" }).click();
-  await expect(bar.locator(".caption-kind")).toHaveText("Thinking");
+  await expect(bar.locator(".caption-kind")).toHaveText("Earlier screen");
+  await expect(bar.getByText("2 / 3")).toBeVisible();
+  await expect(bar).not.toContainText(notes);
+
+  await bar.getByRole("button", { name: "Previous screen" }).click();
   await page.setViewportSize({ width: 480, height: 900 });
   expect((await bar.boundingBox())?.height ?? 0).toBeLessThan(56);
   await expect(bar.getByRole("button", { name: "Next screen" })).toBeInViewport();
-  await page.screenshot({ path: "e2e-artifacts/test-agent-note-narrow.png" });
+  await page.screenshot({ path: "e2e-artifacts/test-final-screen-narrow.png" });
   await page.setViewportSize({ width: 1440, height: 900 });
-  await expect(bar.locator(".caption-summary")).toHaveText("Opening the reports The reports menu is in the left navigation.");
   await expect(bar.getByRole("button", { name: "Previous screen" })).toBeDisabled();
-  await bar.getByRole("button", { name: "More" }).click();
-  await expect(bar).toContainText("Checking the date filter The filter already shows last month.");
+  await expect(setup.locator("body")).not.toContainText(notes);
 });
 
 test("assumes https for a website address typed without a scheme", async ({ page }) => {
@@ -1818,7 +1859,7 @@ test("shows failure evidence and enlarges the final screen with keyboard focus",
   await expect(setup.getByText("Stopped at step 2: Download the statement", { exact: true })).toBeVisible();
   await expect(setup.getByText("The reports list opened, but no file was downloaded.")).toBeVisible();
   const thumbnail = setup.getByRole("button", { name: "Enlarge final screen" });
-  await expect(thumbnail.getByRole("img")).toHaveAttribute("alt", "I looked for the export button.");
+  await expect(thumbnail.getByRole("img")).toHaveAttribute("alt", "Final screen");
   await expect(thumbnail.getByRole("img")).toHaveJSProperty("naturalWidth", 1);
   await setup.locator(".edit-result-failed").scrollIntoViewIfNeeded();
   await page.screenshot({ path: "e2e-artifacts/edit-failed.png" });
@@ -2259,14 +2300,16 @@ function hostPage(url: string): string {
     if (n === 3) return running(3, "live", second, acted);
     const items = activityScenario === "activity-failure" ? failed : finished;
     if (activityScenario === "activity-lost") return running(4, "unknown", second, finished.concat([{ sequence: 7, kind: "lifecycle", status: "failed", text: "Browser connection lost" }]));
-    if (activityScenario === "activity-poll-lost" && n <= 5) return null;
+    // Status checks fail for ten seconds, long enough to watch in a real browser, then recover.
+    if (activityScenario === "activity-poll-lost" && n <= 8) return null;
     if (activityScenario === "activity-poll-lost") return running(4, "live", second, finished);
     if (activityScenario === "activity-stale" && n === 5) return running(2, "live", first, opened);
     if (n === 4) return running(4, "closing", second, closing(items));
     if (n === 5 || activityScenario === "activity-closed-hold") return running(5, "closed", second, closed(items));
-    const evidence = { revision: 6, browser: "closed", snapshot: second, items: closed(items) };
+    const evidence = activityScenario === "activity-final-unreadable" ? null : { revision: 6, browser: "closed", snapshot: second, items: closed(items) };
     if (activityScenario === "activity-failure") return { status: "failed", failure: { kind: "steps", message: "The Export button was missing." }, stoppedAtStep: 2, screens: [{ image: second.image, thought: '{"status":"failed","reason":"The Export button was missing.","step":2,"confirmation":null}' }], activity: evidence };
-    return { status: "succeeded", files: [{ name: "statement.pdf", url: "https://files.example.test/statement.pdf" }], screens: [{ image: second.image, thought: '{"status":"completed","reason":"Downloaded the September statement.","step":3,"confirmation":"Download started: statement.pdf"}' }], confirmation: "Download started: statement.pdf", activity: evidence };
+    const file = runId === "run-1" ? "statement.pdf" : "statement-" + runId + ".pdf";
+    return { status: "succeeded", files: [{ name: file, url: "https://files.example.test/" + file }], screens: [{ image: second.image, thought: '{"status":"completed","reason":"Downloaded the September statement.","step":3,"confirmation":"Download started: statement.pdf"}' }], confirmation: "Download started: statement.pdf", activity: evidence };
   };
   const agentNoteScreens = [
     { ...screen, thought: "**Opening the reports**\\n\\nThe reports menu is in the left navigation.\\n**Checking the date filter**\\n\\nThe filter already shows last month." },

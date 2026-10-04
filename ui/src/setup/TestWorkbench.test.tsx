@@ -74,11 +74,49 @@ test("has no live view without activity data, even when an older host sends a vi
   }
 });
 
-test("keeps the final screen as evidence after the run ends", () => {
-  const html = browser({ id: "run-1", status: "failed", activity: activity({ browser: "closed" }), screens: [{ image: nextScreen, thought: '{"status":"blocked","reason":"The login was rejected.","step":2,"confirmation":null}' }] });
-  assert.match(html, new RegExp(`<img[^>]*src="${nextScreen.replace(/[+/]/g, "\\$&")}"`));
-  assert.match(html, /Browser closed/);
-  assert.match(html, /The login was rejected\./);
+// Older hosts still send each history screen's raw note; none of it may reach the page.
+const privateNotes = [
+  "**Private plan**\n\nI will try the admin password hunter2 from the context.",
+  '{"status":"blocked","reason":"Context says token sk-live-canary","step":2,"confirmation":"https://www.browserbase.com/devtools?signed=canary"}',
+  "Proposed computer actions: type. Safety checks: Enter password hunter2.",
+];
+const canaries = /Private plan|hunter2|sk-live-canary|signed=canary|browserbase|Safety check|admin password|"status"/;
+
+test("keeps the final screen as evidence with a fixed label, never the agent's notes", () => {
+  const screens = privateNotes.map((thought, index) => ({ image: index === 2 ? nextScreen : firstScreen, thought }));
+  for (const status of ["failed", "succeeded"] as const) {
+    const html = browser({ id: "run-1", status, activity: activity({ browser: "closed" }), screens }, status === "succeeded");
+    assert.match(html, new RegExp(`<img[^>]*src="${nextScreen.replace(/[+/]/g, "\\$&")}"`));
+    assert.match(html, /Final screen/);
+    assert.match(html, /3 \/ 3/);
+    assert.match(html, /Browser closed/);
+    assert.doesNotMatch(html, canaries);
+    assert.doesNotMatch(html, />More</);
+  }
+});
+
+test("labels an earlier screen without the agent's notes while paging", () => {
+  const screens = privateNotes.map((thought) => ({ image: firstScreen, thought }));
+  const html = renderToStaticMarkup(<TestBrowser run={{ id: "run-1", status: "failed", screens }} url="https://portal.example.test" passed={false} screenIndex={0} />);
+  assert.match(html, /Earlier screen/);
+  assert.match(html, /1 \/ 3/);
+  assert.match(html, /aria-label="Previous screen" disabled=""/);
+  assert.doesNotMatch(html, canaries);
+});
+
+test("claims the agent closed the browser only when the browser state is closed", () => {
+  for (const status of ["succeeded", "failed"] as const) {
+    for (const state of ["closing", "unknown", "live"] as const) {
+      const ended = browser({ id: "run-1", status, activity: activity({ browser: state, snapshot: null }), screens: [] });
+      assert.doesNotMatch(ended, /Agent closed the browser|Browser closed/, `${status} ${state}`);
+      assert.doesNotMatch(browser({ id: "run-1", status, activity: activity({ browser: state }), screens: [{ image: nextScreen }] }), /Browser closed/, `${status} ${state} with screens`);
+    }
+    let run: WorkbenchRun | null = running({ activity: activity({ revision: 4, browser: "closing" }) });
+    run = applyTestRunUpdate(run, "run-1", { status, activity: null, screens: [] });
+    assert.doesNotMatch(browser(run), /Agent closed the browser|Browser closed/, `${status} after an unreadable final feed`);
+    assert.match(browser({ id: "run-1", status, activity: activity({ browser: "closed", snapshot: null }), screens: [] }), /Agent closed the browser/);
+    assert.match(browser({ id: "run-1", status, activity: activity({ browser: "closed" }), screens: [{ image: nextScreen }] }), /Browser closed/);
+  }
 });
 
 test("an ended run without history screens keeps its last live screen, or says the browser closed", () => {
@@ -119,10 +157,10 @@ test("keeps the last activity when the host could not read it, and marks the con
 });
 
 test("keeps only PNG screenshots and the latest twenty", () => {
-  const screens = [{ image: "https://tracker.example.test/pixel.png", thought: "" }, ...Array.from({ length: 22 }, (_, index) => ({ image: firstScreen, thought: `Screen ${index + 1}` }))];
+  const screens = [{ image: "https://tracker.example.test/pixel.png" }, ...Array.from({ length: 22 }, (_, index) => ({ image: `data:image/png;base64,AAAA${index + 1}` }))];
   const run = applyTestRunUpdate(running(), "run-1", { status: "running", screens });
   assert.equal(run?.screens?.length, 20);
-  assert.equal(run?.screens?.[0]?.thought, "Screen 3");
+  assert.equal(run?.screens?.[0]?.image, "data:image/png;base64,AAAA3");
 });
 
 test("drops a snapshot that is not a PNG picture", () => {
@@ -150,7 +188,8 @@ test("stops showing progress once the run ends", () => {
 });
 
 test("never shows the agent's raw notes in the activity rail", () => {
-  const html = rail({ id: "run-1", status: "succeeded", screens: [{ image: firstScreen, thought: "**Private plan**\n\nI will try the admin password." }] });
+  const screens = privateNotes.map((thought) => ({ image: firstScreen, thought }));
+  const html = rail({ id: "run-1", status: "succeeded", screens });
   assert.doesNotMatch(html, /Private plan/);
   assert.doesNotMatch(html, /admin password/);
 });
@@ -172,4 +211,20 @@ test("omits activity of a kind or status the page does not know", () => {
   assert.doesNotMatch(html, /Raw payload/);
   assert.doesNotMatch(html, /Odd status/);
   assert.match(html, /Scroll/);
+});
+
+test("says it is reconnecting instead of working while status checks fail", () => {
+  const html = rail({ ...running({ activity: activity({ items: [{ sequence: 1, kind: "action", status: "executed", text: "Click" }] }) }), connectionLost: true });
+  assert.match(html, /Click/);
+  assert.match(html, /Reconnecting/);
+  assert.doesNotMatch(html, /Working/);
+});
+
+test("says the activity may be incomplete when the final update could not be read", () => {
+  let run: WorkbenchRun | null = running({ activity: activity({ revision: 3, items: [{ sequence: 1, kind: "action", status: "executed", text: "Click" }] }) });
+  run = applyTestRunUpdate(run, "run-1", { status: "succeeded", activity: null, screens: [] });
+  const html = rail(run);
+  assert.match(html, /Click/);
+  assert.match(html, /may be incomplete/);
+  assert.doesNotMatch(rail({ id: "run-1", status: "succeeded", activity: activity({ revision: 4 }) }), /may be incomplete/);
 });
