@@ -11,7 +11,7 @@
     "type-gen": "npx openapi-typescript ./src/lib/api/openapi.json -o ./src/lib/api/apigen.d.ts",
     "type-gen-update": "rm -rf ./src/lib/api/apigen.d.ts && npm run get-openapi && npm run type-gen",
     "postinstall": "test -n \"$NOYARNPOSTINSTALL\" || npm run type-gen",
-    "test": "tsx --test src/setup/compiler.test.ts src/setup/agentThought.test.ts",
+    "test": "tsx --test src/setup/compiler.test.ts src/setup/agentThought.test.ts src/setup/TestWorkbench.test.tsx",
     "test:e2e": "playwright test"
   },
   "dependencies": {
