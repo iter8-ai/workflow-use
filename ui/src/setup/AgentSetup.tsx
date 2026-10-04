@@ -17,6 +17,7 @@ type RunState = WorkbenchRun & {
 // Entering sign-in details or choosing a schedule in the host dialog can take a while.
 const interactiveRequestTimeoutMs = 10 * 60_000;
 const signInNote = "If the website needs a sign-in, sign in during the demonstration. Reiterate saves the username and password you type there, encrypted, for this agent's runs. They never appear in the steps or the agent's instructions.";
+const demonstrateSignInNote = "Sign in here if the site asks. Reiterate saves the username and password encrypted for this agent's runs; they never appear in the steps.";
 
 const screens: Array<{ id: Screen; label: string }> = [
   { id: "describe", label: "Describe" },
@@ -63,6 +64,18 @@ export default function AgentSetup() {
   const draft = useMemo<SetupDraft>(() => ({ name, url, goal, steps, inputs: [], doneWhen }), [name, url, goal, steps, doneWhen]);
   const liveViewUrl = browserbaseLiveViewUrl(recording?.liveViewUrl ?? null);
   const canContinue = testRun?.status === "succeeded" && (doneWhen.kind !== "email" || emailStatus === "routed") && testRun.revision === revision && !busy;
+
+  // A new stage replaces the button that opened it, so focus would fall back to the page. Start on the new stage's heading.
+  const contentRef = useRef<HTMLElement>(null);
+  const shownScreenRef = useRef(screen);
+  useEffect(() => {
+    if (shownScreenRef.current === screen) return;
+    shownScreenRef.current = screen;
+    const heading = contentRef.current?.querySelector<HTMLElement>(".stage-title h2");
+    if (heading === null || heading === undefined) return;
+    heading.tabIndex = -1;
+    heading.focus({ preventScroll: true });
+  }, [screen]);
 
   useEffect(() => {
     const previousTitle = document.title;
@@ -590,18 +603,18 @@ export default function AgentSetup() {
   if (mode === "edit") return <EditScreen bridge={bridge} credentialsAllowed={credentialsAllowed} />;
 
   return (
-    <main className={`agent-setup${screen === "demonstrate" ? " agent-setup-demonstrating" : screen === "test" ? " agent-setup-testing" : ""}`}>
+    <main className={`agent-setup setup-flow${screen === "demonstrate" ? " agent-setup-demonstrating" : screen === "test" ? " agent-setup-testing" : ""}`}>
       <header className="setup-header setup-topbar">
         <button className="icon-button setup-nav" type="button" onClick={requestClose} disabled={busy} aria-label="Back to web agents" title="Back to web agents"><svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20"><path d="M19 12H5M11 6l-6 6 6 6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg></button>
         <h1 className="visually-hidden">Set up your agent</h1>
         <nav aria-label="Agent setup progress" className="setup-progress">
-          {screens.map((item, index) => <div className={screen === item.id ? "progress-item current" : screens.findIndex((screenItem) => screenItem.id === screen) > index ? "progress-item complete" : "progress-item"} key={item.id}><span>{index + 1}</span>{item.label}</div>)}
+          {screens.map((item, index) => <div className={screen === item.id ? "progress-item current" : screens.findIndex((screenItem) => screenItem.id === screen) > index ? "progress-item complete" : "progress-item"} aria-current={screen === item.id ? "step" : undefined} key={item.id}><span>{index + 1}</span>{item.label}</div>)}
         </nav>
         <button className="icon-button setup-nav setup-close" type="button" ref={closeButtonRef} onClick={requestClose} disabled={busy} aria-label="Close setup" title="Close setup"><svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg></button>
       </header>
       <div className="setup-shell">
 
-        <section className="setup-content" aria-busy={busy}>
+        <section className="setup-content" ref={contentRef} aria-busy={busy}>
           {connecting && <p className="setup-status" role="status">Connecting to Reiterate</p>}
           {error !== null && <div className="setup-error" role="alert"><span>{error}</span><button type="button" className="button button-quiet" onClick={() => setError(null)}>Dismiss</button></div>}
           {notice !== null && <p className="setup-notice" role="status">{notice}</p>}
@@ -1105,13 +1118,16 @@ function Describe(props: { name: string; url: string; goal: string; busy: boolea
 
 function Demonstrate(props: { recording: Recording | null; steps: SetupStep[]; liveViewUrl: string | null; busy: boolean; onStop(): void; onReview(): void; onReset(): void }): JSX.Element {
   const stepsRef = useRef<HTMLDivElement>(null);
+  const reviewRef = useRef<HTMLButtonElement>(null);
   const isRecording = props.recording?.status === "recording";
+  const isStopped = props.recording?.status === "stopped";
   const state = props.recording?.status === "expired" ? "Demonstration expired" : isRecording ? "Recording in progress" : "Demonstration finished";
   const browserMessage = isRecording
     ? "Opening the virtual browser."
-    : props.recording?.status === "stopped"
+    : isStopped
       ? "Demonstration finished. Review the recorded steps to continue."
       : "The virtual browser is unavailable for this demonstration.";
+  const count = props.steps.length;
 
   // Follow new steps while recording, unless the user scrolled up to read earlier ones. Whether to follow is
   // decided from the user's own scrolling, so a large batch of new steps does not stop the follow.
@@ -1126,16 +1142,28 @@ function Demonstrate(props: { recording: Recording | null; steps: SetupStep[]; l
     if (list !== null) followRef.current = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
   };
 
+  // Finishing swaps the pressed button for "Continue to review"; keep keyboard focus on that next action.
+  const wasRecordingRef = useRef(isRecording);
+  useEffect(() => {
+    if (wasRecordingRef.current && isStopped && (document.activeElement === null || document.activeElement === document.body)) reviewRef.current?.focus();
+    wasRecordingRef.current = isRecording;
+  }, [isRecording, isStopped]);
+
   return (
     <div className="setup-panel demonstrate">
+      {/* The controls sit beside the title, above the browser: always on screen, and reached by Tab before the remote browser. */}
       <div className="demonstrate-heading">
         <div className="stage-title">
           <h2>Demonstrate the task</h2>
           <p>Show each step you want the agent to follow. You can review and edit the steps afterwards.</p>
         </div>
-        <div className={`recording-state ${isRecording ? "recording-state-active" : ""}`} role="status"><span aria-hidden="true" />{state}</div>
+        <div className="demonstrate-controls">
+          <div className={`recording-state ${isRecording ? "recording-state-active" : ""}`} role="status"><span aria-hidden="true" />{state}</div>
+          <button className="button button-quiet" type="button" onClick={props.onReset} disabled={props.busy}>Start over</button>
+          {isRecording && <button className="button button-primary" type="button" onClick={props.onStop} disabled={props.busy}>Finish demonstration</button>}
+          {isStopped && <button className="button button-primary" type="button" ref={reviewRef} onClick={props.onReview} disabled={props.busy}>Continue to review</button>}
+        </div>
       </div>
-      <p className="credential-warning">{signInNote}</p>
       {props.recording?.blockedReason !== null && props.recording?.blockedReason !== undefined && <div className="setup-error" role="alert">Cannot continue: {props.recording.blockedReason}</div>}
       {props.recording?.status === "expired" && <div className="setup-error" role="alert">Recording expired. Start a new demonstration.</div>}
       <div className="demonstration-grid">
@@ -1144,19 +1172,20 @@ function Demonstrate(props: { recording: Recording | null; steps: SetupStep[]; l
             ? <p>{browserMessage}</p>
             // Clipboard access must be delegated explicitly or paste does nothing in the remote browser.
             : <iframe title="Virtual browser" src={props.liveViewUrl} allow="clipboard-read; clipboard-write" />}
+          {isStopped && props.liveViewUrl !== null && <div className="demonstrate-finished browser-notice-over-screen">
+            <div className="browser-notice-card">{count === 0
+              ? <><b>No steps were recorded</b><span>Start over to demonstrate the task again.</span></>
+              : <><b>{count} {count === 1 ? "step" : "steps"} recorded</b><span>Continue to review to check and edit {count === 1 ? "it" : "them"}.</span></>}</div>
+          </div>}
           <DownloadNotice downloads={props.recording?.downloads ?? []} />
         </div>
         <aside className="captured-steps" aria-label="Captured demonstration steps">
-          <h3>Recorded steps <span className="captured-steps-count">{props.steps.length}</span></h3>
+          <h3>Recorded steps <span className="captured-steps-count">{count}</span></h3>
           <div className="captured-steps-list" ref={stepsRef} onScroll={onStepsScroll} tabIndex={0} aria-label="Recorded steps list">
-            {props.steps.length === 0 ? <p>Actions will appear here while you demonstrate.</p> : <ol>{props.steps.map((step) => <li key={step.id} className={step.type === "download" ? "captured-download" : undefined}>{step.description}</li>)}</ol>}
+            {count === 0 ? <p>Actions will appear here while you demonstrate.</p> : <ol>{props.steps.map((step) => <li key={step.id} className={step.type === "download" ? "captured-download" : undefined}>{step.description}</li>)}</ol>}
           </div>
+          <p className="captured-steps-note"><svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14"><rect x="5" y="11" width="14" height="9" rx="2" fill="none" stroke="currentColor" strokeWidth="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg><span>{demonstrateSignInNote}</span></p>
         </aside>
-      </div>
-      <div className="setup-actions">
-        <button className="button button-quiet" type="button" onClick={props.onReset} disabled={props.busy}>Start over</button>
-        {isRecording && <button className="button button-primary" type="button" onClick={props.onStop} disabled={props.busy}>Finish demonstration</button>}
-        {props.recording?.status === "stopped" && <button className="button button-primary" type="button" onClick={props.onReview} disabled={props.busy}>Continue to review</button>}
       </div>
     </div>
   );
