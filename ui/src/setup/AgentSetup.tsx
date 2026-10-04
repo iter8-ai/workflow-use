@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { applyOrganizedSteps, compileAgent, credentialKinds, doneWhenOptions, draftChanges, findUnambiguousEmailStep, groupSteps, replaceStepsFrom, requiredCredentials, type CredentialKind, type DoneWhen, type SetupDraft, type SetupStep } from "./compiler";
 import { browserbaseLiveViewUrl, createHostBridge, HostRequestTimeoutError, type EditAgent as EditAgentData, type HostBridge, type RecordedDownload, type Recording } from "./host";
 import { HelpTip } from "./HelpTip";
@@ -643,6 +643,8 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
   const shownRun = testRun ?? lastRun;
   const [screenIndex, setScreenIndex] = useState<number | null>(null);
   const testViewRef = useRef<HTMLElement>(null);
+  const publishHeadingRef = useRef<HTMLHeadingElement>(null);
+  const testShownRef = useRef(shownRun !== null);
   const [checked, setChecked] = useState(false);
   const [recording, setRecording] = useState<Recording | null>(null);
   const [fromStep, setFromStep] = useState(0);
@@ -716,6 +718,12 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
     return () => { active = false; window.clearInterval(timer); };
   }, [agent, bridge, testRun?.id, testRun?.status]);
   useEffect(() => { if (testRun !== null) setLastRun(testRun); }, [testRun]);
+  // Test & publish moves in and out of the workbench; when that drops focus on the page, put it back on the card.
+  useLayoutEffect(() => {
+    if (testShownRef.current === (shownRun !== null)) return;
+    testShownRef.current = shownRun !== null;
+    if (document.activeElement === null || document.activeElement === document.body) publishHeadingRef.current?.focus();
+  }, [shownRun]);
   useEffect(() => {
     if (testRun?.id === undefined) return;
     setScreenIndex(null);
@@ -914,6 +922,29 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
     update({ steps: [...draft.steps, { id, type: "agent", description: "" }] });
   };
 
+  // While a test is on screen its action sits under the activity, beside the browser, so it never falls below the workbench.
+  const publishCard = <section className="edit-card edit-publish"><h2 ref={publishHeadingRef} tabIndex={-1}>Test &amp; publish</h2><p>Scheduled runs continue using the live version until you publish.</p>
+    {testRun?.status === "running" && <div className="edit-status" role="status"><span className="edit-spinner" aria-hidden="true" />Test is running.</div>}
+    {testRun && testRun.status !== "running" && <div className={`edit-result edit-result-${succeeded ? "succeeded" : "failed"}`} role={succeeded ? "status" : "alert"}>
+      <b>{succeeded ? "Test completed" : "Test failed"}</b>
+      {!succeeded && <>
+        <b>{editFailureLabel(testRun.failure?.kind)}</b>
+        {(testRun.failure?.message || testRun.error) && <p>{testRun.failure?.message || testRun.error}</p>}
+      </>}
+      {testRun.stoppedAtStep != null && <p>Stopped at step {testRun.stoppedAtStep}{draft.steps[testRun.stoppedAtStep - 1]?.description ? `: ${draft.steps[testRun.stoppedAtStep - 1]!.description}` : ""}</p>}
+      {testRun.confirmation && <p>{testRun.confirmation}</p>}
+      {testRun.files && testRun.files.length > 0 && <ul className="edit-files">{testRun.files.map((file) => <li key={file.url}><a href={file.url} target="_blank" rel="noreferrer">{file.name}</a></li>)}</ul>}
+      {lastScreen && <button className="edit-screen-thumbnail" aria-label="Enlarge final screen" onClick={(e) => { dialogTriggerRef.current = e.currentTarget; setScreenOpen(true); }}><img src={lastScreen.image} alt="Final screen" /></button>}
+      {!testRun.failure?.message && !testRun.error && !testRun.confirmation && !testRun.files?.length && !lastScreen && <p>{succeeded ? "The test finished successfully. No result details were returned." : "The test stopped. No result details were returned. Try again."}</p>}
+    </div>}
+    <div className="edit-actions">
+      <button className={`button ${succeeded ? "button-quiet" : "button-primary"}`} aria-busy={operation === "test"} disabled={busy || agent.internal || testRun?.status === "running" || recordingActive} onClick={() => void test()}>{operation === "test" ? "Starting test…" : testRun?.status === "failed" ? "Run test again" : succeeded ? "Test again" : "Test changes"}</button>
+      {succeeded && <label className="result-check"><input aria-label="I checked the result" type="checkbox" checked={checked} disabled={readOnly} onChange={(e) => setChecked(e.target.checked)} /> I checked the result</label>}
+      <button className={`button ${succeeded ? "button-primary" : "button-quiet"}`} aria-describedby="edit-publish-help" aria-busy={operation === "publish"} disabled={!canPublish || busy} onClick={(e) => { dialogTriggerRef.current = e.currentTarget; setPublishOpen(true); }}>{operation === "publish" ? "Publishing…" : "Publish changes"}</button>
+    </div>
+    <p id="edit-publish-help">{publishHelp}</p>
+  </section>;
+
   return <main className="agent-setup edit-agent">
     <header className="setup-header edit-header">
       <button className="icon-button" aria-label="Back to web agents" title="Back to web agents" disabled={dialogOpen} onClick={(e) => requestClose(e.currentTarget)}><EditIcon name="back" /></button>
@@ -942,7 +973,7 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
       {notice && <p className="edit-result edit-result-succeeded" role="status">{notice}</p>}
       {shownRun && <section className="edit-test" ref={testViewRef} aria-label="Test run"><div className="workbench-grid">
         <TestBrowser run={shownRun} url={draft.url} passed={shownRun.status === "succeeded"} serviceFailure={shownRun.failure?.kind === "service"} screenIndex={screenIndex} onSelectScreen={setScreenIndex} />
-        <aside className="test-rail" aria-label="Test activity"><header><h3>Agent activity</h3><span>{testRun === null ? "Changed since this test" : shownRun.status === "running" ? "Running" : succeeded ? "Passed" : "Stopped"}</span></header><ActivityLog run={shownRun} /></aside>
+        <div className="edit-test-side"><aside className="test-rail" aria-label="Test activity"><header><h3>Agent activity</h3><span>{testRun === null ? "Changed since this test" : shownRun.status === "running" ? "Running" : succeeded ? "Passed" : "Stopped"}</span></header><ActivityLog run={shownRun} /></aside>{publishCard}</div>
       </div></section>}
       <div className="edit-grid"><div className="edit-main">
         {raw ? <section className="edit-card edit-instructions"><h2>Instructions</h2>
@@ -984,27 +1015,7 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
             {credentialError && <p className="edit-rename-error" role="alert">{credentialError}</p>}
           </> : <p>Sign-in details: managed in the agent settings</p>}
         </section>
-        <section className="edit-card edit-publish"><h2>Test &amp; publish</h2><p>Scheduled runs continue using the live version until you publish.</p>
-          {testRun?.status === "running" && <div className="edit-status" role="status"><span className="edit-spinner" aria-hidden="true" />Test is running.</div>}
-          {testRun && testRun.status !== "running" && <div className={`edit-result edit-result-${succeeded ? "succeeded" : "failed"}`} role={succeeded ? "status" : "alert"}>
-            <b>{succeeded ? "Test completed" : "Test failed"}</b>
-            {!succeeded && <>
-              <b>{editFailureLabel(testRun.failure?.kind)}</b>
-              {(testRun.failure?.message || testRun.error) && <p>{testRun.failure?.message || testRun.error}</p>}
-            </>}
-            {testRun.stoppedAtStep != null && <p>Stopped at step {testRun.stoppedAtStep}{draft.steps[testRun.stoppedAtStep - 1]?.description ? `: ${draft.steps[testRun.stoppedAtStep - 1]!.description}` : ""}</p>}
-            {testRun.confirmation && <p>{testRun.confirmation}</p>}
-            {testRun.files && testRun.files.length > 0 && <ul className="edit-files">{testRun.files.map((file) => <li key={file.url}><a href={file.url} target="_blank" rel="noreferrer">{file.name}</a></li>)}</ul>}
-            {lastScreen && <button className="edit-screen-thumbnail" aria-label="Enlarge final screen" onClick={(e) => { dialogTriggerRef.current = e.currentTarget; setScreenOpen(true); }}><img src={lastScreen.image} alt="Final screen" /></button>}
-            {!testRun.failure?.message && !testRun.error && !testRun.confirmation && !testRun.files?.length && !lastScreen && <p>{succeeded ? "The test finished successfully. No result details were returned." : "The test stopped. No result details were returned. Try again."}</p>}
-          </div>}
-          <div className="edit-actions">
-            <button className={`button ${succeeded ? "button-quiet" : "button-primary"}`} aria-busy={operation === "test"} disabled={busy || agent.internal || testRun?.status === "running" || recordingActive} onClick={() => void test()}>{operation === "test" ? "Starting test…" : testRun?.status === "failed" ? "Run test again" : succeeded ? "Test again" : "Test changes"}</button>
-            {succeeded && <label className="result-check"><input aria-label="I checked the result" type="checkbox" checked={checked} disabled={readOnly} onChange={(e) => setChecked(e.target.checked)} /> I checked the result</label>}
-            <button className={`button ${succeeded ? "button-primary" : "button-quiet"}`} aria-describedby="edit-publish-help" aria-busy={operation === "publish"} disabled={!canPublish || busy} onClick={(e) => { dialogTriggerRef.current = e.currentTarget; setPublishOpen(true); }}>{operation === "publish" ? "Publishing…" : "Publish changes"}</button>
-          </div>
-          <p id="edit-publish-help">{publishHelp}</p>
-        </section>
+        {!shownRun && publishCard}
         <section className="edit-card edit-changes"><h2 ref={changesHeadingRef} tabIndex={-1}>Changes</h2>
           {changed && <p>{changeCount}</p>}
           <span className="visually-hidden" role="status">{changed ? changeCount : "No unpublished changes"}</span>
