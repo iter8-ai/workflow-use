@@ -901,27 +901,14 @@ select {
 .test-browser > img { width: 100%; flex: 1; min-height: 0; object-fit: contain; background: #fafafc; }
 .empty-browser { display: grid; flex: 1; place-content: center; gap: 4px; padding: 24px; text-align: center; color: #5f667c; background: #fafafc; }
 /* Screen bar under a finished test's screenshot: kind badge, one-line note, paging. */
-.test-caption { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 10px; min-height: 48px; padding: 7px 8px 7px 14px; border-top: 1px solid #e4e5ee; color: #17233d; font-size: .86rem; }
-.test-caption.expanded { align-items: start; }
+.test-caption { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 48px; padding: 7px 8px 7px 14px; border-top: 1px solid #e4e5ee; color: #17233d; font-size: .86rem; }
 .caption-kind { padding: 2px 8px; border-radius: 999px; background: #f0f0f6; color: #5f667c; font-size: .68rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; white-space: nowrap; }
 .caption-kind.good { background: #edf7f2; color: #1d6b4a; }
 .caption-kind.bad { background: #fff5f5; color: #922e3d; }
-.caption-kind.thinking { background: #f3f0fc; color: #4e38a0; }
-.test-caption.expanded .caption-kind { margin-top: 2px; }
-.caption-body { display: grid; gap: 6px; min-width: 0; }
-.test-caption.expanded .caption-body { max-height: 168px; overflow-y: auto; overscroll-behavior: contain; padding-right: 4px; }
-.caption-summary, .caption-detail { margin: 0; line-height: 1.4; }
-.caption-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.test-caption.expanded .caption-summary { white-space: normal; }
-.caption-detail { color: #5f667c; font-size: .82rem; }
-.caption-body strong { color: #17233d; font-weight: 650; }
-.caption-muted { color: #5f667c; }
-.caption-toggle { font-size: .8rem; white-space: nowrap; }
-.test-caption.expanded .caption-toggle { margin-top: 1px; }
+.caption-summary { min-width: 0; margin: 0; overflow: hidden; color: #363b50; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
 .caption-pager { display: flex; align-items: center; gap: 2px; color: #5f667c; font-size: .8rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .caption-pager .icon-button { width: 30px; height: 30px; color: #37374d; }
 .caption-pager .icon-button:hover:not(:disabled) { background: #f0f0f6; color: #17233d; }
-.test-caption.expanded .caption-pager { margin-top: -5px; }
 /* The test stage swaps its description for a (?) next to the heading. */
 .stage-title-inline { display: flex; align-items: center; gap: 8px; }
 .help-tip { position: relative; display: inline-flex; }

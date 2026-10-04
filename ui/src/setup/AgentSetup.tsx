@@ -212,11 +212,10 @@ export default function AgentSetup() {
     const refresh = () => {
       void bridge.request("getTestRun", { agentId, runId }).then((next) => {
         if (active) setTestRun((current) => applyTestRunUpdate(current, runId, next));
-      }).catch((requestError: Error) => {
-        if (!active) return;
-        setError(requestError.message);
-        // The test may still be running; the browser panel says the connection was lost, not that it ended.
-        setTestRun((current) => current?.id === runId ? { ...current, connectionLost: true } : current);
+      }).catch(() => {
+        // The test may still be running: the browser panel and activity say the connection was lost and keep
+        // retrying, rather than a page error that would outlast the recovery.
+        if (active) setTestRun((current) => current?.id === runId ? { ...current, connectionLost: true } : current);
       });
     };
     refresh();
@@ -696,10 +695,9 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
     if (testRun?.status !== "running" || agent === null) return;
     let active = true;
     const runId = testRun.id;
-    const poll = () => void bridge.request("getTestRun", { agentId: agent.agentId, runId }).then((next) => { if (active) setTestRun((current) => applyTestRunUpdate(current, runId, next)); }).catch((e) => {
-      if (!active) return;
-      setError(errorMessage(e));
-      setTestRun((current) => current?.id === runId ? { ...current, connectionLost: true } : current);
+    const poll = () => void bridge.request("getTestRun", { agentId: agent.agentId, runId }).then((next) => { if (active) setTestRun((current) => applyTestRunUpdate(current, runId, next)); }).catch(() => {
+      // As on create: the workbench shows the lost connection and the next poll retries.
+      if (active) setTestRun((current) => current?.id === runId ? { ...current, connectionLost: true } : current);
     });
     poll(); const timer = window.setInterval(poll, 2000);
     return () => { active = false; window.clearInterval(timer); };
@@ -984,7 +982,7 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
             {testRun.stoppedAtStep != null && <p>Stopped at step {testRun.stoppedAtStep}{draft.steps[testRun.stoppedAtStep - 1]?.description ? `: ${draft.steps[testRun.stoppedAtStep - 1]!.description}` : ""}</p>}
             {testRun.confirmation && <p>{testRun.confirmation}</p>}
             {testRun.files && testRun.files.length > 0 && <ul className="edit-files">{testRun.files.map((file) => <li key={file.url}><a href={file.url} target="_blank" rel="noreferrer">{file.name}</a></li>)}</ul>}
-            {lastScreen && <button className="edit-screen-thumbnail" aria-label="Enlarge final screen" onClick={(e) => { dialogTriggerRef.current = e.currentTarget; setScreenOpen(true); }}><img src={lastScreen.image} alt={lastScreen.thought || "Final screen"} /></button>}
+            {lastScreen && <button className="edit-screen-thumbnail" aria-label="Enlarge final screen" onClick={(e) => { dialogTriggerRef.current = e.currentTarget; setScreenOpen(true); }}><img src={lastScreen.image} alt="Final screen" /></button>}
             {!testRun.failure?.message && !testRun.error && !testRun.confirmation && !testRun.files?.length && !lastScreen && <p>{succeeded ? "The test finished successfully. No result details were returned." : "The test stopped. No result details were returned. Try again."}</p>}
           </div>}
           <div className="edit-actions">
@@ -1020,7 +1018,7 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
       </aside></div>
     </section>
     {screenOpen && lastScreen && <div className="edit-modal" role="dialog" aria-modal="true" aria-labelledby="edit-screen-title"><div className="edit-modal-card edit-screen-dialog" ref={modalRef} tabIndex={-1}>
-      <h2 id="edit-screen-title">Final screen</h2><button className="button button-quiet" onClick={() => setScreenOpen(false)}>Close screenshot</button><img src={lastScreen.image} alt={lastScreen.thought || "Final screen"} />
+      <h2 id="edit-screen-title">Final screen</h2><button className="button button-quiet" onClick={() => setScreenOpen(false)}>Close screenshot</button><img src={lastScreen.image} alt="Final screen" />
     </div></div>}
     {confirmClose && <div className="close-confirmation" role="dialog" aria-modal="true" aria-labelledby="close-edit-title" aria-describedby="close-edit-description"><div className="close-confirmation-card" ref={modalRef} tabIndex={-1}>
       <h2 id="close-edit-title">Discard your changes?</h2><p id="close-edit-description">Your unpublished changes and any active test or re-demonstration will be left behind.</p>

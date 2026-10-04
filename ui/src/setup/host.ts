@@ -24,7 +24,8 @@ export type TestRun = {
   failure?: { kind: "service" | "signin" | "website" | "steps" | "result" | "check" | "unknown"; message: string } | null;
   stoppedAtStep?: number | null;
   confirmation?: string | null;
-  screens?: Array<{ image: string; thought: string }>;
+  /** The finished run's screenshots, oldest first. */
+  screens?: Array<{ image: string }>;
   /**
    * The run's activity feed: what the agent did and its browser's state. `null` when the host could not read it
    * this time; omitted by hosts without the feed.

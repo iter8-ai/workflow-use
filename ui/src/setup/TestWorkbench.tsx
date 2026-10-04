@@ -1,6 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
-import { AgentScreenBar } from "./AgentScreenBar";
-import { parseAgentThought } from "./agentThought";
+import { useEffect, useRef } from "react";
 import type { TestActivity } from "./host";
 import type { WorkbenchRun } from "./testRun";
 
@@ -41,15 +39,36 @@ export function TestBrowser(props: { run: WorkbenchRun | null; url: string; pass
   const screens = props.run?.screens ?? [];
   const index = props.screenIndex == null ? screens.length - 1 : Math.min(props.screenIndex, screens.length - 1);
   const screen = screens[index];
-  const thought = useMemo(() => parseAgentThought(screen?.thought ?? ""), [screen?.thought]);
   const snapshot = props.run?.activity?.snapshot?.image ?? null;
-  const closed = props.run?.activity?.browser === "closed" || props.run?.activity?.browser === "closing";
+  // Only a confirmed closed browser may be called closed; "closing" or a lost state at the end stays as it was.
+  const closed = props.run?.activity?.browser === "closed";
   return <section className="test-browser" aria-label="Agent browser">
     <div className="test-browser-bar"><span aria-hidden="true">● ● ●</span><div>{props.run ? props.url : "about:blank"}</div><b>{view === "ended" && !closed ? "Run finished" : barLabels[view]}</b></div>
     {view === "live" ? <div className="browser-snapshot"><img src={snapshot!} alt="Latest screen of the agent’s browser" /></div>
-      : view === "ended" && screen ? <><img src={screen.image} alt="Agent browser screen" /><AgentScreenBar thought={thought} testPassed={props.passed} index={index} count={screens.length} onSelect={(next) => props.onSelectScreen?.(Math.max(0, Math.min(screens.length - 1, next)))} /></>
+      : view === "ended" && screen ? <><img src={screen.image} alt="Agent browser screen" /><ScreenBar passed={props.passed} index={index} count={screens.length} onSelect={(next) => props.onSelectScreen?.(Math.max(0, Math.min(screens.length - 1, next)))} /></>
       : <BrowserNotice view={view} closed={closed} reconnecting={props.run?.connectionLost === true} lastScreen={snapshot} serviceFailure={props.serviceFailure === true} />}
   </section>;
+}
+
+/**
+ * Pages through a finished run's screenshots. The labels are fixed: a screen's recorded note can hold the agent's
+ * private reasoning, so it is never shown.
+ */
+function ScreenBar(props: { passed: boolean; index: number; count: number; onSelect(index: number): void }): JSX.Element {
+  const final = props.index === props.count - 1;
+  return <div className="test-caption">
+    <span className={`caption-kind${final ? (props.passed ? " good" : " bad") : ""}`}>{final ? "Final screen" : "Earlier screen"}</span>
+    <p className="caption-summary">{!final ? "A page the agent saw earlier in this run." : props.passed ? "The page when the test passed." : "The page when the test stopped."}</p>
+    <div className="caption-pager" role="group" aria-label="Screens">
+      <button type="button" className="icon-button" aria-label="Previous screen" onClick={() => props.onSelect(props.index - 1)} disabled={props.index <= 0}><Chevron direction="left" /></button>
+      <span>{props.index + 1} / {props.count}</span>
+      <button type="button" className="icon-button" aria-label="Next screen" onClick={() => props.onSelect(props.index + 1)} disabled={final}><Chevron direction="right" /></button>
+    </div>
+  </div>;
+}
+
+function Chevron(props: { direction: "left" | "right" }): JSX.Element {
+  return <svg aria-hidden="true" viewBox="0 0 16 16" width="16" height="16"><path d={props.direction === "left" ? "M10 3 5 8l5 5" : "M6 3l5 5-5 5"} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>;
 }
 
 function BrowserNotice(props: { view: BrowserView; closed: boolean; reconnecting: boolean; lastScreen: string | null; serviceFailure: boolean }): JSX.Element {
@@ -117,8 +136,9 @@ export function ActivityLog(props: { run: WorkbenchRun | null }): JSX.Element {
           <span>{item.text}</span>
           {statusLabels[item.status] && <em>{statusLabels[item.status]}</em>}
         </li>)}
-        {running && <li className="activity-working"><span className="edit-spinner" aria-hidden="true" />Working</li>}
-        {!running && items.length === 0 && <li className="activity-empty">No activity was recorded for this run.</li>}
+        {running && <li className="activity-working"><span className="edit-spinner" aria-hidden="true" />{run.connectionLost ? "Reconnecting…" : "Working"}</li>}
+        {!running && run.connectionLost && <li className="activity-empty">The last update couldn’t be read, so this list may be incomplete.</li>}
+        {!running && !run.connectionLost && items.length === 0 && <li className="activity-empty">No activity was recorded for this run.</li>}
       </ol>}
   </div>;
 }
