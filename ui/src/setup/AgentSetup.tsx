@@ -928,7 +928,7 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
       {error && <div className="edit-result edit-result-failed" role="alert">{error}</div>}
       {notice && <p className="edit-result edit-result-succeeded" role="status">{notice}</p>}
       {shownRun && <section className="edit-test" ref={testViewRef} aria-label="Test run"><div className="workbench-grid">
-        <TestBrowser run={shownRun} url={draft.url} passed={testRun !== null && succeeded} serviceFailure={shownRun.failure?.kind === "service"} screenIndex={screenIndex} onSelectScreen={setScreenIndex} />
+        <TestBrowser run={shownRun} url={draft.url} passed={shownRun.status === "succeeded"} serviceFailure={shownRun.failure?.kind === "service"} screenIndex={screenIndex} onSelectScreen={setScreenIndex} />
         <aside className="test-rail" aria-label="Test activity"><header><h3>Agent activity</h3><span>{testRun === null ? "Changed since this test" : shownRun.status === "running" ? "Running" : succeeded ? "Passed" : "Stopped"}</span></header><ActivityLog run={shownRun} /></aside>
       </div></section>}
       <div className="edit-grid"><div className="edit-main">
