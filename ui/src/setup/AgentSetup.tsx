@@ -1,24 +1,16 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { applyOrganizedSteps, compileAgent, credentialKinds, doneWhenOptions, draftChanges, findUnambiguousEmailStep, groupSteps, replaceStepsFrom, requiredCredentials, type CredentialKind, type DoneWhen, type SetupDraft, type SetupStep } from "./compiler";
-import { browserbaseLiveViewUrl, createHostBridge, HostRequestTimeoutError, type EditAgent as EditAgentData, type HostBridge, type RecordedDownload, type Recording, type TestRun } from "./host";
-import { AgentScreenBar } from "./AgentScreenBar";
-import { parseAgentThought } from "./agentThought";
+import { browserbaseLiveViewUrl, createHostBridge, HostRequestTimeoutError, type EditAgent as EditAgentData, type HostBridge, type RecordedDownload, type Recording } from "./host";
 import { HelpTip } from "./HelpTip";
+import { applyTestRunUpdate, type WorkbenchRun } from "./testRun";
+import { ActivityLog, TestBrowser } from "./TestWorkbench";
 import "./setup.css";
 
 type Screen = "describe" | "demonstrate" | "review" | "test" | "schedule";
 
-type RunState = {
-  id: string;
-  status: TestRun["status"];
-  error?: string;
+type RunState = WorkbenchRun & {
   files: Array<{ name: string; url: string }>;
-  liveViewUrl: string | null;
   revision: number;
-  failure?: TestRun["failure"];
-  stoppedAtStep?: number | null;
-  confirmation?: string | null;
-  screens?: Array<{ image: string; thought: string }>;
   startedAt: string;
 };
 
@@ -216,26 +208,14 @@ export default function AgentSetup() {
       return;
     }
     let active = true;
+    const runId = testRun.id;
     const refresh = () => {
-      void bridge.request("getTestRun", { agentId, runId: testRun.id }).then((next) => {
-        if (!active) {
-          return;
-        }
-        setTestRun((current) => current === null ? null : {
-          ...current,
-          status: next.status,
-          error: next.error,
-          files: next.files ?? [],
-          liveViewUrl: next.status === "running" ? browserbaseLiveViewUrl(next.liveViewUrl ?? null) : null,
-          failure: next.failure,
-          stoppedAtStep: next.stoppedAtStep,
-          confirmation: next.confirmation,
-          screens: (next.screens ?? []).filter((screen) => /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(screen.image)).slice(-20),
-        });
-      }).catch((requestError: Error) => {
-        if (active) {
-          setError(requestError.message);
-        }
+      void bridge.request("getTestRun", { agentId, runId }).then((next) => {
+        if (active) setTestRun((current) => applyTestRunUpdate(current, runId, next));
+      }).catch(() => {
+        // The test may still be running: the browser panel and activity say the connection was lost and keep
+        // retrying, rather than a page error that would outlast the recovery.
+        if (active) setTestRun((current) => current?.id === runId ? { ...current, connectionLost: true } : current);
       });
     };
     refresh();
@@ -437,7 +417,7 @@ export default function AgentSetup() {
       setAgentId(saved.id);
       const startedAt = new Date().toISOString();
       const started = await bridge.request("testAgent", { agentId: saved.id, arguments: {} });
-      setTestRun({ id: started.id, status: "running", files: [], liveViewUrl: null, revision: nextRevision, screens: [], startedAt });
+      setTestRun({ id: started.id, status: "running", files: [], revision: nextRevision, screens: [], startedAt });
     } catch (requestError) {
       setError(errorMessage(requestError));
     } finally {
@@ -644,7 +624,12 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
   const [stages, setStages] = useState<unknown[]>([]);
   const [stageLimitInputs, setStageLimitInputs] = useState<Record<number, string>>({});
   const [stageLimitErrors, setStageLimitErrors] = useState<Record<number, boolean>>({});
-  const [testRun, setTestRun] = useState<TestRun & { id: string } | null>(null);
+  const [testRun, setTestRun] = useState<WorkbenchRun | null>(null);
+  // The last test stays on screen after an edit invalidates it, so the page does not jump while typing.
+  const [lastRun, setLastRun] = useState<WorkbenchRun | null>(null);
+  const shownRun = testRun ?? lastRun;
+  const [screenIndex, setScreenIndex] = useState<number | null>(null);
+  const testViewRef = useRef<HTMLElement>(null);
   const [checked, setChecked] = useState(false);
   const [recording, setRecording] = useState<Recording | null>(null);
   const [fromStep, setFromStep] = useState(0);
@@ -681,7 +666,7 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
       setStages(loaded.stages);
       setStageLimitInputs({}); setStageLimitErrors({});
       setCredentialsChanged(false); setCredentialError(null);
-      setTestRun(null); setChecked(false); setConflict(null); setPublishOpen(false);
+      setTestRun(null); setLastRun(null); setChecked(false); setConflict(null); setPublishOpen(false);
     } catch (requestError) { setError(errorMessage(requestError)); }
     finally { setBusy(false); }
   };
@@ -709,10 +694,20 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
   useEffect(() => {
     if (testRun?.status !== "running" || agent === null) return;
     let active = true;
-    const poll = () => void bridge.request("getTestRun", { agentId: agent.agentId, runId: testRun.id }).then((next) => { if (active) setTestRun((current) => current === null ? null : { ...current, ...next }); }).catch((e) => setError(errorMessage(e)));
-    poll(); const timer = window.setInterval(poll, 1000);
+    const runId = testRun.id;
+    const poll = () => void bridge.request("getTestRun", { agentId: agent.agentId, runId }).then((next) => { if (active) setTestRun((current) => applyTestRunUpdate(current, runId, next)); }).catch(() => {
+      // As on create: the workbench shows the lost connection and the next poll retries.
+      if (active) setTestRun((current) => current?.id === runId ? { ...current, connectionLost: true } : current);
+    });
+    poll(); const timer = window.setInterval(poll, 2000);
     return () => { active = false; window.clearInterval(timer); };
   }, [agent, bridge, testRun?.id, testRun?.status]);
+  useEffect(() => { if (testRun !== null) setLastRun(testRun); }, [testRun]);
+  useEffect(() => {
+    if (testRun?.id === undefined) return;
+    setScreenIndex(null);
+    testViewRef.current?.scrollIntoView({ block: "nearest" });
+  }, [testRun?.id]);
   useEffect(() => { recordingRef.current = recording; }, [recording]);
   useEffect(() => () => { const current = recordingRef.current; if (current?.status === "recording") void bridge.request("cancelRecording", { id: current.id }).catch(() => undefined); }, [bridge]);
   useEffect(() => {
@@ -932,6 +927,10 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
       {agent.internal && <p className="edit-notice"><b>Read-only internal agent</b><br />Managed by Operations. Publishing changes is disabled.</p>}
       {error && <div className="edit-result edit-result-failed" role="alert">{error}</div>}
       {notice && <p className="edit-result edit-result-succeeded" role="status">{notice}</p>}
+      {shownRun && <section className="edit-test" ref={testViewRef} aria-label="Test run"><div className="workbench-grid">
+        <TestBrowser run={shownRun} url={draft.url} passed={shownRun.status === "succeeded"} serviceFailure={shownRun.failure?.kind === "service"} screenIndex={screenIndex} onSelectScreen={setScreenIndex} />
+        <aside className="test-rail" aria-label="Test activity"><header><h3>Agent activity</h3><span>{testRun === null ? "Changed since this test" : shownRun.status === "running" ? "Running" : succeeded ? "Passed" : "Stopped"}</span></header><ActivityLog run={shownRun} /></aside>
+      </div></section>}
       <div className="edit-grid"><div className="edit-main">
         {raw ? <section className="edit-card edit-instructions"><h2>Instructions</h2>
           {stages.map((stage, index) => { const item = isObject(stage) ? stage : null; return item?.type === "agent" ? <div className="raw-stage" key={index}>
@@ -973,7 +972,7 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
           </> : <p>Sign-in details: managed in the agent settings</p>}
         </section>
         <section className="edit-card edit-publish"><h2>Test &amp; publish</h2><p>Scheduled runs continue using the live version until you publish.</p>
-          {testRun?.status === "running" && <div className="edit-status" role="status"><span className="edit-spinner" aria-hidden="true" />Test is running.{testRun.liveViewUrl && <a href={testRun.liveViewUrl} target="_blank" rel="noreferrer" aria-label="Watch the test (opens in a new tab)">Watch the test</a>}</div>}
+          {testRun?.status === "running" && <div className="edit-status" role="status"><span className="edit-spinner" aria-hidden="true" />Test is running.</div>}
           {testRun && testRun.status !== "running" && <div className={`edit-result edit-result-${succeeded ? "succeeded" : "failed"}`} role={succeeded ? "status" : "alert"}>
             <b>{succeeded ? "Test completed" : "Test failed"}</b>
             {!succeeded && <>
@@ -983,7 +982,7 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
             {testRun.stoppedAtStep != null && <p>Stopped at step {testRun.stoppedAtStep}{draft.steps[testRun.stoppedAtStep - 1]?.description ? `: ${draft.steps[testRun.stoppedAtStep - 1]!.description}` : ""}</p>}
             {testRun.confirmation && <p>{testRun.confirmation}</p>}
             {testRun.files && testRun.files.length > 0 && <ul className="edit-files">{testRun.files.map((file) => <li key={file.url}><a href={file.url} target="_blank" rel="noreferrer">{file.name}</a></li>)}</ul>}
-            {lastScreen && <button className="edit-screen-thumbnail" aria-label="Enlarge final screen" onClick={(e) => { dialogTriggerRef.current = e.currentTarget; setScreenOpen(true); }}><img src={lastScreen.image} alt={lastScreen.thought || "Final screen"} /></button>}
+            {lastScreen && <button className="edit-screen-thumbnail" aria-label="Enlarge final screen" onClick={(e) => { dialogTriggerRef.current = e.currentTarget; setScreenOpen(true); }}><img src={lastScreen.image} alt="Final screen" /></button>}
             {!testRun.failure?.message && !testRun.error && !testRun.confirmation && !testRun.files?.length && !lastScreen && <p>{succeeded ? "The test finished successfully. No result details were returned." : "The test stopped. No result details were returned. Try again."}</p>}
           </div>}
           <div className="edit-actions">
@@ -1019,7 +1018,7 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
       </aside></div>
     </section>
     {screenOpen && lastScreen && <div className="edit-modal" role="dialog" aria-modal="true" aria-labelledby="edit-screen-title"><div className="edit-modal-card edit-screen-dialog" ref={modalRef} tabIndex={-1}>
-      <h2 id="edit-screen-title">Final screen</h2><button className="button button-quiet" onClick={() => setScreenOpen(false)}>Close screenshot</button><img src={lastScreen.image} alt={lastScreen.thought || "Final screen"} />
+      <h2 id="edit-screen-title">Final screen</h2><button className="button button-quiet" onClick={() => setScreenOpen(false)}>Close screenshot</button><img src={lastScreen.image} alt="Final screen" />
     </div></div>}
     {confirmClose && <div className="close-confirmation" role="dialog" aria-modal="true" aria-labelledby="close-edit-title" aria-describedby="close-edit-description"><div className="close-confirmation-card" ref={modalRef} tabIndex={-1}>
       <h2 id="close-edit-title">Discard your changes?</h2><p id="close-edit-description">Your unpublished changes and any active test or re-demonstration will be left behind.</p>
@@ -1263,6 +1262,7 @@ function Test(props: {
   onRun(): void; onSchedule(): void; onBack(): void; onEditStep(id: string, description: string): void;
 }): JSX.Element {
   const [screenIndex, setScreenIndex] = useState<number | null>(null);
+  const [railTab, setRailTab] = useState<"activity" | "steps">("steps");
   const [customText, setCustomText] = useState(props.doneWhen.kind === "described" ? props.doneWhen.value : "");
   const rowsRef = useRef<HTMLDivElement>(null);
   const optionsRef = useRef<HTMLDetailsElement>(null);
@@ -1280,10 +1280,6 @@ function Test(props: {
   const completedSteps = props.run?.status === "succeeded" || kind === "result" || kind === "check";
   const options = doneWhenOptions(props.steps, props.run ? { confirmation: props.run.confirmation, failureKind: kind, files: props.run.files } : null, props.doneWhen)
     .filter((option) => (option.action !== "email" || props.emailRoutesAllowed) && (props.textAllowed || option.doneWhen?.kind !== "text"));
-  const screens = props.run?.screens ?? [];
-  const currentIndex = screenIndex === null ? screens.length - 1 : Math.min(screenIndex, screens.length - 1);
-  const currentScreen = screens[currentIndex];
-  const currentThought = useMemo(() => parseAgentThought(currentScreen?.thought ?? ""), [currentScreen?.thought]);
   const files = props.doneWhen.kind === "email" ? props.emailFiles : props.run?.files ?? [];
   const statusText = props.emailStatus === "rejected" && emailRun ? `The export arrived from ${props.emailFrom ?? "an external sender"}`
     : props.emailStatus === "no_documents" && emailRun ? "The email arrived without a file"
@@ -1314,14 +1310,26 @@ function Test(props: {
     : running ? "Watch the browser while the agent works through your steps."
     : props.run?.failure?.message ?? (failed ? props.run?.error : props.run?.confirmation) ?? "";
   useEffect(() => { setScreenIndex(null); }, [props.run?.id]);
+  // Watch the agent while it works, then review the result against the steps.
+  const runId = props.run?.id;
+  useEffect(() => { if (runId) setRailTab(running ? "activity" : "steps"); }, [runId, running]);
   useEffect(() => {
     if (running) return;
     if (props.run?.id && optionsRef.current) optionsRef.current.open = kind === "result" || kind === "check";
+  }, [props.run?.id, running, kind]);
+  useEffect(() => {
+    if (running || railTab !== "steps") return;
     const target = failedStep ? rowsRef.current?.querySelectorAll<HTMLElement>(".test-step")[stopped!] : kind === "result" || kind === "check" ? rowsRef.current?.querySelector<HTMLElement>(".done-when") : null;
     const list = rowsRef.current;
     if (list && target) list.scrollTop += target.getBoundingClientRect().top - list.getBoundingClientRect().top - 16;
     else if (list && completedSteps) list.scrollTop = list.scrollHeight;
-  }, [props.run?.id, running, failedStep, stopped, kind, completedSteps]);
+  }, [props.run?.id, running, failedStep, stopped, kind, completedSteps, railTab]);
+  const moveTab = (event: ReactKeyboardEvent): void => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    const next = railTab === "activity" ? "steps" : "activity";
+    setRailTab(next);
+    document.getElementById(`test-tab-${next}`)?.focus();
+  };
   const choose = (option: typeof options[number]): void => {
     if (option.action === "email") return props.onChooseEmail();
     if (option.action === "custom") { if (customText.trim()) props.onDoneWhen({ kind: "described", value: customText.trim() }); return; }
@@ -1330,13 +1338,15 @@ function Test(props: {
   return <div className="setup-workbench">
     <div className="stage-title stage-title-inline"><h2>Verify agent can follow the process</h2><HelpTip label="How the test works">Reiterate runs your steps in a new browser. Watch it work, and if it stops, fix the step in the list.</HelpTip></div>
     <div className="workbench-grid">
-      <section className="test-browser" aria-label="Agent browser">
-        <div className="test-browser-bar"><span aria-hidden="true">● ● ●</span><div>{props.run ? props.url : "about:blank"}</div><b>{running ? "Live · view only" : props.run ? "Finished run" : "Not started"}</b></div>
-        {running ? <WatchOnlyBrowser url={props.run?.liveViewUrl ?? null} /> : currentScreen ? <><img src={currentScreen.image} alt="Agent browser screen" /><AgentScreenBar thought={currentThought} testPassed={passed} index={currentIndex} count={screens.length} onSelect={(index) => setScreenIndex(Math.max(0, Math.min(screens.length - 1, index)))} /></> : <div className="empty-browser"><b>{serviceFailure ? "The agent has not opened the website." : passed ? "The agent finished the run." : "Run the test to watch the agent."}</b><span>{serviceFailure ? "Nothing ran in this browser." : "The agent’s browser appears here while it works through your steps."}</span></div>}
-      </section>
+      <TestBrowser run={props.run} url={props.url} passed={passed} serviceFailure={serviceFailure} screenIndex={screenIndex} onSelectScreen={setScreenIndex} />
       <aside className="test-rail" aria-label="Test steps"><header><h3>{props.run ? "Test result" : "Your steps"}</h3><span>{props.run ? `${completedSteps ? props.steps.length : failedStep ? stopped! + 1 : 0} of ${props.steps.length} reached` : `${props.steps.length} steps`}</span></header>
         <div className={`run-status ${failed ? "bad" : passed ? "good" : ""}`} role={failed ? "alert" : "status"}><small>{serviceFailure ? "Reiterate problem · not your steps" : kind === "steps" ? "Step needs clearer wording" : kind === "signin" ? "Sign-in problem" : kind === "result" ? "No file came back" : kind === "check" ? "Done-when check not met" : emailProblem ? props.emailStatus === "rejected" ? "Email not accepted" : "Email not received" : passed ? "Test passed" : running ? "Test running" : emailRun ? "Waiting for email" : failed ? "Test failed" : "Not tested yet"}</small><strong>{statusText}</strong><p>{props.run ? statusDetail : "Run the test to watch the agent work through these steps in a fresh browser."}</p>{!serviceFailure && props.run?.failure?.message && kind !== "result" && kind !== "check" && <blockquote><b>The agent said</b>{props.run.failure.message}</blockquote>}{emailRun && props.emailStatus === "rejected" && props.emailFrom && <button type="button" className="button button-primary" onClick={props.onAllowEmail} disabled={locked}>Accept emails from {props.emailFrom}</button>}{kind === "signin" && <button type="button" className="button button-quiet" onClick={props.onChangeCredentials} disabled={locked}>Change sign-in details</button>}</div>
-        <div className="test-steps" ref={rowsRef} tabIndex={0} aria-label="Test steps list">{props.steps.map((step, index) => { const done = completedSteps || (failedStep && index < stopped!); const isFailed = failedStep && index === stopped; const relativeDate = lastMonthRewrite(step.description); const startsStage = step.stage != null && step.stage !== props.steps[index - 1]?.stage && (Boolean(step.stage.trim()) || index > 0); return <Fragment key={step.id}>{startsStage && <div className="test-stage">{step.stage?.trim() || "Then"}</div>}<div className={`test-step ${done ? "done" : isFailed ? "failed" : props.run?.status === "failed" && !serviceFailure && failedStep && index > stopped! ? "notrun" : serviceFailure ? "notrun" : ""}`}><span>{done ? "✓" : isFailed ? "!" : index + 1}</span><div>{isFailed ? <textarea aria-label={`Step ${index + 1} instruction`} disabled={locked} value={step.description} onChange={(event) => props.onEditStep(step.id, event.target.value)} /> : step.description}{step.type === "credential" && <small>Uses the {credentialLabel(step.value)} saved in Reiterate, stored encrypted. <button type="button" className="text-button" onClick={props.onChangeCredentials} disabled={locked}>Change</button></small>}{isFailed && <small>Stopped here · <button type="button" className="text-button" onClick={() => setScreenIndex(null)}>Show screen</button></small>}{relativeDate && <small>Fixed date: every run picks this day <button type="button" className="date-chip" disabled={locked} onClick={() => props.onEditStep(step.id, relativeDate)}>Use last month</button></small>}</div></div></Fragment> })}
+        <div className="rail-tabs" role="tablist" aria-label="Test details" onKeyDown={moveTab}>
+          <button type="button" role="tab" id="test-tab-activity" aria-controls="test-panel-activity" aria-selected={railTab === "activity"} tabIndex={railTab === "activity" ? 0 : -1} onClick={() => setRailTab("activity")}>Activity</button>
+          <button type="button" role="tab" id="test-tab-steps" aria-controls="test-panel-steps" aria-selected={railTab === "steps"} tabIndex={railTab === "steps" ? 0 : -1} onClick={() => setRailTab("steps")}>Steps <span>{props.steps.length}</span></button>
+        </div>
+        <div className="rail-panel" role="tabpanel" id="test-panel-activity" aria-labelledby="test-tab-activity" hidden={railTab !== "activity"}>{railTab === "activity" && <ActivityLog run={props.run} />}</div>
+        <div className="test-steps" role="tabpanel" id="test-panel-steps" hidden={railTab !== "steps"} ref={rowsRef} tabIndex={0} aria-label="Test steps list">{props.steps.map((step, index) => { const done = completedSteps || (failedStep && index < stopped!); const isFailed = failedStep && index === stopped; const relativeDate = lastMonthRewrite(step.description); const startsStage = step.stage != null && step.stage !== props.steps[index - 1]?.stage && (Boolean(step.stage.trim()) || index > 0); return <Fragment key={step.id}>{startsStage && <div className="test-stage">{step.stage?.trim() || "Then"}</div>}<div className={`test-step ${done ? "done" : isFailed ? "failed" : props.run?.status === "failed" && !serviceFailure && failedStep && index > stopped! ? "notrun" : serviceFailure ? "notrun" : ""}`}><span>{done ? "✓" : isFailed ? "!" : index + 1}</span><div>{isFailed ? <textarea aria-label={`Step ${index + 1} instruction`} disabled={locked} value={step.description} onChange={(event) => props.onEditStep(step.id, event.target.value)} /> : step.description}{step.type === "credential" && <small>Uses the {credentialLabel(step.value)} saved in Reiterate, stored encrypted. <button type="button" className="text-button" onClick={props.onChangeCredentials} disabled={locked}>Change</button></small>}{isFailed && <small>Stopped here · <button type="button" className="text-button" onClick={() => setScreenIndex(null)}>Show screen</button></small>}{relativeDate && <small>Fixed date: every run picks this day <button type="button" className="date-chip" disabled={locked} onClick={() => props.onEditStep(step.id, relativeDate)}>Use last month</button></small>}</div></div></Fragment> })}
           <div className={`done-when ${passed ? "done" : kind === "result" || kind === "check" || emailProblem ? "failed" : ""}`}><b>Done when</b><div>{props.doneWhen.kind === "file" ? "A file is downloaded in the browser" : props.doneWhen.kind === "described" ? `The agent confirms: ${props.doneWhen.value}` : props.doneWhen.kind === "text" ? `“${props.doneWhen.value}” appears on the page` : props.doneWhen.kind === "email" ? `The export arrives at ${props.doneWhen.address}` : `The agent clicks “${props.doneWhen.value}”`}</div>{files.map((file) => { const link = safeFileUrl(file.url); return link && <a href={link} target="_blank" rel="noreferrer" key={`${file.name}:${file.url}`}>↓ {file.name}</a>; })}{!running && <details className="done-options" ref={optionsRef}><summary>Change</summary><p>{props.run === null ? "Suggested from your steps." : "Suggested from your steps and from what the agent saw at the end of this test."}</p>{options.map((option) => <div key={option.label}><button type="button" className={option.doneWhen && JSON.stringify(option.doneWhen) === JSON.stringify(props.doneWhen) ? "selected" : ""} disabled={locked} onClick={() => choose(option)}><strong>{option.label}</strong><span className="option-badges">{option.recommended && <em>Recommended</em>}{option.strength && <em className={option.strength}>{option.strength === "strong" ? "Strong evidence" : option.strength === "medium" ? "Some evidence" : "Weak evidence"}</em>}</span><small>{option.why}</small></button>{option.action === "custom" && <textarea rows={2} aria-label="Success criterion" disabled={locked} maxLength={300} placeholder="For example: a message says the export was emailed to me" value={customText} onChange={(event) => setCustomText(event.target.value)} onBlur={() => { if (customText.trim()) props.onDoneWhen({ kind: "described", value: customText.trim() }); }} />}</div>)}</details>}</div>
         </div>
         <footer><button type="button" className="text-button" onClick={props.onBack} disabled={locked}>Back to review</button><span /><button type="button" className={`button ${props.canContinue ? "button-quiet" : "button-primary"}`} onClick={props.onRun} disabled={locked}>{running ? "Running…" : props.run ? "Run test again" : "Run test"}</button>{props.canContinue && <button type="button" className="button button-primary" onClick={props.onSchedule}>Continue to schedule</button>}</footer>
@@ -1357,18 +1367,6 @@ function lastMonthRewrite(description: string): string | null {
 function safeFileUrl(value: string): string | null {
   try { const url = new URL(value); return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : null; }
   catch { return null; }
-}
-
-/** Shows the test's browser without letting the user click, type, or scroll into it. */
-function WatchOnlyBrowser(props: { url: string | null }): JSX.Element {
-  return <div className="browser-frame watch-only">{props.url === null ? <p>Opening the virtual browser.</p> : <><iframe title="Test browser (view only)" src={withoutNavbar(props.url)} tabIndex={-1} {...{ inert: "" }} /><div className="watch-only-shield" aria-hidden="true" /></>}</div>;
-}
-
-// The test bar above already shows the address, so drop Browserbase's own navbar.
-function withoutNavbar(value: string): string {
-  const url = new URL(value);
-  url.searchParams.set("navbar", "false");
-  return url.toString();
 }
 
 // "portal.example.com" means https://portal.example.com; anything with a scheme is left for startUrlError to judge.

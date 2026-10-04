@@ -24,7 +24,27 @@ export type TestRun = {
   failure?: { kind: "service" | "signin" | "website" | "steps" | "result" | "check" | "unknown"; message: string } | null;
   stoppedAtStep?: number | null;
   confirmation?: string | null;
-  screens?: Array<{ image: string; thought: string }>;
+  /** The finished run's screenshots, oldest first. */
+  screens?: Array<{ image: string }>;
+  /**
+   * The run's activity feed: what the agent did and its browser's state. `null` when the host could not read it
+   * this time; omitted by hosts without the feed.
+   */
+  activity?: TestActivity | null;
+};
+
+export type TestActivity = {
+  /** Grows within a run whenever the feed changes; an older revision is stale. */
+  revision: number;
+  /**
+   * `closing`/`closed`: the agent is closing or closed the browser, while the run may still be finishing.
+   * `unknown`: the browser was lost unexpectedly and closure is not confirmed.
+   */
+  browser: "starting" | "live" | "closing" | "closed" | "unavailable" | "unknown";
+  /** The latest screenshot of the agent's page, as a PNG data URL. */
+  snapshot: { image: string; sequence: number } | null;
+  /** Server-written labels for stages, actions and browser events, oldest first. */
+  items: Array<{ sequence: number; kind: "stage" | "action" | "lifecycle"; status: "started" | "executed" | "blocked" | "rejected" | "completed" | "failed"; text: string }>;
 };
 
 export type EditAgent = {

@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { expect, test, type FrameLocator } from "@playwright/test";
 
 const baseUrl = process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:4173";
+const clockStart = new Date("2026-10-04T09:00:00Z");
+const clockPaused = new Date("2026-10-04T09:00:30Z");
 
 test.beforeEach(async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -421,8 +423,7 @@ test("gives the demonstration the full width and scrolls long step lists", async
   await page.screenshot({ path: "e2e-artifacts/demonstrate-many-steps.png" });
 });
 
-test("shows the running test's browser without letting the user interact with it", async ({ page }) => {
-  await page.route("https://www.browserbase.com/**", (route) => route.fulfill({ contentType: "text/html", body: "<button>Portal</button>" }));
+test("shows the running test's latest screen without embedding the provider's viewer", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=watch`);
   const setup = page.frameLocator("iframe");
 
@@ -431,15 +432,275 @@ test("shows the running test's browser without letting the user interact with it
 
   await expect(setup.getByText("Test is running", { exact: true })).toBeVisible();
   await expect(setup.getByRole("button", { name: "Running…" })).toBeDisabled();
-  const browser = setup.locator('iframe[title="Test browser (view only)"]');
-  await expect(browser).toHaveAttribute("src", "https://www.browserbase.com/devtools-fullscreen/inspector.html?navbar=false");
-  await expect(browser).toHaveAttribute("inert", "");
-  await expect(browser).toHaveAttribute("tabindex", "-1");
-  const topmost = await browser.evaluate((frame) => {
-    const box = frame.getBoundingClientRect();
-    return document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)?.className;
+  const browser = setup.getByRole("region", { name: "Agent browser", exact: true });
+  await expect(browser.getByRole("img", { name: "Latest screen of the agent’s browser" })).toBeVisible();
+  await expect(browser.getByText("Live · view only")).toBeVisible();
+  await expect(setup.locator("iframe")).toHaveCount(0);
+});
+
+test("follows the agent, shows its own closed screen while the run finishes, then keeps the evidence and activity", async ({ page }) => {
+  await page.clock.install({ time: clockStart });
+  await page.goto(`${baseUrl}/host?scenario=activity-success`);
+  // Polls advance only with runFor, one status check per two seconds.
+  await page.clock.pauseAt(clockPaused);
+  const setup = page.frameLocator("iframe");
+  await completeToTest(setup);
+  await setup.getByRole("button", { name: "Run test" }).click();
+  const browser = setup.getByRole("region", { name: "Agent browser", exact: true });
+  const activity = setup.getByRole("log", { name: "Agent activity" });
+
+  await expect(browser.getByText("Opening the virtual browser.")).toBeVisible();
+  await expect(setup.getByRole("tab", { name: "Activity" })).toHaveAttribute("aria-selected", "true");
+  await page.clock.runFor(2_000);
+  await expect(browser.getByRole("img", { name: "Latest screen of the agent’s browser" })).toBeVisible();
+  await expect(activity.getByText("Browser opened")).toBeVisible();
+  await page.clock.runFor(2_000);
+  await expect(activity.getByText("Type text")).toBeVisible();
+  await expect(activity.getByText("Working")).toBeVisible();
+  await page.screenshot({ path: "e2e-artifacts/test-activity-live.png" });
+  await page.clock.runFor(2_000);
+  await expect(browser.getByText("Agent is closing the browser")).toBeVisible();
+  await expect(browser.getByRole("img", { name: "Latest screen of the agent’s browser" })).toHaveCount(0);
+  await page.clock.runFor(2_000);
+  await expect(browser.getByText("Agent closed the browser")).toBeVisible();
+  await expect(browser.getByText("Last screen", { exact: true })).toBeVisible();
+  await expect(setup.getByText("Test is running", { exact: true })).toBeVisible();
+  await expect(setup.locator("iframe")).toHaveCount(0);
+  await page.screenshot({ path: "e2e-artifacts/test-activity-closed.png" });
+
+  await page.clock.runFor(2_000);
+  await expect(setup.getByText("The agent completed every step")).toBeVisible();
+  await expect(browser.getByRole("img", { name: "Agent browser screen" })).toBeVisible();
+  await expect(browser.getByText("Final screen", { exact: true })).toBeVisible();
+  await expect(browser).not.toContainText("Downloaded the September statement.");
+  await expect(setup.getByRole("tab", { name: /Steps/ })).toHaveAttribute("aria-selected", "true");
+  await setup.getByRole("tab", { name: "Activity" }).click();
+  await expect(activity.getByText("Browser closed")).toBeVisible();
+  await expect(activity.getByText("Working")).toHaveCount(0);
+  await page.screenshot({ path: "e2e-artifacts/test-activity-finished.png" });
+
+  await setup.getByRole("button", { name: "Run test again" }).click();
+  await expect(browser.getByText("Opening the virtual browser.")).toBeVisible();
+  await expect(activity.getByText("Browser closed")).toHaveCount(0);
+  await expect(activity.getByText("Type text")).toHaveCount(0);
+  for (let poll = 0; poll < 5; poll += 1) await page.clock.runFor(2_000);
+  await expect(setup.getByText("The agent completed every step")).toBeVisible();
+  await expect(setup.getByRole("link", { name: "statement-run-2.pdf" })).toBeVisible();
+  await expect(setup.getByRole("link", { name: "statement.pdf" })).toHaveCount(0);
+});
+
+test("marks the blocked action and keeps the failed run's last screen", async ({ page }) => {
+  await page.clock.install({ time: clockStart });
+  await page.goto(`${baseUrl}/host?scenario=activity-failure`);
+  // Polls advance only with runFor, one status check per two seconds.
+  await page.clock.pauseAt(clockPaused);
+  const setup = page.frameLocator("iframe");
+  await completeToTest(setup);
+  await setup.getByRole("button", { name: "Run test" }).click();
+  // The first status check runs as soon as the test starts; later ones need the clock.
+  await expect(setup.getByRole("region", { name: "Agent browser", exact: true }).getByText("Opening the virtual browser.")).toBeVisible();
+  for (let poll = 0; poll < 5; poll += 1) await page.clock.runFor(2_000);
+  await expect(setup.getByText("Stuck at step 2")).toBeVisible();
+  const browser = setup.getByRole("region", { name: "Agent browser", exact: true });
+  await expect(browser.getByText("Final screen", { exact: true })).toBeVisible();
+  await expect(browser).not.toContainText("The Export button was missing.");
+  await setup.getByRole("tab", { name: "Activity" }).click();
+  const activity = setup.getByRole("log", { name: "Agent activity" });
+  await expect(activity.getByText("Blocked", { exact: true })).toBeVisible();
+  await expect(activity.getByText("Failed", { exact: true })).toBeVisible();
+});
+
+test("reports an unexpected browser loss without claiming the agent closed it", async ({ page }) => {
+  await page.clock.install({ time: clockStart });
+  await page.goto(`${baseUrl}/host?scenario=activity-lost`);
+  // Polls advance only with runFor, one status check per two seconds.
+  await page.clock.pauseAt(clockPaused);
+  const setup = page.frameLocator("iframe");
+  await completeToTest(setup);
+  await setup.getByRole("button", { name: "Run test" }).click();
+  // The first status check runs as soon as the test starts; later ones need the clock.
+  await expect(setup.getByRole("region", { name: "Agent browser", exact: true }).getByText("Opening the virtual browser.")).toBeVisible();
+  for (let poll = 0; poll < 3; poll += 1) await page.clock.runFor(2_000);
+  const browser = setup.getByRole("region", { name: "Agent browser", exact: true });
+  await expect(browser.getByText("Browser connection lost")).toBeVisible();
+  await expect(browser.getByText("Last screen", { exact: true })).toBeVisible();
+  await expect(browser.getByText("Agent closed the browser")).toHaveCount(0);
+  await expect(setup.getByText("Test is running", { exact: true })).toBeVisible();
+  await page.screenshot({ path: "e2e-artifacts/test-activity-lost.png" });
+});
+
+for (const scenario of ["activity-poll-lost", "edit-activity-poll-lost"]) {
+  test(`${scenario}: says the connection was lost while status checks fail, then reconnects`, async ({ page }) => {
+    await page.clock.install({ time: clockStart });
+    await page.goto(`${baseUrl}/host?scenario=${scenario}`);
+    // Polls advance only with runFor, one status check per two seconds.
+    await page.clock.pauseAt(clockPaused);
+    const setup = page.frameLocator("iframe");
+    if (scenario.startsWith("edit-")) {
+      await setup.getByLabel("Step 1 description").fill("Open the reports page");
+      await setup.getByRole("button", { name: "Test changes" }).click();
+    } else {
+      await completeToTest(setup);
+      await setup.getByRole("button", { name: "Run test" }).click();
+    }
+    const browser = setup.getByRole("region", { name: "Agent browser", exact: true });
+    const activity = setup.getByRole("log", { name: "Agent activity" });
+    await expect(browser.getByText("Opening the virtual browser.")).toBeVisible();
+    for (let poll = 0; poll < 3; poll += 1) await page.clock.runFor(2_000);
+    await expect(browser.getByText("Browser connection lost")).toBeVisible();
+    await expect(browser.getByText(/^Reconnecting/)).toBeVisible();
+    await expect(activity.getByText("Reconnecting…")).toBeVisible();
+    await expect(browser.getByRole("img", { name: "Latest screen of the agent’s browser" })).toHaveCount(0);
+    await expect(setup.getByText("The connection to Reiterate was lost.")).toHaveCount(0);
+    for (let poll = 0; poll < 4; poll += 1) await page.clock.runFor(2_000);
+    await expect(browser.getByText("Browser connection lost")).toBeVisible();
+    await page.clock.runFor(2_000);
+    await expect(browser.getByRole("img", { name: "Latest screen of the agent’s browser" })).toBeVisible();
+    await expect(browser.getByText("Browser connection lost")).toHaveCount(0);
+    await expect(activity.getByText("Working")).toBeVisible();
+    await expect(setup.getByText("The connection to Reiterate was lost.")).toHaveCount(0);
   });
-  expect(topmost).toBe("watch-only-shield");
+}
+
+for (const scenario of ["activity-final-unreadable", "edit-activity-final-unreadable"]) {
+  test(`${scenario}: keeps the last activity and says it may be incomplete when the final update can't be read`, async ({ page }) => {
+    await page.clock.install({ time: clockStart });
+    await page.goto(`${baseUrl}/host?scenario=${scenario}`);
+    // Polls advance only with runFor, one status check per two seconds.
+    await page.clock.pauseAt(clockPaused);
+    const setup = page.frameLocator("iframe");
+    if (scenario.startsWith("edit-")) {
+      await setup.getByLabel("Step 1 description").fill("Open the reports page");
+      await setup.getByRole("button", { name: "Test changes" }).click();
+    } else {
+      await completeToTest(setup);
+      await setup.getByRole("button", { name: "Run test" }).click();
+    }
+    await expect(setup.getByRole("region", { name: "Agent browser", exact: true }).getByText("Opening the virtual browser.")).toBeVisible();
+    for (let poll = 0; poll < 5; poll += 1) await page.clock.runFor(2_000);
+    if (!scenario.startsWith("edit-")) {
+      await expect(setup.getByText("The agent completed every step")).toBeVisible();
+      await setup.getByRole("tab", { name: "Activity" }).click();
+    } else {
+      await expect(setup.getByText("Test completed", { exact: true })).toBeVisible();
+    }
+    const activity = setup.getByRole("log", { name: "Agent activity" });
+    await expect(activity.getByText("Type text")).toBeVisible();
+    await expect(activity.getByText(/may be incomplete/)).toBeVisible();
+  });
+}
+
+test("ignores a late reply with an older activity revision", async ({ page }) => {
+  await page.clock.install({ time: clockStart });
+  await page.goto(`${baseUrl}/host?scenario=activity-stale`);
+  // Polls advance only with runFor, one status check per two seconds.
+  await page.clock.pauseAt(clockPaused);
+  const setup = page.frameLocator("iframe");
+  await completeToTest(setup);
+  await setup.getByRole("button", { name: "Run test" }).click();
+  // The first status check runs as soon as the test starts; later ones need the clock.
+  await expect(setup.getByRole("region", { name: "Agent browser", exact: true }).getByText("Opening the virtual browser.")).toBeVisible();
+  for (let poll = 0; poll < 3; poll += 1) await page.clock.runFor(2_000);
+  const browser = setup.getByRole("region", { name: "Agent browser", exact: true });
+  await expect(browser.getByText("Agent is closing the browser")).toBeVisible();
+  await page.clock.runFor(2_000);
+  await expect(browser.getByText("Agent is closing the browser")).toBeVisible();
+  await expect(browser.getByRole("img", { name: "Latest screen of the agent’s browser" })).toHaveCount(0);
+  await page.clock.runFor(2_000);
+  await expect(setup.getByText("The agent completed every step")).toBeVisible();
+});
+
+test("never embeds the provider's viewer for a host without activity data", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=activity-unavailable`);
+  const setup = page.frameLocator("iframe");
+  await completeToTest(setup);
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await expect(setup.getByRole("region", { name: "Agent browser", exact: true }).getByText("No live view for this test")).toBeVisible();
+  await expect(setup.getByText("Live activity isn’t available for this test. The result appears when it finishes.")).toBeVisible();
+  await expect(setup.locator("iframe")).toHaveCount(0);
+});
+
+for (const width of [1440, 1024]) {
+  test(`gives the browser about 70% of the testing workbench at ${width} px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.clock.install({ time: clockStart });
+    await page.goto(`${baseUrl}/host?scenario=activity-closed-hold`);
+    // Polls advance only with runFor, one status check per two seconds.
+    await page.clock.pauseAt(clockPaused);
+    const setup = page.frameLocator("iframe");
+    await completeToTest(setup);
+    await setup.getByRole("button", { name: "Run test" }).click();
+    await expect(setup.getByRole("region", { name: "Agent browser", exact: true }).getByText("Opening the virtual browser.")).toBeVisible();
+  // The first status check runs as soon as the test starts; later ones need the clock.
+  await expect(setup.getByRole("region", { name: "Agent browser", exact: true }).getByText("Opening the virtual browser.")).toBeVisible();
+    await page.clock.runFor(2_000);
+    const browser = (await setup.getByRole("region", { name: "Agent browser", exact: true }).boundingBox())!;
+    const rail = (await setup.getByRole("complementary", { name: "Test steps" }).boundingBox())!;
+    const share = browser.width / (browser.width + rail.width);
+    expect(share).toBeGreaterThan(0.6);
+    expect(share).toBeLessThan(0.76);
+    expect(Math.abs(browser.y - rail.y)).toBeLessThan(2);
+    await page.screenshot({ path: `e2e-artifacts/test-activity-${width}.png` });
+  });
+}
+
+test("stacks the browser above the activity on a narrow screen without sideways scrolling", async ({ page }) => {
+  await page.setViewportSize({ width: 480, height: 900 });
+  await page.clock.install({ time: clockStart });
+  await page.goto(`${baseUrl}/host?scenario=activity-closed-hold`);
+  // Polls advance only with runFor, one status check per two seconds.
+  await page.clock.pauseAt(clockPaused);
+  const setup = page.frameLocator("iframe");
+  await completeToTest(setup);
+  await setup.getByRole("button", { name: "Run test" }).click();
+  // The first status check runs as soon as the test starts; later ones need the clock.
+  await expect(setup.getByRole("region", { name: "Agent browser", exact: true }).getByText("Opening the virtual browser.")).toBeVisible();
+  for (let poll = 0; poll < 4; poll += 1) await page.clock.runFor(2_000);
+  const browser = (await setup.getByRole("region", { name: "Agent browser", exact: true }).boundingBox())!;
+  const rail = (await setup.getByRole("complementary", { name: "Test steps" }).boundingBox())!;
+  expect(rail.y).toBeGreaterThanOrEqual(browser.y + browser.height - 1);
+  const dimensions = await setup.locator("body").evaluate((body) => ({ width: body.scrollWidth, viewport: innerWidth }));
+  expect(dimensions.width).toBeLessThanOrEqual(dimensions.viewport);
+  await page.screenshot({ path: "e2e-artifacts/test-activity-narrow.png", fullPage: true });
+});
+
+test("edit: tests changes in the same workbench and keeps the last test on screen after an edit", async ({ page }) => {
+  await page.clock.install({ time: clockStart });
+  await page.goto(`${baseUrl}/host?scenario=edit-activity-success`);
+  // Polls advance only with runFor, one status check per two seconds.
+  await page.clock.pauseAt(clockPaused);
+  const setup = page.frameLocator("iframe");
+  await setup.getByLabel("Step 1 description").fill("Open the reports page");
+  await setup.getByRole("button", { name: "Test changes" }).click();
+  const workbench = setup.getByRole("region", { name: "Test run" });
+  const browser = workbench.getByRole("region", { name: "Agent browser", exact: true });
+  const activity = workbench.getByRole("log", { name: "Agent activity" });
+  await expect(browser.getByText("Opening the virtual browser.")).toBeVisible();
+  await page.clock.runFor(2_000);
+  await expect(browser.getByRole("img", { name: "Latest screen of the agent’s browser" })).toBeVisible();
+  const browserBox = (await browser.boundingBox())!;
+  const railBox = (await workbench.getByRole("complementary", { name: "Test activity" }).boundingBox())!;
+  const share = browserBox.width / (browserBox.width + railBox.width);
+  expect(share).toBeGreaterThan(0.6);
+  expect(share).toBeLessThan(0.76);
+  await page.screenshot({ path: "e2e-artifacts/edit-activity-live.png" });
+  for (let poll = 0; poll < 3; poll += 1) await page.clock.runFor(2_000);
+  await expect(browser.getByText("Agent closed the browser")).toBeVisible();
+  await expect(setup.getByRole("status").filter({ hasText: "Test is running." })).toBeVisible();
+  await expect(setup.locator("iframe")).toHaveCount(0);
+  await expect(setup.getByRole("link", { name: "Watch the test" })).toHaveCount(0);
+  await page.screenshot({ path: "e2e-artifacts/edit-activity-closed.png" });
+  await page.clock.runFor(2_000);
+  await expect(setup.getByText("Test completed", { exact: true })).toBeVisible();
+  await expect(browser.getByRole("img", { name: "Agent browser screen" })).toBeVisible();
+  await expect(activity.getByText("Browser closed")).toBeVisible();
+  await expect(browser.getByText("The page when the test passed.")).toBeVisible();
+  await setup.getByLabel("Goal", { exact: true }).fill("Download the October statement.");
+  await expect(workbench.getByText("Changed since this test")).toBeVisible();
+  await expect(activity.getByText("Browser closed")).toBeVisible();
+  // The kept run still passed; only the draft is newer than it.
+  await expect(browser.getByText("The page when the test passed.")).toBeVisible();
+  await expect(browser.getByText("The page when the test stopped.")).toHaveCount(0);
 });
 
 test("a service failure after steps ran does not claim no steps were tried", async ({ page }) => {
@@ -503,11 +764,15 @@ test("shows the failed step and keeps a multi-character inline edit focused", as
   await expect(setup.getByText("Changes require a new test.")).toBeVisible();
   await expect(setup.getByRole("button", { name: "Continue to schedule" })).toHaveCount(0);
   await expect(setup.getByAltText("Agent browser screen")).toBeVisible();
-  await expect(setup.getByText("I looked for the export button.")).toBeVisible();
+  const screenBar = setup.getByRole("group", { name: "Screens" });
+  await expect(screenBar.getByText("2 / 2")).toBeVisible();
   await setup.getByRole("button", { name: "Previous screen" }).click();
-  await expect(setup.getByText("I opened Reports.")).toBeVisible();
+  await expect(screenBar.getByText("1 / 2")).toBeVisible();
+  await expect(setup.getByText("Earlier screen", { exact: true })).toBeVisible();
   await setup.getByRole("button", { name: "Next screen" }).click();
-  await expect(setup.getByText("I looked for the export button.")).toBeVisible();
+  await expect(setup.getByText("Final screen", { exact: true })).toBeVisible();
+  await expect(setup.locator("body")).not.toContainText("I opened Reports.");
+  await expect(setup.locator("body")).not.toContainText("I looked for the export button.");
   await setup.getByRole("button", { name: "Run test again" }).click();
   await expect.poll(() => page.evaluate(() => window.__savedAgents.length)).toBe(2);
   const saved = await page.evaluate(() => window.__savedAgents.at(-1));
@@ -816,7 +1081,7 @@ test("keeps the browser, final step, and primary action visible at desktop and n
   await page.screenshot({ path: "e2e-artifacts/test-passed-narrow.png" });
 });
 
-test("shows the agent's note for each finished screen as a readable bar", async ({ page }) => {
+test("pages through finished screens with fixed labels and never shows the agent's notes", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=agent-notes`);
   const setup = page.frameLocator("iframe");
   await completeToTest(setup);
@@ -830,35 +1095,26 @@ test("shows the agent's note for each finished screen as a readable bar", async 
 
   await setup.getByRole("button", { name: "Run test" }).click();
   const bar = setup.locator(".test-caption");
-  await expect(bar.locator(".caption-kind")).toHaveText("Finished");
-  await expect(bar.locator(".caption-summary")).toHaveText("Opened Reports, kept the last-month filter, and downloaded the statement.");
-  await expect(bar).not.toContainText("{");
-  await expect(bar).not.toContainText("Download started: statement.pdf");
+  const notes = /Opened Reports|Confirming the download|Opening the reports|Checking the date filter|Click · Type|\{/;
+  await expect(bar.locator(".caption-kind")).toHaveText("Final screen");
   await expect(bar.getByText("3 / 3")).toBeVisible();
-  await bar.getByRole("button", { name: "More" }).click();
-  await expect(bar).toContainText("Saw “Download started: statement.pdf”");
-  await expect(bar).toContainText("Confirming the download The statement download started.");
-  await page.screenshot({ path: "e2e-artifacts/test-agent-note-expanded.png" });
-  await bar.getByRole("button", { name: "Less" }).click();
-  expect((await bar.boundingBox())?.height ?? 0).toBeLessThan(56);
-  await page.screenshot({ path: "e2e-artifacts/test-agent-note.png" });
-
-  await bar.getByRole("button", { name: "Previous screen" }).click();
-  await expect(bar.locator(".caption-kind")).toHaveText("Actions");
-  await expect(bar.locator(".caption-summary")).toHaveText("Click · Type · Press keys");
+  await expect(bar).not.toContainText(notes);
   await expect(bar.getByRole("button", { name: "More" })).toHaveCount(0);
+  await page.screenshot({ path: "e2e-artifacts/test-final-screen.png" });
 
   await bar.getByRole("button", { name: "Previous screen" }).click();
-  await expect(bar.locator(".caption-kind")).toHaveText("Thinking");
+  await expect(bar.locator(".caption-kind")).toHaveText("Earlier screen");
+  await expect(bar.getByText("2 / 3")).toBeVisible();
+  await expect(bar).not.toContainText(notes);
+
+  await bar.getByRole("button", { name: "Previous screen" }).click();
   await page.setViewportSize({ width: 480, height: 900 });
   expect((await bar.boundingBox())?.height ?? 0).toBeLessThan(56);
   await expect(bar.getByRole("button", { name: "Next screen" })).toBeInViewport();
-  await page.screenshot({ path: "e2e-artifacts/test-agent-note-narrow.png" });
+  await page.screenshot({ path: "e2e-artifacts/test-final-screen-narrow.png" });
   await page.setViewportSize({ width: 1440, height: 900 });
-  await expect(bar.locator(".caption-summary")).toHaveText("Opening the reports The reports menu is in the left navigation.");
   await expect(bar.getByRole("button", { name: "Previous screen" })).toBeDisabled();
-  await bar.getByRole("button", { name: "More" }).click();
-  await expect(bar).toContainText("Checking the date filter The filter already shows last month.");
+  await expect(setup.locator("body")).not.toContainText(notes);
 });
 
 test("assumes https for a website address typed without a scheme", async ({ page }) => {
@@ -1429,8 +1685,8 @@ test("guards leaving a running test or re-demonstration with no draft changes", 
   await expect(setup.getByLabel("Step 1 description")).toBeDisabled();
   await expect(setup.getByRole("button", { name: "Insert step" })).toBeDisabled();
   await expect(setup.getByRole("button", { name: "Move step 1 down" })).toBeDisabled();
-  await expect(setup.getByRole("link", { name: "Watch the test" })).toHaveAttribute("target", "_blank");
-  await expect(setup.getByRole("link", { name: "Watch the test" })).toHaveAttribute("rel", "noreferrer");
+  await expect(setup.getByRole("link", { name: "Watch the test" })).toHaveCount(0);
+  await expect(setup.locator("iframe")).toHaveCount(0);
   await setup.getByRole("button", { name: "Close edit page" }).click();
   await expect(setup.getByRole("dialog", { name: "Discard your changes?" })).toBeVisible();
   await setup.getByRole("button", { name: "Keep editing" }).click();
@@ -1607,7 +1863,7 @@ test("shows failure evidence and enlarges the final screen with keyboard focus",
   await expect(setup.getByText("Stopped at step 2: Download the statement", { exact: true })).toBeVisible();
   await expect(setup.getByText("The reports list opened, but no file was downloaded.")).toBeVisible();
   const thumbnail = setup.getByRole("button", { name: "Enlarge final screen" });
-  await expect(thumbnail.getByRole("img")).toHaveAttribute("alt", "I looked for the export button.");
+  await expect(thumbnail.getByRole("img")).toHaveAttribute("alt", "Final screen");
   await expect(thumbnail.getByRole("img")).toHaveJSProperty("naturalWidth", 1);
   await setup.locator(".edit-result-failed").scrollIntoViewIfNeeded();
   await page.screenshot({ path: "e2e-artifacts/edit-failed.png" });
@@ -1995,6 +2251,70 @@ function hostPage(url: string): string {
   const emailScenario = scenario?.startsWith("email-");
   const screen = { image: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6S8sAAAAASUVORK5CYII=", thought: "I looked for the export button." };
   // Thought shapes as the web agent stores them: reasoning summaries, proposed actions, the final JSON outcome.
+  // Activity scenarios replay one run frame per status poll; a new run starts over. Screens are drawn PNGs of a fake portal.
+  const activityScenario = scenario.replace(/^edit-/, "");
+  const drawnScreens = {};
+  let activityRun = null;
+  let activityPolls = 0;
+  const portalScreen = (label) => {
+    if (drawnScreens[label]) return drawnScreens[label];
+    const canvas = document.createElement("canvas");
+    canvas.width = 1440; canvas.height = 900;
+    const c = canvas.getContext("2d");
+    c.fillStyle = "#ffffff"; c.fillRect(0, 0, 1440, 900);
+    c.fillStyle = "#1f3a5f"; c.fillRect(0, 0, 1440, 72);
+    c.fillStyle = "#ffffff"; c.font = "600 28px sans-serif"; c.fillText("Example portal", 40, 46);
+    c.fillStyle = "#17233d"; c.font = "600 36px sans-serif"; c.fillText(label, 40, 150);
+    for (let row = 0; row < 8; row++) {
+      c.fillStyle = row % 2 ? "#f4f6fa" : "#ffffff"; c.fillRect(40, 190 + row * 64, 1360, 64);
+      c.fillStyle = "#5f667c"; c.font = "22px sans-serif"; c.fillText("Statement " + (row + 1) + " \u00b7 September 2026", 64, 230 + row * 64);
+    }
+    drawnScreens[label] = canvas.toDataURL("image/png");
+    return drawnScreens[label];
+  };
+  const activityFrame = (runId) => {
+    if (runId !== activityRun) { activityRun = runId; activityPolls = 0; }
+    activityPolls += 1;
+    const n = activityPolls;
+    const runLabel = runId === "run-1" ? "" : " (" + runId + ")";
+    const first = { image: portalScreen("Reports" + runLabel), sequence: 1 };
+    const second = { image: portalScreen("Monthly statements" + runLabel), sequence: 2 };
+    const opened = [
+      { sequence: 1, kind: "lifecycle", status: "completed", text: "Browser opened" },
+      { sequence: 2, kind: "stage", status: "started", text: "Follow the steps" },
+    ];
+    const acted = opened.concat([
+      { sequence: 3, kind: "action", status: "executed", text: "Click" },
+      { sequence: 4, kind: "action", status: "executed", text: "Type text" },
+    ]);
+    const failed = acted.concat([
+      { sequence: 5, kind: "action", status: "blocked", text: "Click" },
+      { sequence: 6, kind: "stage", status: "failed", text: "Follow the steps" },
+    ]);
+    const finished = acted.concat([
+      { sequence: 5, kind: "action", status: "executed", text: "Scroll" },
+      { sequence: 6, kind: "stage", status: "completed", text: "Follow the steps" },
+    ]);
+    const closing = (items) => items.concat([{ sequence: 7, kind: "lifecycle", status: "started", text: "Closing the browser" }]);
+    const closed = (items) => closing(items).concat([{ sequence: 8, kind: "lifecycle", status: "completed", text: "Browser closed" }]);
+    const running = (revision, browser, snapshot, items) => ({ status: "running", activity: { revision, browser, snapshot, items } });
+    if (activityScenario === "activity-unavailable") return { status: "running", liveViewUrl: "https://www.browserbase.com/devtools-fullscreen/inspector.html" };
+    if (n === 1) return running(1, "starting", null, []);
+    if (n === 2) return running(2, "live", first, opened);
+    if (n === 3) return running(3, "live", second, acted);
+    const items = activityScenario === "activity-failure" ? failed : finished;
+    if (activityScenario === "activity-lost") return running(4, "unknown", second, finished.concat([{ sequence: 7, kind: "lifecycle", status: "failed", text: "Browser connection lost" }]));
+    // Status checks fail for ten seconds, long enough to watch in a real browser, then recover.
+    if (activityScenario === "activity-poll-lost" && n <= 8) return null;
+    if (activityScenario === "activity-poll-lost") return running(4, "live", second, finished);
+    if (activityScenario === "activity-stale" && n === 5) return running(2, "live", first, opened);
+    if (n === 4) return running(4, "closing", second, closing(items));
+    if (n === 5 || activityScenario === "activity-closed-hold") return running(5, "closed", second, closed(items));
+    const evidence = activityScenario === "activity-final-unreadable" ? null : { revision: 6, browser: "closed", snapshot: second, items: closed(items) };
+    if (activityScenario === "activity-failure") return { status: "failed", failure: { kind: "steps", message: "The Export button was missing." }, stoppedAtStep: 2, screens: [{ image: second.image, thought: '{"status":"failed","reason":"The Export button was missing.","step":2,"confirmation":null}' }], activity: evidence };
+    const file = runId === "run-1" ? "statement.pdf" : "statement-" + runId + ".pdf";
+    return { status: "succeeded", files: [{ name: file, url: "https://files.example.test/" + file }], screens: [{ image: second.image, thought: '{"status":"completed","reason":"Downloaded the September statement.","step":3,"confirmation":"Download started: statement.pdf"}' }], confirmation: "Download started: statement.pdf", activity: evidence };
+  };
   const agentNoteScreens = [
     { ...screen, thought: "**Opening the reports**\\n\\nThe reports menu is in the left navigation.\\n**Checking the date filter**\\n\\nThe filter already shows last month." },
     { ...screen, thought: "Proposed computer actions: click, type, keypress." },
@@ -2096,6 +2416,7 @@ function hostPage(url: string): string {
     else if (request.method === "saveAgent") { if (window.__savedSchedule || scenario === "rerun-save-rejection" && window.__savedAgents.length > 0) fail("This agent is scheduled. Edit it in agent settings."); else { window.__savedAgents.push(request.params); send({ id: "agent-1" }); } }
     else if (request.method === "testAgent") { testAttempts += 1; window.__testArguments.push(request.params.arguments); exportSentAt = Date.now(); if (scenario === "email-cutoff" && window.__testArguments.length > 1) setTimeout(() => send({ id: "run-" + window.__testArguments.length }), 1000); else send({ id: "run-" + window.__testArguments.length }); }
     else if (request.method === "getTestRun") {
+      if (activityScenario.startsWith("activity-")) { const frame = activityFrame(request.params.runId); if (frame === null) fail("The connection to Reiterate was lost."); else send(frame); return; }
       if (scenario === "edit-fail-evidence") send({ status: "failed", failure: { kind: "website", message: "The download button was missing." }, stoppedAtStep: 2, confirmation: "The reports list opened, but no file was downloaded.", screens: [{ ...screen, thought: "Earlier screen" }, screen] });
       else if (scenario.startsWith("edit-failure-label-")) {
         const kind = scenario.slice("edit-failure-label-".length);
@@ -2112,7 +2433,7 @@ function hostPage(url: string): string {
       else if ((emailScenario || scenario === "text-result") && window.__testArguments.length === 1) send({ status: "failed", failure: { kind: "result", message: "No file was downloaded." }, stoppedAtStep: null, screens: [screen] });
       else if (scenario === "agent-notes") send({ status: "succeeded", files: [{ name: "statement.pdf", url: "https://files.example.test/statement.pdf" }], screens: agentNoteScreens, confirmation: "Download started: statement.pdf" });
       else if (scenario === "failed" || (scenario === "edit-fail-pass" && testAttempts === 1)) send({ status: "failed", error: "The website rejected the request." });
-      else if (scenario === "watch" || scenario === "edit-watch") send({ status: "running", liveViewUrl: "https://www.browserbase.com/devtools-fullscreen/inspector.html" });
+      else if (scenario === "watch" || scenario === "edit-watch") send({ status: "running", liveViewUrl: "https://www.browserbase.com/devtools-fullscreen/inspector.html", activity: { revision: 1, browser: "live", snapshot: { image: portalScreen("Reports"), sequence: 1 }, items: [{ sequence: 1, kind: "lifecycle", status: "completed", text: "Browser opened" }] } });
       else send({ status: "succeeded", files: emailScenario || scenario === "described-success" ? [] : [{ name: "statement.pdf", url: "https://files.example.test/statement.pdf" }], screens: [screen], confirmation: scenario === "described-success" ? "The green toast says Export sent" : "Export sent" });
     } else if (request.method === "createEmailRoute") { window.__createdRoutes.push(request.params); send({ channelId: "route-1", address: "reports+agent@reiterate.com" }); }
     else if (request.method === "getEmailArrival") {
