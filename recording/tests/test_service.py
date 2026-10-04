@@ -11,7 +11,7 @@ from workflow_use_recording.service import RecordingOwner, RecordingService
 
 
 class DeferredSession:
-    live_view_url = None
+    live_view_url: str | None = None
 
     def __init__(self) -> None:
         self.closed = False
@@ -178,3 +178,27 @@ async def test_playwright_session_retries_after_a_transient_browser_close_failur
     assert browser.close_attempts == 2
     assert runtime.stop_attempts == 1
     assert released
+
+
+@pytest.mark.asyncio
+async def test_startup_does_not_append_the_configured_url_after_browser_events() -> None:
+    class StartupProvider:
+        async def create(self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]) -> BrowserSession:
+            await on_event({"type": "navigation", "url": start_url})
+            await on_event({"type": "navigation", "url": "https://example.com/login"})
+            await on_event({"type": "click", "target": "Continue"})
+            return DeferredSession()
+
+    service = RecordingService(StartupProvider())
+    owner = RecordingOwner("iter7", "owner@iter7.example")
+    recording = await service.create(owner, "https://example.com/")
+    assert [(step.type, step.url, step.target) for step in recording.steps] == [
+        ("navigation", "https://example.com/", None),
+        ("navigation", "https://example.com/login", None),
+        ("click", None, "Continue"),
+    ]
+    # Returning to the starting page later is a genuine demonstrated navigation.
+    await service.record_event(recording.id, {"type": "navigation", "url": "https://example.com/"})
+    assert recording.steps[-1].url == "https://example.com/"
+    assert len(recording.steps) == 4
+    await service.close()

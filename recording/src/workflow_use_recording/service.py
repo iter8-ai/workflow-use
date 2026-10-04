@@ -109,7 +109,10 @@ class RecordingService:
             browser = await self.provider.create(safe_url, on_event)
             if await self._attach_browser(recording, browser):
                 raise RuntimeError("Recording stopped before the browser became available.")
-            await self.record_event(recording.id, {"type": "navigation", "url": safe_url})
+            # Browser events are authoritative, including redirects and actions during startup.
+            # Only seed the configured URL when the provider captured nothing.
+            if not recording.steps:
+                await self.record_event(recording.id, {"type": "navigation", "url": safe_url})
             return recording
         except BaseException:
             if recording.browser is None and recording.close_requested is None:
