@@ -627,6 +627,7 @@ select {
   color: #5f667c;
   font-size: 0.82rem;
 }
+.setup-panel .review-step-note input[type="checkbox"] { width: 16px; height: 16px; margin: 0; padding: 0; accent-color: #6546c9; }
 
 .setup-panel .review-step-kind {
   display: flex;
@@ -816,6 +817,8 @@ select {
 .edit-step textarea { min-height: 34px; padding: 6px 8px; field-sizing: content; resize: none; }
 .edit-step-controls { display: flex; gap: 4px; }
 .edit-step label { display: grid; gap: 4px; }
+.edit-step label.field-note { display: flex; align-items: center; gap: 7px; }
+.edit-card .edit-step input[type="checkbox"] { width: 16px; height: 16px; margin: 0; padding: 0; accent-color: #6546c9; }
 .edit-field-label { color: #5f667c; font-size: .82rem; font-weight: 650; }
 .edit-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
 .edit-actions .result-check { display: flex; align-items: center; gap: 6px; font-size: .82rem; color: #5f667c; white-space: nowrap; }

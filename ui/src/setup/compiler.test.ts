@@ -209,6 +209,46 @@ test("compiles a demonstrated sign-in into placeholders without values", () => {
   assert.match(prompt, /Click Sign in to log in\./);
 });
 
+test("email code clicks arm the listener immediately before request and resend", () => {
+  const draft = baseDraft();
+  draft.steps = [
+    { id: "request", type: "click", description: "Send email code", target: "Send code", requestsEmailCode: true },
+    { id: "resend", type: "click", description: "Resend email code", target: "Resend code", requestsEmailCode: true },
+    { id: "code", type: "credential", description: "Enter code", target: "Code", value: "otp" },
+  ];
+  const prompt = (compileAgent(draft, "email").stages[0] as { prompt: string }).prompt;
+  assert.equal((prompt.match(/\$otp_request/g) ?? []).length, 2);
+  assert.match(prompt, /1\. .*type.*\$otp_request.*immediately.*left click.*same computer tool call.*Send code/is);
+  assert.match(prompt, /2\. .*type.*\$otp_request.*immediately.*left click.*same computer tool call.*Resend code/is);
+  assert.match(prompt, /3\. .*\$otp/);
+});
+
+test("email source rejects unmarked otp, non-click markers, and repeated request clicks", () => {
+  const draft = baseDraft();
+  draft.steps = [{ id: "code", type: "credential", description: "Enter code", target: "Code", value: "otp" }];
+  assert.throws(() => compileAgent(draft, "email"), /mark.*request.*email code/i);
+  draft.steps.unshift({ id: "request", type: "input", description: "Enter email", target: "Email", value: "x@example.test", requestsEmailCode: true });
+  assert.throws(() => compileAgent(draft, "email"), /only.*click/i);
+  draft.steps[0] = { id: "request", type: "click", description: "Send code", value: "2", requestsEmailCode: true };
+  assert.throws(() => compileAgent(draft, "email"), /one click/i);
+  draft.steps[0] = { id: "request", type: "click", description: "Send code", requestsEmailCode: true };
+  assert.doesNotThrow(() => compileAgent(draft, "email"));
+  assert.doesNotThrow(() => compileAgent({ ...draft, steps: draft.steps.slice(1) }, "authenticator"));
+  assert.doesNotMatch((compileAgent(draft, "authenticator").stages[0] as { prompt: string }).prompt, /\$otp_request/);
+  draft.steps.push({ id: "second-code", type: "credential", description: "Enter another code", target: "Code", value: "otp" });
+  assert.throws(() => compileAgent(draft, "email"), /mark.*request.*email code/i);
+  draft.steps.splice(2, 0, { id: "resend", type: "click", description: "Resend code", requestsEmailCode: true });
+  assert.doesNotThrow(() => compileAgent(draft, "email"));
+});
+
+test("email request marker is a reviewable edit and survives organization", () => {
+  const live = baseDraft();
+  const draft = { ...live, steps: live.steps.map((step, index) => index === 0 ? { ...step, requestsEmailCode: true } : step) };
+  assert.deepEqual(draftChanges(draft, live), [{ key: "step:open-reports:email-code", label: "Step 1 requests or resends email code", from: "No", to: "Yes" }]);
+  const organized = applyOrganizedSteps(draft.steps, live.steps, live.steps.map((step) => ({ ...step, description: `${step.description}.` })));
+  assert.equal(organized[0]?.requestsEmailCode, true);
+});
+
 test("rejects unknown credential kinds and masked values", () => {
   const unknown = baseDraft();
   unknown.steps[0] = { ...unknown.steps[0], type: "credential", value: "api_key" };
