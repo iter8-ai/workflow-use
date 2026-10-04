@@ -805,7 +805,7 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
     try {
       const result = await bridge.request("requestCredentials", { kinds: signInKinds.length ? signInKinds : ["username", "password"], replace: true }, { timeoutMs: interactiveRequestTimeoutMs });
       const previousSaved = agent.credentials?.saved ?? [];
-      setAgent((current) => current === null ? current : { ...current, credentials: { saved: result.saved } });
+      setAgent((current) => current === null ? current : { ...current, credentials: { saved: result.saved, otpSource: result.otpSource } });
       if (result.changed ?? (result.saved.length !== previousSaved.length || result.saved.some((kind) => !previousSaved.includes(kind)))) {
         setCredentialsChanged(true); resetTest();
       }
@@ -1013,7 +1013,7 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
       </div><aside className="edit-rail">
         <section className="edit-card edit-credentials" aria-labelledby="edit-credentials-title"><h2 id="edit-credentials-title">Sign-in details</h2>
           {credentialsAllowed && agent.credentials ? <>
-            {signInKinds.length ? <ul className="edit-credential-kinds">{signInKinds.map((kind) => <li key={kind}>{kind === "username" ? "Username" : kind === "password" ? "Password" : "Authenticator key"} · {agent.credentials!.saved.includes(kind) ? "saved" : "Not saved"}</li>)}</ul> : <p>No sign-in details saved.</p>}
+            {signInKinds.length ? <ul className="edit-credential-kinds">{signInKinds.map((kind) => <li key={kind}>{kind === "username" ? "Username" : kind === "password" ? "Password" : agent.credentials?.otpSource === "email" ? "Email code" : "Authenticator key"} · {agent.credentials!.saved.includes(kind) ? "saved" : "Not saved"}</li>)}</ul> : <p>No sign-in details saved.</p>}
             {credentialsChanged && <p role="status">Changed — test before publishing</p>}
             {!agent.internal && <button className="button button-quiet" disabled={readOnly} aria-busy={operation === "credentials"} onClick={() => void changeCredentials()}>{operation === "credentials" ? "Changing sign-in details…" : signInKinds.length ? "Change sign-in details" : "Add sign-in details"}</button>}
             {credentialError && <p className="edit-rename-error" role="alert">{credentialError}</p>}
