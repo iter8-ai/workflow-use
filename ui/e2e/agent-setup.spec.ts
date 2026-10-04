@@ -831,6 +831,8 @@ for (const width of [1440, 1024]) {
     };
 
     await setup.getByRole("button", { name: "Test changes", exact: true }).click();
+    // The first status check runs as soon as the test starts; later ones need the clock.
+    await expect(browser.getByText("Opening the virtual browser.")).toBeVisible();
     for (let poll = 0; poll < 5; poll += 1) await page.clock.runFor(2_000);
     await expect(setup.getByText("Test failed", { exact: true })).toBeVisible();
     await expectAtTop("Run test again");
