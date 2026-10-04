@@ -87,12 +87,11 @@ async def _configure_context(context: Any, on_event: EventSink) -> None:
 
 async def _install_page_events(session: PlaywrightRecordingSession, page: Any, on_event: EventSink) -> None:
     def on_navigation(frame: Any) -> None:
-        if not is_public_http_url(frame.url):
+        # Embedded documents load on their own; they are not instructions to navigate the browser.
+        # Their demonstrated interactions still arrive through the context's capture binding.
+        if frame != page.main_frame or not is_public_http_url(frame.url):
             return
-        event: dict[str, Any] = {"type": "navigation", "url": frame.url}
-        if frame != page.main_frame:
-            event["target"] = "embedded frame"
-        session.track(on_event(event))
+        session.track(on_event({"type": "navigation", "url": frame.url}))
 
     def on_download(download: Any) -> None:
         session.watch(_report_download(download, on_event))

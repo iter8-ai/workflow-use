@@ -186,3 +186,69 @@ async def test_closing_the_browser_mid_download_does_not_hang() -> None:
     session.watch(wait_forever())
     await asyncio.wait_for(session.close(), 2)
     assert stopped == [True]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("start_path", ["", "/", "/redirect"])
+async def test_browser_startup_records_only_top_level_navigation(
+    monkeypatch: pytest.MonkeyPatch, start_path: str
+) -> None:
+    from workflow_use_recording import provider as recording_provider
+    from workflow_use_recording.service import RecordingOwner, RecordingService
+
+    playwright = pytest.importorskip("playwright.async_api")
+    context_route = playwright.BrowserContext.route
+
+    async def fixture_route(context: Any, pattern: Any, handler: Any, **kwargs: Any) -> None:
+        await context_route(context, pattern, handler, **kwargs)
+
+        async def serve(route: Any) -> None:
+            url = route.request.url
+            if url == "https://example.com/redirect":
+                await route.fulfill(content_type="text/html", body="<script>location.replace('/')</script>")
+            elif url == "https://example.com/":
+                await route.fulfill(content_type="text/html", body='''
+                    <iframe name="reports" src="https://example.com/widget"></iframe>
+                    <iframe src="https://widgets.example.org/embedded"></iframe>
+                    <a href="/next">Next</a>
+                ''')
+            elif url.endswith("/widget"):
+                await route.fulfill(content_type="text/html", body='<button>Reports</button>')
+            elif url.endswith("/embedded"):
+                await route.fulfill(content_type="text/html", body='<button>Embedded reports</button>')
+            else:
+                await route.fulfill(content_type="text/html", body='<a href="/">Back to start</a>')
+
+        # Controlled fixture responses, with real browser navigation and recorder listeners.
+        await context_route(context, "**/*", serve)
+
+    monkeypatch.setattr(playwright.BrowserContext, "route", fixture_route)
+    provider = recording_provider.LocalPlaywrightProvider()
+    service = RecordingService(provider)
+    owner = RecordingOwner("iter7", "owner@iter7.example")
+    try:
+        recording = await service.create(owner, "https://example.com" + start_path)
+        assert provider.last_session is not None
+        page = provider.last_session.browser.contexts[0].pages[0]
+        await page.wait_for_url("https://example.com/", wait_until="load")
+        initial = [("navigation", "https://example.com/redirect", None)] if start_path == "/redirect" else []
+        initial.append(("navigation", "https://example.com/", None))
+        assert [(step.type, step.url, step.target) for step in recording.steps] == initial
+        await page.frame_locator('iframe[name="reports"]').get_by_role("button", name="Reports").click()
+        await page.frame_locator('iframe[src$="/embedded"]').get_by_role("button", name="Embedded reports").click()
+        await page.get_by_role("link", name="Next", exact=True).click()
+        await page.get_by_role("link", name="Back to start").click()
+        await page.wait_for_load_state("load")
+        expected = initial + [
+            ("click", None, "Reports"),
+            ("click", None, "Embedded reports"),
+            ("click", None, "Next"),
+            ("navigation", "https://example.com/next", None),
+            ("click", None, "Back to start"),
+            ("navigation", "https://example.com/", None),
+        ]
+        assert [(step.type, step.url, step.target) for step in recording.steps] == expected
+        await service.stop(recording.id, owner)
+        assert [(step.type, step.url, step.target) for step in service.response(recording).steps] == expected
+    finally:
+        await service.close()
