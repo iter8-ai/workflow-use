@@ -45,7 +45,7 @@ export function TestBrowser(props: { run: WorkbenchRun | null; url: string; pass
   return <section className="test-browser" aria-label="Agent browser">
     <div className="test-browser-bar"><span aria-hidden="true">● ● ●</span><div>{props.run ? props.url : "about:blank"}</div><b>{view === "ended" && !closed ? "Run finished" : barLabels[view]}</b></div>
     {view === "live" ? <div className="browser-snapshot"><img src={snapshot!} alt="Latest screen of the agent’s browser" /></div>
-      : view === "ended" && screen ? <><img src={screen.image} alt="Agent browser screen" /><ScreenBar passed={props.passed} index={index} count={screens.length} onSelect={(next) => props.onSelectScreen?.(Math.max(0, Math.min(screens.length - 1, next)))} /></>
+      : view === "ended" && screen ? <><img src={screen.image} alt="Agent browser screen" /><ScreenBar passed={props.passed} stopped={props.run?.failure?.kind === "stopped"} index={index} count={screens.length} onSelect={(next) => props.onSelectScreen?.(Math.max(0, Math.min(screens.length - 1, next)))} /></>
       : <BrowserNotice view={view} closed={closed} reconnecting={props.run?.connectionLost === true} lastScreen={snapshot} serviceFailure={props.serviceFailure === true} />}
   </section>;
 }
@@ -54,11 +54,11 @@ export function TestBrowser(props: { run: WorkbenchRun | null; url: string; pass
  * Pages through a finished run's screenshots. The labels are fixed: a screen's recorded note can hold the agent's
  * private reasoning, so it is never shown.
  */
-function ScreenBar(props: { passed: boolean; index: number; count: number; onSelect(index: number): void }): JSX.Element {
+function ScreenBar(props: { passed: boolean; stopped: boolean; index: number; count: number; onSelect(index: number): void }): JSX.Element {
   const final = props.index === props.count - 1;
   return <div className="test-caption">
-    <span className={`caption-kind${final ? (props.passed ? " good" : " bad") : ""}`}>{final ? "Final screen" : "Earlier screen"}</span>
-    <p className="caption-summary">{!final ? "A page the agent saw earlier in this run." : props.passed ? "The page when the test passed." : "The page when the test stopped."}</p>
+    <span className={`caption-kind${final ? (props.passed ? " good" : props.stopped ? "" : " bad") : ""}`}>{final ? "Final screen" : "Earlier screen"}</span>
+    <p className="caption-summary">{!final ? "A page the agent saw earlier in this run." : props.passed ? "The page when the test passed." : props.stopped ? "The page when you stopped the test." : "The page when the test stopped."}</p>
     <div className="caption-pager" role="group" aria-label="Screens">
       <button type="button" className="icon-button" aria-label="Previous screen" onClick={() => props.onSelect(props.index - 1)} disabled={props.index <= 0}><Chevron direction="left" /></button>
       <span>{props.index + 1} / {props.count}</span>
@@ -132,11 +132,13 @@ export function ActivityLog(props: { run: WorkbenchRun | null }): JSX.Element {
     {run === null ? <p className="activity-empty">What the agent does appears here while it tests your steps.</p>
       : run.activity === undefined ? <p className="activity-empty">{running ? "Live activity isn’t available for this test. The result appears when it finishes." : "Live activity isn’t available for this test."}</p>
       : <ol className="activity-list">
-        {groupedItems.map((item) => <li key={item.sequence} className={`activity-item activity-${item.kind}${statusLabels[item.status] ? " activity-problem" : ""}`}>
+        {groupedItems.map((item) => {
+          const label = run.failure?.kind === "stopped" && item.kind === "lifecycle" && item.text === "Stopped by user" ? null : statusLabels[item.status];
+          return <li key={item.sequence} className={`activity-item activity-${item.kind}${label ? " activity-problem" : ""}`}>
           <ActivityIcon kind={item.kind} />
           <span>{item.text}</span>
-          {statusLabels[item.status] && <em>{statusLabels[item.status]}</em>}
-        </li>)}
+          {label && <em>{label}</em>}
+        </li>; })}
         {running && <li className="activity-working"><span className="edit-spinner" aria-hidden="true" />{run.connectionLost ? "Reconnecting…" : "Working"}</li>}
         {!running && run.connectionLost && <li className="activity-empty">The last update couldn’t be read, so this list may be incomplete.</li>}
         {!running && !run.connectionLost && groupedItems.length === 0 && <li className="activity-empty">No activity was recorded for this run.</li>}

@@ -2471,6 +2471,110 @@ async function completeToTest(setup: FrameLocator): Promise<void> {
   await setup.getByRole("button", { name: "Continue to test" }).click();
 }
 
+test("stops a create test and presents neutral evidence", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=stop-test`);
+  const setup = page.frameLocator("iframe");
+  await completeToTest(setup);
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await expect(setup.getByRole("button", { name: "Stop test" })).toBeVisible();
+  await setup.getByRole("button", { name: "Stop test" }).click();
+  await expect(setup.getByRole("button", { name: "Stopping…" })).toBeDisabled();
+  const result = setup.locator(".run-status");
+  await expect(result).toContainText("Test stopped");
+  await expect(result).toContainText("You stopped the test at step 2");
+  await expect(result).toContainText("Nothing needs changing. Run the test again when you are ready.");
+  await expect(result).toHaveAttribute("role", "status");
+  await expect(result).not.toHaveClass(/bad|good/);
+  await expect(result.locator("blockquote")).toHaveCount(0);
+  await expect(setup.getByRole("tab", { name: /Steps/ })).toHaveAttribute("aria-selected", "true");
+  const steps = setup.locator(".test-step");
+  await expect(steps.nth(0)).toHaveClass(/done/);
+  await expect(steps.nth(1)).toHaveClass(/stopped/);
+  await expect(steps.nth(1)).toContainText("Stopped here");
+  await expect(steps.nth(1).locator("textarea")).toHaveCount(0);
+  await expect(setup.getByText("The page when you stopped the test.")).toBeVisible();
+  await expect(setup.getByRole("button", { name: "Run test again" })).toBeVisible();
+  await expect(setup.getByRole("button", { name: "Continue to schedule" })).toHaveCount(0);
+  await expect.poll(() => page.locator('[data-testid="stop-requests"]').textContent()).toBe('[{"agentId":"agent-1","runId":"run-1"}]');
+  await page.screenshot({ path: "e2e-artifacts/stop-create.png" });
+});
+
+test("stops an edit test and keeps publishing unavailable", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-stop-test`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByLabel("Step 1 description").fill("Open the reports page");
+  await setup.getByRole("button", { name: "Test changes" }).click();
+  await expect(setup.getByRole("button", { name: "Stop test" })).toBeVisible();
+  await expect(setup.getByLabel("Step 1 description")).toBeDisabled();
+  await setup.getByRole("button", { name: "Stop test" }).click();
+  await expect(setup.getByRole("button", { name: "Stopping…" })).toBeDisabled();
+  await expect(setup.getByRole("status").filter({ hasText: "Stopping the test…" })).toBeVisible();
+  await expect(setup.locator(".edit-result-stopped")).toContainText("Stopped by you");
+  await expect(setup.locator(".edit-result-stopped")).toHaveAttribute("role", "status");
+  await expect(setup.getByRole("complementary", { name: "Test activity" }).locator("header span")).toHaveText("Stopped");
+  await expect(setup.getByRole("log", { name: "Agent activity" }).getByText("Failed")).toHaveCount(0);
+  await expect(setup.getByRole("button", { name: "Publish changes" })).toHaveAccessibleDescription("Test your changes before publishing.");
+  await expect.poll(() => page.locator('[data-testid="stop-requests"]').textContent()).toBe('[{"agentId":"agent-1","runId":"run-1"}]');
+  await page.screenshot({ path: "e2e-artifacts/stop-edit.png" });
+});
+
+test("recovers when an older host rejects Stop test", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=stop-rejected`);
+  const setup = page.frameLocator("iframe");
+  await completeToTest(setup);
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await setup.getByRole("button", { name: "Stop test" }).click();
+  await expect(setup.getByRole("alert")).toContainText("Stopping this test is not available.");
+  await expect(setup.getByRole("button", { name: "Stop test" })).toBeEnabled();
+  await setup.getByRole("button", { name: "Close setup" }).click();
+  await setup.getByRole("button", { name: "Close setup" }).last().click();
+  await expect.poll(() => page.evaluate(() => window.__closeRequests.length)).toBe(1);
+});
+
+for (const scenario of ["stop-test", "edit-stop-test"]) {
+  test(`stops the running ${scenario} run before closing`, async ({ page }) => {
+    await page.goto(`${baseUrl}/host?scenario=${scenario}`);
+    const setup = page.frameLocator("iframe");
+    if (scenario === "stop-test") {
+      await completeToTest(setup);
+      await setup.getByRole("button", { name: "Run test" }).click();
+      await setup.getByRole("button", { name: "Close setup" }).click();
+      await setup.getByRole("button", { name: "Close setup" }).last().click();
+    } else {
+      await setup.getByRole("button", { name: "Test changes" }).click();
+      await setup.getByRole("button", { name: "Close edit page" }).click();
+      await setup.getByRole("button", { name: "Discard changes" }).click();
+    }
+    await expect.poll(() => page.locator('[data-testid="stop-requests"]').textContent()).toBe('[{"agentId":"agent-1","runId":"run-1"}]');
+    await expect.poll(() => page.evaluate(() => window.__closeRequests.length)).toBe(1);
+    expect(await page.evaluate(() => window.__requestIds.map((id) => id.split(":").at(-1).split("-")[0]).filter((method) => method === "stopTest" || method === "close").slice(-2))).toEqual(["stopTest", "close"]);
+  });
+}
+
+for (const scenario of ["stop-test", "edit-stop-test"]) {
+  test(`does not repeat Stop when closing a stopping ${scenario} run`, async ({ page }) => {
+    await page.goto(`${baseUrl}/host?scenario=${scenario}`);
+    const setup = page.frameLocator("iframe");
+    if (scenario === "stop-test") {
+      await completeToTest(setup);
+      await setup.getByRole("button", { name: "Run test" }).click();
+    } else {
+      await setup.getByRole("button", { name: "Test changes" }).click();
+    }
+    await setup.getByRole("button", { name: "Stop test" }).click();
+    await expect(setup.getByRole("button", { name: "Stopping…" })).toBeDisabled();
+    if (scenario === "stop-test") {
+      await setup.getByRole("button", { name: "Close setup" }).first().click();
+      await setup.getByRole("button", { name: "Close setup" }).last().click();
+    } else {
+      await setup.getByRole("button", { name: "Close edit page" }).click();
+      await setup.getByRole("button", { name: "Discard changes" }).click();
+    }
+    await expect.poll(() => page.evaluate(() => window.__closeRequests.length)).toBe(1);
+    await expect.poll(() => page.locator('[data-testid="stop-requests"]').textContent()).toBe('[{"agentId":"agent-1","runId":"run-1"}]');
+  });
+}
+
 function hostPage(url: string): string {
   const encodedOrigin = encodeURIComponent(url);
   return `<!doctype html>
@@ -2488,6 +2592,12 @@ function hostPage(url: string): string {
   window.__scheduleArguments = [];
   window.__scheduleRequests = [];
   window.__closeRequests = [];
+  window.__stopRequests = [];
+  const stopLog = document.createElement("pre");
+  stopLog.dataset.testid = "stop-requests";
+  stopLog.hidden = true;
+  document.body.append(stopLog);
+  let stopPolls = 0;
   window.__savedAgents = [];
   window.__credentialRequests = [];
   window.__startUrls = [];
@@ -2677,7 +2787,21 @@ function hostPage(url: string): string {
     else if (request.method === "cancelRecording") { recordingActive = false; recordingExists = false; send(undefined); }
     else if (request.method === "saveAgent") { if (window.__savedSchedule || scenario === "rerun-save-rejection" && window.__savedAgents.length > 0) fail("This agent is scheduled. Edit it in agent settings."); else { window.__savedAgents.push(request.params); send({ id: "agent-1" }); } }
     else if (request.method === "testAgent") { testAttempts += 1; window.__testArguments.push(request.params.arguments); exportSentAt = Date.now(); if (scenario === "email-cutoff" && window.__testArguments.length > 1) setTimeout(() => send({ id: "run-" + window.__testArguments.length }), 1000); else send({ id: "run-" + window.__testArguments.length }); }
+    else if (request.method === "stopTest") {
+      if (scenario === "stop-rejected") { fail("Stopping this test is not available."); return; }
+      window.__stopRequests.push(request.params);
+      stopLog.textContent = JSON.stringify(window.__stopRequests);
+      stopPolls = 0;
+      send(null);
+    }
     else if (request.method === "getTestRun") {
+      if (scenario === "stop-test" || scenario === "edit-stop-test") {
+        const activity = { revision: 1, browser: "live", snapshot: { image: portalScreen("Reports"), sequence: 1 }, items: [{ sequence: 1, kind: "lifecycle", status: "completed", text: "Browser opened" }] };
+        if (!window.__stopRequests.some((item) => item.runId === request.params.runId)) send({ status: "running", activity });
+        else if (++stopPolls === 1) send({ status: "running", stopping: true, activity });
+        else send({ status: "failed", failure: { kind: "stopped", message: "You stopped the test." }, stoppedAtStep: 2, screens: [{ image: portalScreen("Monthly statements") }], activity: { ...activity, revision: 2, browser: "closed", items: activity.items.concat([{ sequence: 2, kind: "lifecycle", status: "failed", text: "Stopped by user" }]) } });
+        return;
+      }
       if (activityScenario.startsWith("activity-")) { const frame = activityFrame(request.params.runId); if (frame === null) fail("The connection to Reiterate was lost."); else send(frame); return; }
       if (scenario === "edit-fail-evidence") send({ status: "failed", failure: { kind: "website", message: "The download button was missing." }, stoppedAtStep: 2, confirmation: "The reports list opened, but no file was downloaded.", screens: [{ ...screen, thought: "Earlier screen" }, screen] });
       else if (scenario.startsWith("edit-failure-label-")) {
@@ -2695,7 +2819,7 @@ function hostPage(url: string): string {
       else if ((emailScenario || scenario === "text-result") && window.__testArguments.length === 1) send({ status: "failed", failure: { kind: "result", message: "No file was downloaded." }, stoppedAtStep: null, screens: [screen] });
       else if (scenario === "agent-notes") send({ status: "succeeded", files: [{ name: "statement.pdf", url: "https://files.example.test/statement.pdf" }], screens: agentNoteScreens, confirmation: "Download started: statement.pdf" });
       else if (scenario === "failed" || (scenario === "edit-fail-pass" && testAttempts === 1)) send({ status: "failed", error: "The website rejected the request." });
-      else if (scenario === "watch" || scenario === "edit-watch") send({ status: "running", liveViewUrl: "https://www.browserbase.com/devtools-fullscreen/inspector.html", activity: { revision: 1, browser: "live", snapshot: { image: portalScreen("Reports"), sequence: 1 }, items: [{ sequence: 1, kind: "lifecycle", status: "completed", text: "Browser opened" }] } });
+      else if (scenario === "watch" || scenario === "edit-watch" || scenario === "stop-rejected") send({ status: "running", liveViewUrl: "https://www.browserbase.com/devtools-fullscreen/inspector.html", activity: { revision: 1, browser: "live", snapshot: { image: portalScreen("Reports"), sequence: 1 }, items: [{ sequence: 1, kind: "lifecycle", status: "completed", text: "Browser opened" }] } });
       else send({ status: "succeeded", files: emailScenario || scenario === "described-success" ? [] : [{ name: "statement.pdf", url: "https://files.example.test/statement.pdf" }], screens: [screen], confirmation: scenario === "described-success" ? "The green toast says Export sent" : "Export sent" });
     } else if (request.method === "createEmailRoute") { window.__createdRoutes.push(request.params); send({ channelId: "route-1", address: "reports+agent@reiterate.com" }); }
     else if (request.method === "getEmailArrival") {
