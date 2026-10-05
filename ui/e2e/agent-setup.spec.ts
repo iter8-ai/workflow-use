@@ -152,7 +152,7 @@ test("offers the OTP question in Review and requests an authenticator key", asyn
   const setup = page.frameLocator("iframe");
   await describeAndDemonstrate(setup);
   await expect(setup.getByText("needs a one-time code", { exact: false })).toBeVisible();
-  await setup.getByRole("radio", { name: "Authenticator key saved in Reiterate" }).click();
+  await setup.getByRole("radio", { name: "Authenticator app or email code set up in Reiterate" }).click();
   await expect.poll(() => page.evaluate(() => window.__credentialRequests)).toContainEqual({ kinds: ["otp"], replace: false });
   await expect(setup.getByText("needs a one-time code", { exact: false })).toHaveCount(0);
 });
