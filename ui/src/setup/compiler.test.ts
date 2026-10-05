@@ -223,6 +223,29 @@ test("email code clicks arm the listener immediately before request and resend",
   assert.match(prompt, /3\. .*\$otp/);
 });
 
+test("email request instruction keeps the prompt a valid runtime template", () => {
+  const draft = baseDraft();
+  draft.steps = [
+    { id: "request", type: "click", description: "Send email code", target: "Send code", requestsEmailCode: true },
+    { id: "code", type: "credential", description: "Enter code", target: "Code", value: "otp" },
+  ];
+  const prompt = (compileAgent(draft, "email").stages[0] as { prompt: string }).prompt;
+  // FIRE renders stage prompts with str.format semantics: a single brace opens a field. The
+  // example tool actions must therefore use doubled braces, which render as literal braces.
+  assert.deepEqual(templateFields(prompt), []);
+  assert.match(prompt, /first \{\{type:"type",text:"\$otp_request"\}\}, then \{\{type:"click",button:"left",x:<live x>,y:<live y>\}\}/);
+});
+
+/** Field names a Python str.format template would require; `{{`/`}}` are literals. */
+function templateFields(template: string): string[] {
+  const fields: string[] = [];
+  const re = /\{\{|\}\}|\{([^{}]*)\}/g;
+  for (const match of template.matchAll(re)) {
+    if (match[1] !== undefined) fields.push(match[1].split("|")[0] ?? match[1]);
+  }
+  return fields;
+}
+
 test("email source rejects unmarked otp, non-click markers, and repeated request clicks", () => {
   const draft = baseDraft();
   draft.steps = [{ id: "code", type: "credential", description: "Enter code", target: "Code", value: "otp" }];
