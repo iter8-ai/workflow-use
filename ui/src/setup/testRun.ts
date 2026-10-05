@@ -1,7 +1,33 @@
-import type { TestRun } from "./host";
+import type { TestActivity, TestRun } from "./host";
 
 /** A test run as the create and edit pages show it. `connectionLost` is set when the last status check failed. */
 export type WorkbenchRun = TestRun & { id: string; connectionLost?: boolean };
+
+type ActivityItem = TestActivity["items"][number];
+
+// FIRE: projects/web-agent/src/web_agent/adapters/computer.py uses WAIT_MS = 2000.
+const WAIT_SECONDS_PER_ACTION = 2;
+
+function isExecutedWait(item: ActivityItem): boolean {
+  return item.kind === "action" && item.status === "executed" && item.text === "Wait";
+}
+
+export function groupActivityItems(items: ReadonlyArray<ActivityItem>, running: boolean): ActivityItem[] {
+  const grouped: ActivityItem[] = [];
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index]!;
+    if (!isExecutedWait(item)) {
+      grouped.push(item);
+      continue;
+    }
+    let end = index;
+    while (end + 1 < items.length && isExecutedWait(items[end + 1]!)) end += 1;
+    const count = end - index + 1;
+    grouped.push({ ...item, text: `${running && end === items.length - 1 ? "Wait" : "Waited"} ${count * WAIT_SECONDS_PER_ACTION}s${running && end === items.length - 1 ? "…" : ""}` });
+    index = end;
+  }
+  return grouped;
+}
 
 const pngImage = /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/;
 

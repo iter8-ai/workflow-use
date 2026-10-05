@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { TestActivity } from "./host";
-import type { WorkbenchRun } from "./testRun";
+import { groupActivityItems, type WorkbenchRun } from "./testRun";
 
 type BrowserView = "idle" | "unavailable" | "opening" | "live" | "closing" | "closed" | "lost" | "ended";
 
@@ -112,9 +112,10 @@ const statusLabels: Record<TestActivity["items"][number]["status"], string | nul
 export function ActivityLog(props: { run: WorkbenchRun | null }): JSX.Element {
   const run = props.run;
   const running = run?.status === "running";
-  const items = (run?.activity?.items ?? []).filter((item) => knownKinds.includes(item.kind) && Object.prototype.hasOwnProperty.call(statusLabels, item.status));
+  const activityItems = run?.activity?.items ?? [];
+  const groupedItems = groupActivityItems(activityItems, running).filter((item) => knownKinds.includes(item.kind) && Object.prototype.hasOwnProperty.call(statusLabels, item.status));
   // The feed keeps the latest 200 entries, so its length stops changing; follow the newest entry instead.
-  const lastSequence = items.at(-1)?.sequence;
+  const lastSequence = activityItems.at(-1)?.sequence;
   const listRef = useRef<HTMLDivElement>(null);
   const followRef = useRef(true);
   // Follow new entries unless the user scrolled up to read earlier ones.
@@ -131,14 +132,14 @@ export function ActivityLog(props: { run: WorkbenchRun | null }): JSX.Element {
     {run === null ? <p className="activity-empty">What the agent does appears here while it tests your steps.</p>
       : run.activity === undefined ? <p className="activity-empty">{running ? "Live activity isn’t available for this test. The result appears when it finishes." : "Live activity isn’t available for this test."}</p>
       : <ol className="activity-list">
-        {items.map((item) => <li key={item.sequence} className={`activity-item activity-${item.kind}${statusLabels[item.status] ? " activity-problem" : ""}`}>
+        {groupedItems.map((item) => <li key={item.sequence} className={`activity-item activity-${item.kind}${statusLabels[item.status] ? " activity-problem" : ""}`}>
           <ActivityIcon kind={item.kind} />
           <span>{item.text}</span>
           {statusLabels[item.status] && <em>{statusLabels[item.status]}</em>}
         </li>)}
         {running && <li className="activity-working"><span className="edit-spinner" aria-hidden="true" />{run.connectionLost ? "Reconnecting…" : "Working"}</li>}
         {!running && run.connectionLost && <li className="activity-empty">The last update couldn’t be read, so this list may be incomplete.</li>}
-        {!running && !run.connectionLost && items.length === 0 && <li className="activity-empty">No activity was recorded for this run.</li>}
+        {!running && !run.connectionLost && groupedItems.length === 0 && <li className="activity-empty">No activity was recorded for this run.</li>}
       </ol>}
   </div>;
 }

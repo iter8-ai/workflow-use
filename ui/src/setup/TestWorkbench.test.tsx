@@ -3,7 +3,7 @@ import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { TestActivity } from "./host";
-import { applyTestRunUpdate, type WorkbenchRun } from "./testRun";
+import { applyTestRunUpdate, groupActivityItems, type WorkbenchRun } from "./testRun";
 import { ActivityLog, TestBrowser } from "./TestWorkbench";
 
 const liveUrl = "https://www.browserbase.com/devtools-fullscreen/inspector.html?sessionId=s-1";
@@ -25,6 +25,39 @@ function browser(run: WorkbenchRun | null, passed = false): string {
 function rail(run: WorkbenchRun | null): string {
   return renderToStaticMarkup(<ActivityLog run={run} />);
 }
+
+function action(sequence: number, text: string, status: TestActivity["items"][number]["status"] = "executed"): TestActivity["items"][number] {
+  return { sequence, kind: "action", status, text };
+}
+
+test("groups one running Wait action into a ticking entry", () => {
+  assert.deepEqual(groupActivityItems([action(1, "Wait")], true), [action(1, "Wait 2s…")]);
+});
+
+test("finishes a Wait group when another activity follows it", () => {
+  assert.deepEqual(groupActivityItems([action(1, "Wait"), action(2, "Wait"), action(3, "Wait"), action(4, "Click")], true), [
+    action(1, "Waited 6s"),
+    action(4, "Click"),
+  ]);
+});
+
+test("keeps the newest running Wait group ticking", () => {
+  assert.deepEqual(groupActivityItems([action(4, "Wait"), action(5, "Wait"), action(6, "Wait")], true), [action(4, "Wait 6s…")]);
+  assert.deepEqual(groupActivityItems([action(4, "Wait"), action(5, "Wait"), action(6, "Wait")], false), [action(4, "Waited 6s")]);
+});
+
+test("does not group across a failed Wait action or non-Wait activity", () => {
+  const items = [action(1, "Wait"), action(2, "Wait", "failed"), action(3, "Wait"), action(4, "Type")];
+  assert.deepEqual(groupActivityItems(items, true), [action(1, "Waited 2s"), action(2, "Wait", "failed"), action(3, "Waited 2s"), action(4, "Type")]);
+});
+
+test("does not group across activity entries that the rail omits", () => {
+  const hidden = { sequence: 2, kind: "unknown", status: "executed", text: "Hidden" } as unknown as TestActivity["items"][number];
+  const html = rail(running({ activity: activity({ items: [action(1, "Wait"), hidden, action(3, "Wait")] }) }));
+  assert.match(html, /Waited 2s/);
+  assert.match(html, /Wait 2s…/);
+  assert.doesNotMatch(html, /Wait 4s…/);
+});
 
 test("shows the latest screen of a live browser as a picture, never the provider's viewer", () => {
   const html = browser(running({ activity: activity(), liveViewUrl: liveUrl }));
