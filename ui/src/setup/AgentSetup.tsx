@@ -607,7 +607,7 @@ export default function AgentSetup() {
     }
     setBusy(true);
     try {
-      if (agentId !== null && testRun?.status === "running") {
+      if (agentId !== null && testRun?.status === "running" && !testRun.stopping) {
         await bridge.request("stopTest", { agentId, runId: testRun.id }).catch(() => undefined);
       }
       await bridge.request("close", { agentId: agentId ?? undefined });
@@ -982,7 +982,7 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
   const close = async (): Promise<void> => {
     setBusy(true); setError(null);
     try {
-      if (testRun?.status === "running") {
+      if (testRun?.status === "running" && !testRun.stopping) {
         await bridge.request("stopTest", { agentId: agent.agentId, runId: testRun.id }).catch(() => undefined);
       }
       await bridge.request("close", { agentId: agent.agentId }); setConfirmClose(false); setScreenOpen(false);

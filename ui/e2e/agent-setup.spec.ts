@@ -2551,6 +2551,30 @@ for (const scenario of ["stop-test", "edit-stop-test"]) {
   });
 }
 
+for (const scenario of ["stop-test", "edit-stop-test"]) {
+  test(`does not repeat Stop when closing a stopping ${scenario} run`, async ({ page }) => {
+    await page.goto(`${baseUrl}/host?scenario=${scenario}`);
+    const setup = page.frameLocator("iframe");
+    if (scenario === "stop-test") {
+      await completeToTest(setup);
+      await setup.getByRole("button", { name: "Run test" }).click();
+    } else {
+      await setup.getByRole("button", { name: "Test changes" }).click();
+    }
+    await setup.getByRole("button", { name: "Stop test" }).click();
+    await expect(setup.getByRole("button", { name: "Stopping…" })).toBeDisabled();
+    if (scenario === "stop-test") {
+      await setup.getByRole("button", { name: "Close setup" }).first().click();
+      await setup.getByRole("button", { name: "Close setup" }).last().click();
+    } else {
+      await setup.getByRole("button", { name: "Close edit page" }).click();
+      await setup.getByRole("button", { name: "Discard changes" }).click();
+    }
+    await expect.poll(() => page.evaluate(() => window.__closeRequests.length)).toBe(1);
+    await expect.poll(() => page.locator('[data-testid="stop-requests"]').textContent()).toBe('[{"agentId":"agent-1","runId":"run-1"}]');
+  });
+}
+
 function hostPage(url: string): string {
   const encodedOrigin = encodeURIComponent(url);
   return `<!doctype html>
