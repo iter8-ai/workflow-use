@@ -547,7 +547,10 @@ test("organizer date metadata wins when the UI already merged the same parts", (
     date: { value: "2026-09-06", format: "parts", rule: { kind: "today" } },
     parts: recorded,
   }];
-  assert.equal(applyOrganizedSteps(current, recorded, organized)[0]?.date?.rule?.kind, "today");
+  const merged = applyOrganizedSteps(current, recorded, organized)[0];
+  assert.equal(merged?.date?.rule?.kind, "today");
+  assert.equal(merged?.description, "Enter the To date");
+  assert.equal(merged?.target, "To");
 });
 
 test("stage names are checked like instructions", () => {

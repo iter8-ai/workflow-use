@@ -427,7 +427,14 @@ export function applyOrganizedSteps(current: SetupStep[], recorded: SetupStep[],
     const first = result.findIndex((step) => step.id === next.id);
     const current = result[first];
     if (current?.type === "date") {
-      result[first] = { ...current, date: next.date === undefined ? current.date : { ...next.date, rule: current.date?.rule ?? next.date.rule }, parts: current.parts ?? next.parts };
+      const fallback = current.parts === undefined ? undefined : mergeDateSteps(current.parts)[0];
+      const fallbackMetadata = fallback?.type === "date" && current.description === fallback.description && current.target === fallback.target;
+      result[first] = {
+        ...current,
+        ...(fallbackMetadata ? { description: next.description, target: next.target, value: next.value } : {}),
+        date: next.date === undefined ? current.date : { ...next.date, rule: current.date?.rule ?? next.date.rule },
+        parts: current.parts ?? next.parts,
+      };
       continue;
     }
     const positions = ids.map((id) => result.findIndex((step) => step.id === id));
