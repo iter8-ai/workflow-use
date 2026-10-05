@@ -554,7 +554,7 @@ select {
 .review-step > div:first-child {
   grid-column: 1;
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto;
   min-width: 0;
   gap: 0;
 }
@@ -564,8 +564,10 @@ select {
 .review-step > div:first-child > .review-email-code,
 .review-step > div:first-child > .question-block,
 .review-step > div:first-child > .date-preview,
-.review-step > div:first-child > .expected-outcome-disclosure,
-.review-step > div:first-child > .merge-note { grid-column: 1; }
+.review-step > div:first-child > .review-expected-outcome,
+.review-step > div:first-child > .merge-note { grid-column: 1 / -1; }
+.review-step > div:first-child > .expected-outcome-disclosure { grid-column: 2; grid-row: 1; }
+.review-step > div:first-child > .step-instruction { grid-column: 1; grid-row: 1; }
 
 .review-step > .edit-step-controls {
   grid-column: 2;
@@ -586,7 +588,7 @@ select {
   align-items: center;
   gap: 7px;
   padding: 2px 0 4px;
-  margin-left: 27px;
+  margin-left: 36px;
   color: #4e38a0;
   font-size: .82rem;
 }
@@ -611,7 +613,7 @@ select {
 }
 
 .review-step > div:first-child > .question-block {
-  margin-left: 27px;
+  margin-left: 36px;
 }
 
 .question-block p {
@@ -900,9 +902,9 @@ select {
   gap: 6px 10px;
 }
 
-.merge-note {
+.setup-panel .review-step .merge-note {
   margin: 0;
-  margin-left: 27px;
+  margin-left: 36px;
   color: #5f667c;
   font-size: .76rem;
 }

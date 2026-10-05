@@ -129,7 +129,7 @@ test("merges recorded date fields and asks a goal-driven question", async ({ pag
   await expect(setup.getByLabel("Step 4 description")).toHaveValue("Download the statement");
   await expect(setup.locator(".review-step-number")).toHaveCount(0);
   await expect(setup.locator(".step-number-prefix")).toHaveCount(4);
-  await expect(setup.locator(".review-columns")).not.toContainText("#");
+  await expect(setup.locator(".review-columns")).toHaveCount(0);
   await expect(setup.getByText("1 question to answer before testing", { exact: true })).toBeVisible();
   if (!process.env.CI) {
     await page.screenshot({ path: "/Users/joonatan/.hermes/cache/scratch/date-steps/shots/review-date-open-1440.png" });
