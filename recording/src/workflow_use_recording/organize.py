@@ -56,10 +56,10 @@ def render(value: date, fmt: str) -> str:
 
 
 _DATE_TOKEN_PATTERNS = {
-    "%A": r"[A-Za-z]+",
-    "%a": r"[A-Za-z]+",
-    "%B": r"[A-Za-z]+",
-    "%b": r"[A-Za-z]+",
+    "%A": r"(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)",
+    "%a": r"(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)",
+    "%B": r"(?:January|February|March|April|May|June|July|August|September|October|November|December)",
+    "%b": r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)",
     "%Y": r"\d{4}",
     "%d": r"(?:0[1-9]|[12]\d|3[01])",
     "%-d": r"(?:0?[1-9]|[12]\d|3[01])",
@@ -73,7 +73,7 @@ def _matches_format(value: str, fmt: str) -> bool:
     pattern = re.escape(fmt)
     for token in sorted(_DATE_TOKEN_PATTERNS, key=len, reverse=True):
         pattern = pattern.replace(re.escape(token), _DATE_TOKEN_PATTERNS[token])
-    return re.fullmatch(pattern, value) is not None
+    return re.fullmatch(pattern, value, flags=re.IGNORECASE) is not None
 
 
 def _date_like_input(value: str | None) -> bool:

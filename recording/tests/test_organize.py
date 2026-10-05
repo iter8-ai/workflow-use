@@ -267,12 +267,16 @@ def test_step_lines_exposes_only_date_like_input_values() -> None:
     steps = [
         SetupStep(id="1", type="input", target="day", value="06", description="Enter 06"),
         SetupStep(id="2", type="input", target="notes", value="private text", description="Enter private text"),
-        SetupStep(id="3", type="credential", target="Password", value="password", description="Enter saved password"),
+        SetupStep(id="3", type="input", target="notes", value="private 2026", description="Enter private 2026"),
+        SetupStep(id="4", type="input", target="month", value="Sep 2026", description="Enter Sep 2026"),
+        SetupStep(id="5", type="credential", target="Password", value="password", description="Enter saved password"),
     ]
     sent = step_lines(steps)
 
     assert '"value": "06"' in sent
     assert "private text" not in sent
+    assert "private 2026" not in sent
+    assert '"value": "Sep 2026"' in sent
     assert '"value": "password"' in sent
 
 
