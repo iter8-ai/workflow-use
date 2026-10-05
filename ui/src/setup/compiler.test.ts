@@ -642,6 +642,13 @@ test("compiles every date rule with raw builtin fields and escapes user text", (
   }
 });
 
+test("protects a user literal that resembles a date field from FIRE date filling", () => {
+  const draft = baseDraft();
+  draft.steps = [{ id: "date", type: "date", description: "Enter the date", target: "From", date: { value: "2026-09-06", format: "%d.%m.%Y", rule: { kind: "described", text: "the period {today|%Y}" } } }];
+  const prompt = (compileAgent(draft).stages[0] as { prompt: string }).prompt;
+  assert.match(prompt, /the period \{\{\u200b?today\|%Y\u200b?\}\}/);
+});
+
 test("keeps zero-padded day and month tokens for parts dates", () => {
   const draft = baseDraft();
   draft.steps = [{

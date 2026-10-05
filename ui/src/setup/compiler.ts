@@ -819,7 +819,11 @@ function looksLikeRawReplay(value: string | null | undefined): boolean {
 }
 
 function escapeLiteral(value: string): string {
-  return value.replace(/\{/g, "{{").replace(/\}/g, "}}");
+  // FIRE's date pass runs before format_map and otherwise mistakes a user's literal
+  // `{name|format}` inside doubled braces for a real date field. The marker is
+  // invisible in the resulting prompt but keeps that literal out of the date pass.
+  const protectedDateField = value.replace(/\{(\w+)\|([^{}|]+)\}/g, "{\u200b$1|$2\u200b}");
+  return protectedDateField.replace(/\{/g, "{{").replace(/\}/g, "}}");
 }
 
 /** Multi-select values are recorded as a JSON array of option labels. */
