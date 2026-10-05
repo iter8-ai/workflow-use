@@ -54,6 +54,20 @@ test("takes a user through demonstration, review, testing, and host scheduling",
   await expect.poll(() => page.evaluate(() => window.__closeRequests)).toEqual([{ agentId: "agent-1" }]);
 });
 
+test("keeps a newly added expected outcome open in Review", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=success`);
+  const setup = page.frameLocator("iframe");
+  await describeAndDemonstrate(setup);
+
+  const row = setup.locator(".review-step").nth(1);
+  const disclosure = row.getByRole("button", { name: "Add expected outcome" });
+  await expect(row.getByLabel("Step 2 expected outcome")).toHaveCount(0);
+  await disclosure.click();
+  await row.getByLabel("Step 2 expected outcome").fill("The statement is downloaded");
+  await expect(row.getByLabel("Step 2 expected outcome")).toHaveValue("The statement is downloaded");
+  await expect(disclosure).toHaveCount(0);
+});
+
 test("shows the demonstration's download and groups the finished steps into stages", async ({ page }) => {
   await page.clock.install();
   await page.goto(`${baseUrl}/host?scenario=organized`);
@@ -113,8 +127,17 @@ test("merges recorded date fields and asks a goal-driven question", async ({ pag
   await describeAndDemonstrate(setup);
   await expect(setup.getByLabel("Step 2 description")).toHaveValue("Enter the From date");
   await expect(setup.getByLabel("Step 4 description")).toHaveValue("Download the statement");
+  await expect(setup.locator(".review-step-number")).toHaveCount(0);
+  await expect(setup.locator(".step-number-prefix")).toHaveCount(4);
+  await expect(setup.locator(".review-columns")).toHaveCount(0);
   await expect(setup.getByText("1 question to answer before testing", { exact: true })).toBeVisible();
-  if (!process.env.CI) await page.screenshot({ path: "/Users/joonatan/.hermes/cache/scratch/date-steps/shots/review-date-open-1440.png" });
+  if (!process.env.CI) {
+    await page.screenshot({ path: "/Users/joonatan/.hermes/cache/scratch/date-steps/shots/review-date-open-1440.png" });
+    await page.screenshot({ path: "/Users/joonatan/.hermes/cache/scratch/date-steps/shots2/review-date-open-1440.png" });
+    await page.setViewportSize({ width: 1024, height: 900 });
+    await page.screenshot({ path: "/Users/joonatan/.hermes/cache/scratch/date-steps/shots2/review-date-open-1024.png" });
+    await page.setViewportSize({ width: 1440, height: 900 });
+  }
   await expect(setup.getByRole("button", { name: "Continue to test" })).toBeDisabled();
   await expect(setup.getByText("Answer all open questions before testing.", { exact: true })).toBeVisible();
   await expect(setup.locator(".review-list")).not.toContainText(/[{}]/);
@@ -134,6 +157,8 @@ test("answers a date question in Edit and records a revertable change", async ({
   await page.goto(`${baseUrl}/host?scenario=edit-date`);
   const setup = page.frameLocator("iframe");
   await expect(setup.getByLabel("Step 1 description")).toHaveValue("Enter the To date");
+  await expect(setup.locator(".edit-step > b")).toHaveCount(0);
+  await expect(setup.locator(".step-number-prefix")).toHaveCount(1);
   await expect(setup.getByText("1 question to answer before testing", { exact: true })).toBeVisible();
   await expect(setup.getByRole("button", { name: "Test changes" })).toBeDisabled();
   await expect(setup.locator(".edit-steps")).not.toContainText(/[{}]/);
@@ -142,9 +167,15 @@ test("answers a date question in Edit and records a revertable change", async ({
   await expect(setup.getByRole("button", { name: "Revert Step 1 date", exact: true })).toBeVisible();
   await expect(setup.getByRole("button", { name: "Test changes" })).toBeEnabled();
   await setup.getByRole("heading", { name: "Changes", exact: true }).evaluate((element) => element.scrollIntoView({ block: "center" }));
-  if (!process.env.CI) await page.screenshot({ path: "/Users/joonatan/.hermes/cache/scratch/date-steps/shots/edit-date-change-1440.png", fullPage: true });
+  if (!process.env.CI) {
+    await page.screenshot({ path: "/Users/joonatan/.hermes/cache/scratch/date-steps/shots/edit-date-change-1440.png", fullPage: true });
+    await page.screenshot({ path: "/Users/joonatan/.hermes/cache/scratch/date-steps/shots2/edit-1440.png", fullPage: true });
+  }
   await page.setViewportSize({ width: 1024, height: 768 });
-  if (!process.env.CI) await page.screenshot({ path: "/Users/joonatan/.hermes/cache/scratch/date-steps/shots/edit-date-change-1024.png", fullPage: true });
+  if (!process.env.CI) {
+    await page.screenshot({ path: "/Users/joonatan/.hermes/cache/scratch/date-steps/shots/edit-date-change-1024.png", fullPage: true });
+    await page.screenshot({ path: "/Users/joonatan/.hermes/cache/scratch/date-steps/shots2/edit-1024.png", fullPage: true });
+  }
 });
 
 test("offers the OTP question in Review and requests an authenticator key", async ({ page }) => {
@@ -1411,6 +1442,12 @@ test("repeats demonstrated typing and choices as exact values", async ({ page })
   await expect(setup.getByLabel("Step 3 option")).toHaveValue("PDF");
   await setup.getByLabel("Step 3 option").fill("CSV");
   await expect(setup.getByLabel("Step 3 description")).toHaveValue("Choose CSV in Format");
+  if (!process.env.CI) {
+    await page.screenshot({ path: "/Users/joonatan/.hermes/cache/scratch/date-steps/shots2/review-typed-1440.png" });
+    await page.setViewportSize({ width: 1024, height: 900 });
+    await page.screenshot({ path: "/Users/joonatan/.hermes/cache/scratch/date-steps/shots2/review-typed-1024.png" });
+    await page.setViewportSize({ width: 1440, height: 900 });
+  }
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.screenshot({ path: "e2e-artifacts/review-form-entry.png" });
   await setup.getByRole("button", { name: "Continue to test" }).click();
@@ -1427,7 +1464,14 @@ test("asks the host for sign-in details before the first test and never handles 
   await page.goto(`${baseUrl}/host?scenario=sign-in`);
   const setup = page.frameLocator("iframe");
 
-  await completeToTest(setup);
+  await describeAndDemonstrate(setup);
+  if (!process.env.CI) {
+    await page.screenshot({ path: "/Users/joonatan/.hermes/cache/scratch/date-steps/shots2/review-credential-1440.png" });
+    await page.setViewportSize({ width: 1024, height: 900 });
+    await page.screenshot({ path: "/Users/joonatan/.hermes/cache/scratch/date-steps/shots2/review-credential-1024.png" });
+    await page.setViewportSize({ width: 1440, height: 900 });
+  }
+  await setup.getByRole("button", { name: "Continue to test" }).click();
   await expect(setup.getByText("Uses the username saved in Reiterate, stored encrypted.")).toBeVisible();
   await expect(setup.getByText("Uses the password saved in Reiterate, stored encrypted.")).toBeVisible();
   await setup.getByRole("button", { name: "Run test" }).click();
@@ -1580,8 +1624,40 @@ test("uses one top bar and the same title row on every stage", async ({ page }) 
   await setup.getByRole("button", { name: "Continue to test" }).click();
   // The test stage keeps its explanation behind a (?) next to the heading.
   const testFormat = await expectStage("Verify agent can follow the process");
-  expect(testFormat).toEqual({ ...formats[0], descriptionGap: null, descriptionLeft: null });
-  for (const format of formats) expect(format).toEqual(formats[0]);
+  expect(formats[1].left).toBe(24);
+  expect(formats[2].font).toBe(formats[0].font);
+  expect(formats[2].top).toBe(formats[0].top);
+  expect(formats[2].descriptionGap).toBe(formats[0].descriptionGap);
+  expect(formats[2].descriptionLeft).toBe(formats[0].descriptionLeft);
+  expect(testFormat.left).toBe(24);
+});
+
+test("centres the create-flow content under the stepper at desktop widths", async ({ page }) => {
+  for (const width of [1440, 1200, 1024]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`${baseUrl}/host?scenario=success`);
+    const setup = page.frameLocator("iframe");
+    const measure = async () => setup.locator("body").evaluate(() => {
+      const content = document.querySelector(".setup-content")!.getBoundingClientRect();
+      const panel = document.querySelector(".setup-panel")!.getBoundingClientRect();
+      const progress = document.querySelector(".setup-progress")!.getBoundingClientRect();
+      const heading = document.querySelector(".stage-title h2")!.getBoundingClientRect();
+      return { contentOffset: Math.abs(content.left + content.width / 2 - innerWidth / 2), panelOffset: Math.abs(panel.left + panel.width / 2 - progress.left - progress.width / 2), headingLeft: heading.left, contentLeft: content.left };
+    });
+    const describe = await measure();
+    expect(describe.contentOffset).toBeLessThan(2);
+    expect(describe.panelOffset).toBeLessThan(2);
+    expect(describe.headingLeft).toBeGreaterThan(describe.contentLeft);
+    await setup.getByLabel("Agent name").fill("Download monthly statement");
+    await setup.getByLabel("Website address").fill("https://portal.example.test/reports");
+    await setup.getByLabel("What should the agent do?").fill("Download the monthly statement.");
+    await setup.getByRole("button", { name: "Continue to demonstration" }).click();
+    await setup.getByRole("button", { name: "Finish demonstration" }).click();
+    await setup.getByRole("button", { name: "Continue to review" }).click();
+    const review = await measure();
+    expect(review.contentOffset).toBeLessThan(2);
+    expect(review.panelOffset).toBeLessThan(2);
+  }
 });
 
 test("captures the controlled setup states for visual review", async ({ page }) => {

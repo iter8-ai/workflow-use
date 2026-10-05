@@ -11,6 +11,8 @@ export type SetupStep = {
   requestsEmailCode?: boolean;
   date?: { value: string; format: string; rule: DateRule | null };
   parts?: SetupStep[];
+  /** Ephemeral marker for a UI fallback merge; kept non-enumerable by mergeDateSteps. */
+  uiMerged?: boolean;
   /** Short purpose of the run of steps this one belongs to, e.g. "Sign in". Set after the demonstration. */
   stage?: string | null;
 };
@@ -229,11 +231,19 @@ export function openQuestions(draft: SetupDraft, today: DateToday = new Date()):
   }] : []);
 }
 
-function dateFieldName(step: SetupStep): string {
+function dateFieldName(step: SetupStep, precedingClick?: SetupStep): string {
   const text = `${step.target ?? ""} ${step.description}`;
   if (/\bfrom\b|\balates\b|\bstart\b|\balgus\b/i.test(text)) return "From";
   if (/\bto\b|\buntil\b|\bend\b|\bkuni\b|\blõpp\b/i.test(text)) return "To";
-  return step.target?.trim() || "the date field";
+  const partName = step.target?.trim();
+  if (partName !== undefined && !/^(?:day|month|year|dd|mm|yyyy)$/i.test(partName)) return partName;
+  const clickTarget = precedingClick?.type === "click" ? precedingClick.target?.trim() : undefined;
+  return clickTarget || partName || "the date field";
+}
+
+function markUiMerged(step: SetupStep): SetupStep {
+  Object.defineProperty(step, "uiMerged", { configurable: true, value: true, writable: true });
+  return step;
 }
 
 function dateFormatForParts(parts: SetupStep[]): string {
@@ -271,8 +281,8 @@ export function mergeDateSteps(steps: SetupStep[], force = false): SetupStep[] {
       const iso = dateFromParts(values.get("year")!, values.get("month")!, values.get("day")!);
       if (iso !== null) {
         const first = run[0]!;
-        const field = dateFieldName(first);
-        merged.push({ ...first, type: "date", description: field === "the date field" ? "Enter date" : `Enter the ${field} date`, target: field === "the date field" ? null : field, value: null, date: { value: iso, format: run.length === 3 ? "parts" : dateFormatForParts(run), rule: null }, parts: run });
+        const field = dateFieldName(first, steps[index - 1]);
+        merged.push(markUiMerged({ ...first, type: "date", description: field === "the date field" ? "Enter the date" : `Enter the ${field} date`, target: field === "the date field" ? null : field, value: null, date: { value: iso, format: run.length === 3 ? "parts" : dateFormatForParts(run), rule: null }, parts: run }));
         index += run.length;
         continue;
       }
@@ -281,8 +291,8 @@ export function mergeDateSteps(steps: SetupStep[], force = false): SetupStep[] {
     const mentionsDate = /\b(date|from|to|kuupäev)\b/i.test(`${step.target ?? ""} ${step.description}`);
     const parsed = step.type === "input" && mentionsDate ? singleDateValue(value) : null;
     if (parsed !== null) {
-      const field = dateFieldName(step);
-      merged.push({ ...step, type: "date", description: field === "the date field" ? "Enter date" : `Enter the ${field} date`, target: field === "the date field" ? step.target : field, value: null, date: { value: parsed.iso, format: parsed.format, rule: null }, parts: [step] });
+      const field = dateFieldName(step, steps[index - 1]);
+      merged.push(markUiMerged({ ...step, type: "date", description: field === "the date field" ? "Enter the date" : `Enter the ${field} date`, target: field === "the date field" ? step.target : field, value: null, date: { value: parsed.iso, format: parsed.format, rule: null }, parts: [step] }));
       index += 1;
       continue;
     }
