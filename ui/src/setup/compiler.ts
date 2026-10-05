@@ -107,7 +107,7 @@ export function resolveDateRule(rule: DateRule, today: DateToday): string {
   }
 }
 
-function formatDate(value: string, format: string): string {
+export function formatDate(value: string, format: string): string {
   const date = parseIsoDate(value) ?? new Date(Date.UTC(1970, 0, 1));
   const day = date.getUTCDate();
   const month = date.getUTCMonth() + 1;

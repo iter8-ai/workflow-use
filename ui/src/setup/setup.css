@@ -629,7 +629,7 @@ select {
 }
 
 .question-choice:hover:not(:disabled),
-.question-choice[aria-pressed="true"] {
+.question-choice[aria-checked="true"] {
   border-color: #6546c9;
   background: #f3f0fc;
 }
