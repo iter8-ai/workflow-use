@@ -219,6 +219,17 @@ def test_invalid_date_merge_falls_back_to_original_descriptions() -> None:
     assert [item.description for item in organized] == [step.description for step in steps]
 
 
+def test_two_date_parts_cannot_invent_the_missing_year() -> None:
+    steps = _input_steps(("day", "06"), ("month", "09"))
+    organized = parse_organized(
+        _organized_answer([1, 2], "Enter the date", date_value="2026-09-06", date_format="parts"), steps
+    )
+
+    assert organized is not None
+    assert [item.numbers for item in organized] == [(1,), (2,)]
+    assert [item.description for item in organized] == [step.description for step in steps]
+
+
 def test_non_input_group_falls_back_to_separate_steps() -> None:
     steps = [
         SetupStep(id="1", type="input", target="day", value="06", description="Enter day"),

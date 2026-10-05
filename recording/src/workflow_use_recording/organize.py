@@ -97,7 +97,8 @@ Date fields are the only input values you may use. The input lines include a val
 or free-text value. You may merge 2 or 3 consecutive input steps that together enter one calendar date. Return
 `n` as the list of their step numbers and add `date: {"value": "YYYY-MM-DD", "format": "parts"}`. The recorded
 day/month/year box order is the order of those input steps. For one date text box, return `n` as a one-item list
-and the matching FIRE strftime format. Do not guess a date that the typed values do not spell out.
+and the matching FIRE strftime format. Use `date: null` for every non-date step. Do not guess a date that the typed
+values do not spell out.
 
 Rewrite each description as one short imperative instruction (at most 12 words) that names the visible control, \
 e.g. "Click Reports in the menu", "Open the transaction reports page".
@@ -132,7 +133,7 @@ SCHEMA: dict[str, Any] = {
                         "items": {
                             "type": "object",
                             "additionalProperties": False,
-                            "required": ["n", "description"],
+                            "required": ["n", "description", "date"],
                             "properties": {
                                 "n": {
                                     "anyOf": [
@@ -142,10 +143,18 @@ SCHEMA: dict[str, Any] = {
                                 },
                                 "description": {"type": "string"},
                                 "date": {
-                                    "type": "object",
-                                    "additionalProperties": False,
-                                    "required": ["value", "format"],
-                                    "properties": {"value": {"type": "string"}, "format": {"type": "string"}},
+                                    "anyOf": [
+                                        {"type": "null"},
+                                        {
+                                            "type": "object",
+                                            "additionalProperties": False,
+                                            "required": ["value", "format"],
+                                            "properties": {
+                                                "value": {"type": "string"},
+                                                "format": {"type": "string"},
+                                            },
+                                        },
+                                    ]
                                 },
                             },
                         },
@@ -251,7 +260,7 @@ def parse_organized(text: str, steps_or_count: Sequence[SetupStep] | int) -> lis
                     if source_steps is None:
                         return None
                     organized.extend(
-                        OrganizedStep(stage, source_steps[number - 1].description, (number,)) for number in numbers
+                        OrganizedStep(title, source_steps[number - 1].description, (number,)) for number in numbers
                     )
                 else:
                     organized.append(OrganizedStep(title, description, numbers, date_info))
@@ -310,7 +319,7 @@ def _parse_date_info(raw: Any, numbers: tuple[int, ...], steps: Sequence[SetupSt
         return None
     fmt = raw["format"]
     if fmt == "parts":
-        if not 2 <= len(parts) <= 3:
+        if len(parts) != 3:
             return None
         order = _part_order(parts)
         if order is None:
