@@ -7,6 +7,8 @@ export type SetupStep = {
   url?: string | null;
   expectedOutcome?: string | null;
   inputName?: string;
+  /** The user identified this click as the portal action that sends a new email code. */
+  requestsEmailCode?: boolean;
   /** Short purpose of the run of steps this one belongs to, e.g. "Sign in". Set after the demonstration. */
   stage?: string | null;
 };
@@ -110,6 +112,7 @@ export function draftChanges(draft: SetupDraft, live: SetupDraft): DraftChange[]
     if (!original) return;
     if (step.description !== original.description) changes.push({ key: `step:${step.id}:description`, label: `Step ${index + 1} instruction`, from: original.description, to: step.description });
     if ((step.expectedOutcome ?? "") !== (original.expectedOutcome ?? "")) changes.push({ key: `step:${step.id}:outcome`, label: `Step ${index + 1} expected outcome`, from: original.expectedOutcome ?? "", to: step.expectedOutcome ?? "" });
+    if (Boolean(step.requestsEmailCode) !== Boolean(original.requestsEmailCode)) changes.push({ key: `step:${step.id}:email-code`, label: `Step ${index + 1} requests or resends email code`, from: original.requestsEmailCode ? "Yes" : "No", to: step.requestsEmailCode ? "Yes" : "No" });
   });
   return changes;
 }
@@ -157,15 +160,15 @@ const maximumStageLength = 60;
 const maximumUrlLength = 2_048;
 const maximumSteps = 200;
 
-export function compileAgent(draft: SetupDraft): CompiledAgent {
-  validateDraft(draft);
+export function compileAgent(draft: SetupDraft, otpSource?: "authenticator" | "email"): CompiledAgent {
+  validateDraft(draft, otpSource);
 
   const task = `Complete ${escapeLiteral(draft.name)}: ${escapeLiteral(draft.goal)}`;
   // Stage titles are headings only; step numbers stay global because the agent reports the step it stopped at.
   // An unnamed stage after a named one gets a neutral heading, so its steps do not read as part of the one before.
   const instructions = groupSteps(draft.steps).flatMap((group, position) => [
     ...(group.stage?.trim() ? [`${escapeLiteral(group.stage.trim())}:`] : position > 0 && group.stage !== null ? ["Then:"] : []),
-    ...group.steps.map(({ step, index }) => formatStep(step, index)),
+    ...group.steps.map(({ step, index }) => formatStep(step, index, otpSource)),
   ]).join("\n");
   const prompt = [
     "Use the current, live browser screen to complete this task.",
@@ -194,7 +197,7 @@ export function compileAgent(draft: SetupDraft): CompiledAgent {
   };
 }
 
-function validateDraft(draft: SetupDraft): void {
+function validateDraft(draft: SetupDraft, otpSource?: "authenticator" | "email"): void {
   requireText(draft.name, "Agent name");
   requireMaximumLength(draft.name, maximumNameLength, "Agent name");
   requireText(draft.goal, "Agent goal");
@@ -219,6 +222,7 @@ function validateDraft(draft: SetupDraft): void {
   }
 
   const stepIds = new Set<string>();
+  let hasEmailChallenge = false;
   for (const step of draft.steps) {
     requireText(step.id, "Step id");
     requireText(step.description, `Description for step ${step.id}`);
@@ -232,6 +236,15 @@ function validateDraft(draft: SetupDraft): void {
     stepIds.add(step.id);
 
     validateStep(step);
+    if (step.requestsEmailCode) {
+      if (step.type !== "click") throw new Error(`Step ${step.id}: only a click can request or resend an email code.`);
+      if (clickCount(step) !== 1) throw new Error(`Step ${step.id}: mark each request or resend as one click.`);
+      if (otpSource === "email") hasEmailChallenge = true;
+    }
+    if (otpSource === "email" && step.type === "credential" && step.value === "otp") {
+      if (!hasEmailChallenge) throw new Error(`Step ${step.id}: mark the click that requests or resends the email code before entering it.`);
+      hasEmailChallenge = false;
+    }
     if (step.type === "select_change" && optionalStepText(step.value) === undefined) {
       throw new Error(`Step ${step.id} does not say which option to choose. Enter the option or remove the step.`);
     }
@@ -313,7 +326,7 @@ function validateStep(step: SetupStep): void {
   }
 }
 
-function formatStep(step: SetupStep, index: number): string {
+function formatStep(step: SetupStep, index: number, otpSource?: "authenticator" | "email"): string {
   const targetValue = optionalStepText(step.target);
   const literalValue = optionalStepText(step.value);
   const expectedOutcome = optionalStepText(step.expectedOutcome);
@@ -325,7 +338,10 @@ function formatStep(step: SetupStep, index: number): string {
   const outcome = expectedOutcome === undefined
     ? ""
     : ` After this step, check that: ${escapeLiteral(expectedOutcome)}.`;
-  return `${index + 1}. ${instruction}${outcome}`;
+  const request = otpSource === "email" && step.requestsEmailCode
+    ? 'Before this click, use one computer tool call with exactly two consecutive actions: first {type:"type",text:"$otp_request"}, then {type:"click",button:"left",x:<live x>,y:<live y>}. Type the control marker immediately before the left click in the same computer tool call, with no intervening action. Ground the click coordinates in the current screen. '
+    : "";
+  return `${index + 1}. ${request}${instruction}${outcome}`;
 }
 
 function formatInstruction(

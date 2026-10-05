@@ -59,13 +59,13 @@ export type EditAgent = {
   internal: boolean;
   schedule: string | null;
   nextRunAt: string | null;
-  credentials?: { saved: CredentialKind[] };
+  credentials?: { saved: CredentialKind[]; otpSource?: "authenticator" | "email" };
 };
 
 type RequestMap = {
   ready: { params: Record<string, never>; result: { schedule: boolean; credentials?: boolean; emailRoutes?: boolean; chooseSchedule?: boolean; mode?: "create" | "edit" } };
   // The host collects and stores the values; only the saved kinds come back.
-  requestCredentials: { params: { kinds: CredentialKind[]; replace?: boolean }; result: { saved: CredentialKind[]; changed?: boolean } };
+  requestCredentials: { params: { kinds: CredentialKind[]; replace?: boolean }; result: { saved: CredentialKind[]; changed?: boolean; otpSource?: "authenticator" | "email" } };
   startRecording: { params: { url: string }; result: Recording };
   getRecording: { params: { id: string }; result: Recording };
   stopRecording: { params: { id: string }; result: Recording };

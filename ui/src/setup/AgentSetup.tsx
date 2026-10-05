@@ -17,7 +17,7 @@ type RunState = WorkbenchRun & {
 // Entering sign-in details or choosing a schedule in the host dialog can take a while.
 const interactiveRequestTimeoutMs = 10 * 60_000;
 const signInNote = "If the website needs a sign-in, sign in during the demonstration. Reiterate saves the username and password you type there, encrypted, for this agent's runs. They never appear in the steps or the agent's instructions.";
-const demonstrateSignInNote = "Sign in here if the site asks. Reiterate saves the username and password encrypted for this agent's runs; they never appear in the steps.";
+const demonstrateSignInNote = "Sign in here if the site asks. Reiterate saves the username and password encrypted for this agent's runs; they never appear in the steps. Entering an email code here is a manual demonstration; an automatic Test run verifies retrieval.";
 
 const screens: Array<{ id: Screen; label: string }> = [
   { id: "describe", label: "Describe" },
@@ -53,6 +53,7 @@ export default function AgentSetup() {
   const [emailRoutesAllowed, setEmailRoutesAllowed] = useState(false);
   const [chooseScheduleAllowed, setChooseScheduleAllowed] = useState(false);
   const [credentialsAllowed, setCredentialsAllowed] = useState(false);
+  const [otpSource, setOtpSource] = useState<"authenticator" | "email" | undefined>();
   const [mode, setMode] = useState<"create" | "edit">("create");
   const [connecting, setConnecting] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -363,7 +364,7 @@ export default function AgentSetup() {
     setError(null);
     try {
       // Done when is edited on Test; validate it when saving/running, so users can return to correct it.
-      compileAgent({ ...draft, doneWhen: { kind: "file" } });
+      compileAgent({ ...draft, doneWhen: { kind: "file" } }, otpSource);
       if (!credentialsAllowed && requiredCredentials(steps).length > 0) {
         throw new Error("This Reiterate page is out of date and cannot save sign-in details. Reload Reiterate and set up the agent again.");
       }
@@ -375,23 +376,24 @@ export default function AgentSetup() {
     }
   }
 
-  async function saveCredentials(kinds: CredentialKind[], replace: boolean): Promise<boolean> {
+  async function saveCredentials(kinds: CredentialKind[], replace: boolean): Promise<{ saved: boolean; otpSource?: "authenticator" | "email" }> {
     if (bridge === undefined || bridge === null) {
-      return false;
+      return { saved: false };
     }
     if (kinds.length === 0) {
-      return true;
+      return { saved: true, otpSource };
     }
     // The host prompts only for values it does not already hold for this website.
     const result = await bridge.request("requestCredentials", { kinds, replace }, { timeoutMs: interactiveRequestTimeoutMs });
-    return kinds.every((kind) => result.saved.includes(kind));
+    setOtpSource(result.otpSource);
+    return { saved: kinds.every((kind) => result.saved.includes(kind)), otpSource: result.otpSource };
   }
 
   async function changeCredentials(): Promise<void> {
     setError(null);
     setBusy(true);
     try {
-      if (await saveCredentials(requiredCredentials(steps), true)) {
+      if ((await saveCredentials(requiredCredentials(steps), true)).saved) {
         invalidateTest();
       }
     } catch (requestError) {
@@ -409,17 +411,19 @@ export default function AgentSetup() {
     setNotice(null);
     let config: ReturnType<typeof compileAgent>;
     try {
-      config = compileAgent({ ...draft, steps: nextSteps, doneWhen: nextDoneWhen });
+      config = compileAgent({ ...draft, steps: nextSteps, doneWhen: nextDoneWhen }, otpSource);
     } catch (compileError) {
       setError(errorMessage(compileError));
       return;
     }
     setBusy(true);
     try {
-      if (!(await saveCredentials(requiredCredentials(nextSteps), false))) {
+      const credentials = await saveCredentials(requiredCredentials(nextSteps), false);
+      if (!credentials.saved) {
         setError("Add the missing sign-in details to test this agent.");
         return;
       }
+      config = compileAgent({ ...draft, steps: nextSteps, doneWhen: nextDoneWhen }, credentials.otpSource);
       const saved = await bridge.request("saveAgent", { draft: { ...draft, steps: nextSteps, doneWhen: nextDoneWhen }, config, agentId: agentId ?? undefined });
       // A lost schedule reply may leave the host scheduled. Keep that run/cron until save succeeds.
       setTestRun(null);
@@ -805,7 +809,7 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
     try {
       const result = await bridge.request("requestCredentials", { kinds: signInKinds.length ? signInKinds : ["username", "password"], replace: true }, { timeoutMs: interactiveRequestTimeoutMs });
       const previousSaved = agent.credentials?.saved ?? [];
-      setAgent((current) => current === null ? current : { ...current, credentials: { saved: result.saved } });
+      setAgent((current) => current === null ? current : { ...current, credentials: { saved: result.saved, otpSource: result.otpSource } });
       if (result.changed ?? (result.saved.length !== previousSaved.length || result.saved.some((kind) => !previousSaved.includes(kind)))) {
         setCredentialsChanged(true); resetTest();
       }
@@ -839,7 +843,7 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
     // The test runs the steps shown now; a late reorganization would no longer match it.
     setRecording((current) => current?.organizing === true ? { ...current, organizing: false } : current);
     try {
-      const config = raw ? { url: draft.url, prompt: "", options: { version: 1, engine: "computer" }, stages, parameters: {} } : compileAgent(draft);
+      const config = raw ? { url: draft.url, prompt: "", options: { version: 1, engine: "computer" }, stages, parameters: {} } : compileAgent(draft, agent.credentials?.otpSource);
       await bridge.request("saveDraft", { draft, config });
       const started = await bridge.request("testAgent", { agentId: agent.agentId, arguments: {} });
       setTestRun({ id: started.id, status: "running" }); setChecked(false);
@@ -906,7 +910,7 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
       const insertAt = next ? draft.steps.findIndex((step) => step.id === next.id) : draft.steps.length;
       update({ steps: [...draft.steps.slice(0, insertAt), live.steps[index]!, ...draft.steps.slice(insertAt)] });
     }
-    else { const [, id, field] = key.split(":"); const original = live.steps.find((step) => step.id === id); update({ steps: draft.steps.map((step) => step.id === id ? { ...step, [field === "outcome" ? "expectedOutcome" : "description"]: original?.[field === "outcome" ? "expectedOutcome" : "description"] } : step) }); }
+    else { const [, id, field] = key.split(":"); const original = live.steps.find((step) => step.id === id); const property = field === "outcome" ? "expectedOutcome" : field === "email-code" ? "requestsEmailCode" : "description"; update({ steps: draft.steps.map((step) => step.id === id ? { ...step, [property]: original?.[property] } : step) }); }
   };
 
   const close = async (): Promise<void> => {
@@ -991,6 +995,7 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
             <div>
               <label><span className="edit-field-label">Instruction</span><textarea ref={(field) => { fieldRefs.current[`step:${step.id}:description`] = field; fieldRefs.current[`removed:${step.id}`] = field; if (step.id === insertedStepId) insertedStepRef.current = field; }} rows={1} placeholder="Describe the action" aria-label={`Step ${index + 1} description`} value={step.description} disabled={readOnly} onChange={(e) => update({ steps: draft.steps.map((item) => item.id === step.id ? { ...item, description: e.target.value } : item) })} /></label>
               <label><span className="edit-field-label">Expected outcome (optional)</span><textarea ref={(field) => { fieldRefs.current[`step:${step.id}:outcome`] = field; }} rows={1} placeholder="What should happen?" aria-label={`Step ${index + 1} expected outcome`} value={step.expectedOutcome ?? ""} disabled={readOnly} onChange={(e) => update({ steps: draft.steps.map((item) => item.id === step.id ? { ...item, expectedOutcome: e.target.value } : item) })} /></label>
+              {step.type === "click" && <label className="field-note"><input ref={(field) => { fieldRefs.current[`step:${step.id}:email-code`] = field; }} type="checkbox" aria-label={`Step ${index + 1} requests or resends email code`} checked={step.requestsEmailCode === true} disabled={readOnly} onChange={(e) => update({ steps: draft.steps.map((item) => item.id === step.id ? { ...item, requestsEmailCode: e.target.checked } : item) })} /> Requests or resends email code</label>}
             </div>
             <div className="edit-step-controls">
               <button className="icon-button" aria-label={`Move step ${index + 1} up`} title={`Move step ${index + 1} up`} disabled={readOnly || index === 0} onClick={() => update({ steps: moveStep(draft.steps, index, -1) })}><EditIcon name="up" /></button>
@@ -1013,7 +1018,7 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
       </div><aside className="edit-rail">
         <section className="edit-card edit-credentials" aria-labelledby="edit-credentials-title"><h2 id="edit-credentials-title">Sign-in details</h2>
           {credentialsAllowed && agent.credentials ? <>
-            {signInKinds.length ? <ul className="edit-credential-kinds">{signInKinds.map((kind) => <li key={kind}>{kind === "username" ? "Username" : kind === "password" ? "Password" : "Authenticator key"} · {agent.credentials!.saved.includes(kind) ? "saved" : "Not saved"}</li>)}</ul> : <p>No sign-in details saved.</p>}
+            {signInKinds.length ? <ul className="edit-credential-kinds">{signInKinds.map((kind) => <li key={kind}>{kind === "username" ? "Username" : kind === "password" ? "Password" : agent.credentials?.otpSource === "email" ? "Email code" : "Authenticator key"} · {agent.credentials!.saved.includes(kind) ? "saved" : "Not saved"}</li>)}</ul> : <p>No sign-in details saved.</p>}
             {credentialsChanged && <p role="status">Changed — test before publishing</p>}
             {!agent.internal && <button className="button button-quiet" disabled={readOnly} aria-busy={operation === "credentials"} onClick={() => void changeCredentials()}>{operation === "credentials" ? "Changing sign-in details…" : signInKinds.length ? "Change sign-in details" : "Add sign-in details"}</button>}
             {credentialError && <p className="edit-rename-error" role="alert">{credentialError}</p>}
@@ -1243,6 +1248,7 @@ function Review(props: { steps: SetupStep[]; organizing: boolean; busy: boolean;
           <span>#</span>
           <span>Instruction</span>
           <span>Expected outcome <em>optional</em></span>
+          <span>Email code</span>
         </div>
         {groups.map((group) => (
         <section className="review-stage" key={group.steps[0]!.step.id} aria-label={group.stage ?? "Steps"}>
@@ -1258,6 +1264,7 @@ function Review(props: { steps: SetupStep[]; organizing: boolean; busy: boolean;
                 <button type="button" className="icon-button" aria-label={`Remove step ${index + 1}`} title="Remove step" onClick={() => props.onRemoveStep(step.id)} disabled={props.busy}>
                   <svg aria-hidden="true" viewBox="0 0 16 16" width="16" height="16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg>
                 </button>
+                {step.type === "click" && <label className="review-step-note review-email-code"><input type="checkbox" aria-label={`Step ${index + 1} requests or resends email code`} checked={step.requestsEmailCode === true} onChange={(event) => props.onUpdateStep(step.id, { requestsEmailCode: event.target.checked })} /><span>Requests or resends email code</span></label>}
                 {(typedField || step.type === "select_change") && (
                   <div className="review-step-note">
                     {typedField && (
