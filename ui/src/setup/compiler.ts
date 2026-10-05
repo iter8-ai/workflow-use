@@ -659,7 +659,7 @@ function formatStep(step: SetupStep, index: number, otpSource?: "authenticator" 
     ? ""
     : ` After this step, check that: ${escapeLiteral(expectedOutcome)}.`;
   const request = otpSource === "email" && step.requestsEmailCode
-    ? 'Before this click, use one computer tool call with exactly two consecutive actions: first {type:"type",text:"$otp_request"}, then {type:"click",button:"left",x:<live x>,y:<live y>}. Type the control marker immediately before the left click in the same computer tool call, with no intervening action. Ground the click coordinates in the current screen. '
+    ? 'Before this click, use one computer tool call with exactly two consecutive actions: first {{type:"type",text:"$otp_request"}}, then {{type:"click",button:"left",x:<live x>,y:<live y>}}. Type the control marker immediately before the left click in the same computer tool call, with no intervening action. Ground the click coordinates in the current screen. '
     : "";
   return `${index + 1}. ${request}${instruction}${outcome}`;
 }
