@@ -119,10 +119,12 @@ function formatDate(value: string, format: string): string {
 }
 
 function parseFormattedDate(value: string): { iso: string; format: string } | null {
+  const ambiguousSlashDate = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(value.trim());
+  if (ambiguousSlashDate !== null && Number(ambiguousSlashDate[1]) <= 12 && Number(ambiguousSlashDate[2]) <= 12) return null;
   const escapeRegex = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const tokenPattern: Record<string, string> = {
-    "%A": `(?:${weekdayNames.join("|")})`,
-    "%a": `(?:${weekdayNames.map((name) => name.slice(0, 3)).join("|")})`,
+    "%A": `(${weekdayNames.join("|")})`,
+    "%a": `(${weekdayNames.map((name) => name.slice(0, 3)).join("|")})`,
     "%B": `(${monthNames.join("|")})`,
     "%b": `(${monthNames.map((name) => name.slice(0, 3)).join("|")})`,
     "%o": "(\\d{1,2})(?:st|nd|rd|th)",
@@ -150,17 +152,18 @@ function parseFormattedDate(value: string): { iso: string; format: string } | nu
     let day = 1;
     let month = 1;
     let year = 1970;
+    let weekday: number | null = null;
     let capture = 1;
     for (const token of tokens) {
-      if (token === "%A" || token === "%a") continue;
       const captured = match[capture++];
-      if (token === "%B" || token === "%b") month = monthNames.findIndex((name) => name.toLowerCase().startsWith(captured!.toLowerCase().slice(0, token === "%b" ? 3 : captured!.length))) + 1;
+      if (token === "%A" || token === "%a") weekday = weekdayNames.findIndex((name) => name.toLowerCase().startsWith(captured!.toLowerCase().slice(0, token === "%a" ? 3 : captured!.length)));
+      else if (token === "%B" || token === "%b") month = monthNames.findIndex((name) => name.toLowerCase().startsWith(captured!.toLowerCase().slice(0, token === "%b" ? 3 : captured!.length))) + 1;
       else if (token === "%o" || token === "%d" || token === "%-d") day = Number(captured);
       else if (token === "%m" || token === "%-m") month = Number(captured);
       else if (token === "%Y") year = Number(captured);
     }
     const iso = dateFromParts(year, month, day);
-    if (iso !== null) return { iso, format };
+    if (iso !== null && (weekday === null || parseIsoDate(iso)?.getUTCDay() === weekday)) return { iso, format };
   }
   return null;
 }
@@ -258,7 +261,8 @@ export function mergeDateSteps(steps: SetupStep[]): SetupStep[] {
     if (step.type === "date") { merged.push(step); index += 1; continue; }
     const run: SetupStep[] = [];
     for (let end = index; end < Math.min(steps.length, index + 3) && steps[end]?.type === "input"; end += 1) run.push(steps[end]!);
-    if (run.length >= 2 && run.length <= 3 && run.every((item) => datePartKind(item) !== null) && new Set(run.map((item) => datePartKind(item))).size === run.length) {
+    const sides = new Set(run.map((item) => dateSide(item)).filter((side): side is "from" | "to" => side !== null));
+    if (run.length >= 2 && run.length <= 3 && sides.size <= 1 && run.every((item) => datePartKind(item) !== null) && new Set(run.map((item) => datePartKind(item))).size === run.length) {
       const values = new Map(run.map((item) => [datePartKind(item)!, Number(item.value)]));
       const iso = dateFromParts(values.get("year")!, values.get("month")!, values.get("day")!);
       if (iso !== null) {
@@ -419,7 +423,7 @@ export function applyOrganizedSteps(current: SetupStep[], recorded: SetupStep[],
     const first = result.findIndex((step) => step.id === next.id);
     const current = result[first];
     if (current?.type === "date") {
-      result[first] = { ...current, date: next.date, parts: current.parts ?? next.parts };
+      result[first] = { ...current, date: next.date === undefined ? current.date : { ...next.date, rule: current.date?.rule ?? next.date.rule }, parts: current.parts ?? next.parts };
       continue;
     }
     if (first === -1 || ids.some((id) => !result.some((step) => step.id === id))) continue;
@@ -652,6 +656,12 @@ function humanDateFormat(format: string): string {
   return format.replace(/%[-]?d/g, "day").replace(/%[-]?m/g, "month").replace(/%Y/g, "year").replace(/%o/g, "ordinal day").replace(/%A/g, "weekday").replace(/%a/g, "weekday").replace(/%B/g, "month name").replace(/%b/g, "month name");
 }
 
+function datePartFormatToken(step: SetupStep, kind: "day" | "month" | "year"): string {
+  if (kind === "year") return "%Y";
+  const value = step.parts?.find((part) => datePartKind(part) === kind)?.value ?? "";
+  return value.length === 2 && value.startsWith("0") ? kind === "day" ? "%d" : "%m" : kind === "day" ? "%-d" : "%-m";
+}
+
 function formatInstruction(
   step: SetupStep,
   target: string | undefined,
@@ -673,7 +683,7 @@ function formatInstruction(
     }
     if (rule.kind === "described") return `Set ${field} to the date meaning ${quoted(rule.text)} relative to today, {today|%Y-%m-%d}, written like the demonstration's ${quoted(formatDate(step.date.value, step.date.format))} (format ${escapeLiteral(step.date.format === "parts" ? "day.month.year" : humanDateFormat(step.date.format))}).`;
     const name = rule.kind === "days_ago" ? `days_ago_${rule.days}` : dateRuleNames[rule.kind];
-    if (step.date.format === "parts") return `Set ${field} to the date {${name}|%Y-%m-%d}: type day {${name}|%-d}, month {${name}|%-m} and year {${name}|%Y} into their separate boxes.`;
+    if (step.date.format === "parts") return `Set ${field} to the date {${name}|%Y-%m-%d}: type day {${name}|${datePartFormatToken(step, "day")}}, month {${name}|${datePartFormatToken(step, "month")}} and year {${name}|%Y} into their separate boxes.`;
     return `Set ${field} to {${name}|${step.date.format}}.`;
   }
   if (step.type === "click") {

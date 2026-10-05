@@ -118,7 +118,7 @@ test("merges recorded date fields and asks a goal-driven question", async ({ pag
   await expect(setup.getByRole("button", { name: "Continue to test" })).toBeDisabled();
   await expect(setup.getByText("Answer all open questions before testing.", { exact: true })).toBeVisible();
   await expect(setup.locator(".review-list")).not.toContainText(/[{}]/);
-  await setup.getByRole("button", { name: /End of last month/ }).click();
+  await setup.getByRole("radio", { name: /End of last month/ }).click();
   if (!process.env.CI) await page.screenshot({ path: "/Users/joonatan/.hermes/cache/scratch/date-steps/shots/review-date-answered-1440.png" });
   await setup.getByRole("button", { name: "Continue to test" }).click();
   await setup.getByRole("button", { name: "Run test" }).click();
@@ -137,13 +137,14 @@ test("answers a date question in Edit and records a revertable change", async ({
   await expect(setup.getByText("1 question to answer before testing", { exact: true })).toBeVisible();
   await expect(setup.getByRole("button", { name: "Test changes" })).toBeDisabled();
   await expect(setup.locator(".edit-steps")).not.toContainText(/[{}]/);
-  await setup.getByRole("button", { name: /End of last month/ }).click();
+  await setup.getByRole("radio", { name: /End of last month/ }).click();
   await expect(setup.getByText("Step 1 date", { exact: true })).toBeVisible();
   await expect(setup.getByRole("button", { name: "Revert Step 1 date", exact: true })).toBeVisible();
   await expect(setup.getByRole("button", { name: "Test changes" })).toBeEnabled();
-  if (!process.env.CI) await page.screenshot({ path: "/Users/joonatan/.hermes/cache/scratch/date-steps/shots/edit-date-change-1440.png" });
+  await setup.getByRole("heading", { name: "Changes", exact: true }).evaluate((element) => element.scrollIntoView({ block: "center" }));
+  if (!process.env.CI) await page.screenshot({ path: "/Users/joonatan/.hermes/cache/scratch/date-steps/shots/edit-date-change-1440.png", fullPage: true });
   await page.setViewportSize({ width: 1024, height: 768 });
-  if (!process.env.CI) await page.screenshot({ path: "/Users/joonatan/.hermes/cache/scratch/date-steps/shots/edit-date-change-1024.png" });
+  if (!process.env.CI) await page.screenshot({ path: "/Users/joonatan/.hermes/cache/scratch/date-steps/shots/edit-date-change-1024.png", fullPage: true });
 });
 
 test("offers the OTP question in Review and requests an authenticator key", async ({ page }) => {
@@ -151,7 +152,7 @@ test("offers the OTP question in Review and requests an authenticator key", asyn
   const setup = page.frameLocator("iframe");
   await describeAndDemonstrate(setup);
   await expect(setup.getByText("needs a one-time code", { exact: false })).toBeVisible();
-  await setup.getByRole("button", { name: "Authenticator key saved in Reiterate" }).click();
+  await setup.getByRole("radio", { name: "Authenticator key saved in Reiterate" }).click();
   await expect.poll(() => page.evaluate(() => window.__credentialRequests)).toContainEqual({ kinds: ["otp"], replace: false });
   await expect(setup.getByText("needs a one-time code", { exact: false })).toHaveCount(0);
 });

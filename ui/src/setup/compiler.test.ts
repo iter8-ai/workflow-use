@@ -576,6 +576,13 @@ test("merges day/month/year inputs, including month/day/year labels, without mer
   ]);
   assert.equal(us[0]?.date?.value, "2026-09-06");
   assert.equal(mergeDateSteps([{ id: "n", type: "input", description: "Enter quantity", target: "Number", value: "06" }])[0]?.type, "input");
+  const mixed = mergeDateSteps([
+    { id: "from-day", type: "input", description: "Enter From day", target: "From day", value: "06" },
+    { id: "to-month", type: "input", description: "Enter To month", target: "To month", value: "09" },
+    { id: "from-year", type: "input", description: "Enter From year", target: "From year", value: "2026" },
+  ]);
+  assert.equal(mixed.every((step) => step.type === "input"), true);
+  assert.deepEqual(mergeDateSteps(merged), merged);
 });
 
 test("merges a single date field and leaves invalid dates alone", () => {
@@ -584,6 +591,10 @@ test("merges a single date field and leaves invalid dates alone", () => {
   assert.equal(merged[0]?.date?.format, "%d.%m.%Y");
   const textual = mergeDateSteps([{ id: "text-date", type: "input", description: "Enter the date", target: "From", value: "September 6, 2026" }]);
   assert.equal(textual[0]?.date?.value, "2026-09-06");
+  const ambiguousSlash = mergeDateSteps([{ id: "ambiguous-date", type: "input", description: "Enter the date", target: "From", value: "09/06/2026" }]);
+  assert.equal(ambiguousSlash[0]?.type, "input");
+  const wrongWeekday = mergeDateSteps([{ id: "weekday-date", type: "input", description: "Enter the date", target: "From", value: "Monday, September 6, 2026" }]);
+  assert.equal(wrongWeekday[0]?.type, "input");
   assert.equal(mergeDateSteps([{ id: "date", type: "input", description: "Enter the date", target: "From", value: "31.02.2026" }])[0]?.type, "input");
 });
 
@@ -601,6 +612,18 @@ test("compiles every date rule with raw builtin fields and escapes user text", (
     else if (rule.kind === "described") assert.match(prompt, /the period \{\{selected\}\}/);
     else assert.match(prompt, /\{(?:today|yesterday|days_ago_3|start_of_this_month|end_of_this_month|start_of_last_month|end_of_last_month|start_of_last_week|end_of_last_week)\|/);
   }
+});
+
+test("keeps zero-padded day and month tokens for parts dates", () => {
+  const draft = baseDraft();
+  draft.steps = [{
+    id: "parts", type: "date", description: "Enter the From date", target: "From",
+    date: { value: "2026-09-06", format: "parts", rule: { kind: "today" } },
+    parts: dateParts(),
+  }];
+  const prompt = (compileAgent(draft).stages[0] as { prompt: string }).prompt;
+  assert.match(prompt, /\{today\|%d\}/);
+  assert.match(prompt, /\{today\|%m\}/);
 });
 
 test("recommends date rules from goals and resolves month/week boundaries", () => {
