@@ -134,7 +134,7 @@ async def test_secrets_never_reach_the_organizer() -> None:
         settled(http, recording["id"])
 
     sent = step_lines(organizer.calls[0])
-    assert '"value": "password"' in sent
+    assert '"value": "password"' not in sent
     assert "synthetic-password" not in sent
 
 
@@ -277,7 +277,7 @@ def test_step_lines_exposes_only_date_like_input_values() -> None:
     assert "private text" not in sent
     assert "private 2026" not in sent
     assert '"value": "Sep 2026"' in sent
-    assert '"value": "password"' in sent
+    assert '"value": "password"' not in sent
 
 
 def test_legacy_single_number_output_still_parses() -> None:

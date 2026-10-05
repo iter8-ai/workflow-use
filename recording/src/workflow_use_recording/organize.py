@@ -199,7 +199,7 @@ def step_lines(steps: Sequence[SetupStep]) -> str:
             "value": step.value
             if step.type == "input" and _date_like_input(step.value)
             else None
-            if step.type in {"input", "select_change"}
+            if step.type in {"input", "select_change", "credential"}
             else step.value,
             "url": step.url,
             "description": _without_value(step),
