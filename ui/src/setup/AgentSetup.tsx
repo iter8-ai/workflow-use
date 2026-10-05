@@ -1137,11 +1137,7 @@ function Demonstrate(props: { recording: Recording | null; steps: SetupStep[]; l
   const isRecording = props.recording?.status === "recording";
   const isStopped = props.recording?.status === "stopped";
   const state = props.recording?.status === "expired" ? "Demonstration expired" : isRecording ? "Recording in progress" : "Demonstration finished";
-  const browserMessage = isRecording
-    ? "Opening the virtual browser."
-    : isStopped
-      ? "Demonstration finished. Review the recorded steps to continue."
-      : "The virtual browser is unavailable for this demonstration.";
+  const browserMessage = isRecording ? "Opening the virtual browser." : "The virtual browser is unavailable for this demonstration.";
   const count = props.steps.length;
 
   // Follow new steps while recording, unless the user scrolled up to read earlier ones. Whether to follow is
@@ -1184,10 +1180,11 @@ function Demonstrate(props: { recording: Recording | null; steps: SetupStep[]; l
       <div className="demonstration-grid">
         <div className="browser-frame">
           {props.liveViewUrl === null
-            ? <p>{browserMessage}</p>
+            ? !isStopped && <p>{browserMessage}</p>
             // Clipboard access must be delegated explicitly or paste does nothing in the remote browser.
             : <iframe title="Virtual browser" src={props.liveViewUrl} allow="clipboard-read; clipboard-write" />}
-          {isStopped && props.liveViewUrl !== null && <div className="demonstrate-finished browser-notice-over-screen">
+          {/* The recording service drops the live view once stopped, so the summary must not depend on it. */}
+          {isStopped && <div className="demonstrate-finished browser-notice-over-screen">
             <div className="browser-notice-card">{count === 0
               ? <><b>No steps were recorded</b><span>Start over to demonstrate the task again.</span></>
               : <><b>{count} {count === 1 ? "step" : "steps"} recorded</b><span>Continue to review to check and edit {count === 1 ? "it" : "them"}.</span></>}</div>

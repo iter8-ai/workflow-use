@@ -404,7 +404,6 @@ test("gives the demonstration the full width and scrolls long step lists", async
   await setup.getByLabel("Website address").fill("https://portal.example.test/reports");
   await setup.getByLabel("What should the agent do?").fill("Get the report.");
   await setup.getByRole("button", { name: "Continue to demonstration" }).click();
-  await setup.getByRole("button", { name: "Finish demonstration" }).click();
 
   const browser = setup.getByTitle("Virtual browser");
   await expect(browser).toHaveAttribute("allow", "clipboard-read; clipboard-write");
@@ -413,6 +412,7 @@ test("gives the demonstration the full width and scrolls long step lists", async
   const browserBox = await browser.boundingBox();
   expect(browserBox?.width ?? 0).toBeGreaterThan(1000);
   expect(browserBox?.height ?? 0).toBeGreaterThan(560);
+  await setup.getByRole("button", { name: "Finish demonstration" }).click();
 
   const list = setup.getByLabel("Recorded steps list");
   const sizes = await list.evaluate((node) => ({ scroll: node.scrollHeight, client: node.clientHeight }));
@@ -471,7 +471,10 @@ test("keeps keyboard focus on the demonstration's next action and shows what was
 
   await page.keyboard.press("Enter");
   await expect(setup.getByRole("button", { name: "Continue to review" })).toBeFocused();
+  // The recording service drops the live view when it stops; the summary still shows what was recorded.
+  await expect(setup.getByTitle("Virtual browser")).toHaveCount(0);
   await expect(setup.getByText("2 steps recorded", { exact: true })).toBeVisible();
+  await expect(setup.getByText("Continue to review to check and edit them.", { exact: true })).toBeVisible();
   await expect(setup.getByRole("status").filter({ hasText: "Demonstration finished" })).toBeVisible();
   await page.keyboard.press("Enter");
   await expect(setup.getByRole("heading", { name: "Review the draft" })).toBeFocused();
@@ -2603,11 +2606,11 @@ function hostPage(url: string): string {
       ];
       const organized = [["Sign in", "Open the portal"], ["Sign in", "Click Email login"], ["Download the statement", "Click Reports"], ["Download the statement", "Click Export"], ["Download the statement", "Download the statement CSV"]];
       const downloadState = window.__organizedReads === 1 && !stopped ? "started" : "completed";
-      send({ id: "recording-1", status: stopped ? "stopped" : "recording", liveViewUrl: "https://live.browserbase.com/session",
+      send({ id: "recording-1", status: stopped ? "stopped" : "recording", liveViewUrl: stopped ? null : "https://live.browserbase.com/session",
         steps: stopped && !organizing ? recorded.map((step, index) => ({ ...step, stage: organized[index][0], description: organized[index][1] })) : recorded,
         downloads: [{ id: "file", name: "statement-2026-09.csv", state: downloadState }], organizing, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null });
     }
-    else if (request.method === "getRecording" || request.method === "stopRecording") { if (request.method === "stopRecording") recordingActive = false; send({ id: "recording-1", status: request.method === "getRecording" && recordingActive ? "recording" : "stopped", liveViewUrl: "https://live.browserbase.com/session", steps: edit ? (request.method === "stopRecording" ? redemonstrationSteps : []) : steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
+    else if (request.method === "getRecording" || request.method === "stopRecording") { if (request.method === "stopRecording") recordingActive = false; send({ id: "recording-1", status: request.method === "getRecording" && recordingActive ? "recording" : "stopped", liveViewUrl: request.method === "getRecording" && recordingActive ? "https://live.browserbase.com/session" : null, steps: edit ? (request.method === "stopRecording" ? redemonstrationSteps : []) : steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
     else if (request.method === "cancelRecording") { recordingActive = false; recordingExists = false; send(undefined); }
     else if (request.method === "saveAgent") { if (window.__savedSchedule || scenario === "rerun-save-rejection" && window.__savedAgents.length > 0) fail("This agent is scheduled. Edit it in agent settings."); else { window.__savedAgents.push(request.params); send({ id: "agent-1" }); } }
     else if (request.method === "testAgent") { testAttempts += 1; window.__testArguments.push(request.params.arguments); exportSentAt = Date.now(); if (scenario === "email-cutoff" && window.__testArguments.length > 1) setTimeout(() => send({ id: "run-" + window.__testArguments.length }), 1000); else send({ id: "run-" + window.__testArguments.length }); }
