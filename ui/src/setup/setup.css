@@ -807,8 +807,7 @@ select {
   gap: 4px 12px;
   grid-column: 1 / -1;
   margin: 0;
-  padding-left: 0;
-  margin-left: 27px;
+  padding-left: 36px;
   color: #5f667c;
   font-size: 0.82rem;
 }
@@ -817,7 +816,7 @@ select {
   align-items: center;
   gap: 7px;
   min-height: 24px;
-  padding-left: 27px;
+  padding-left: 36px;
   color: #5f667c;
   font-size: .8rem;
   font-weight: 500;
@@ -1226,7 +1225,7 @@ select {
   .review-step > div:first-child > .date-preview { grid-column: 1; }
   .review-step > .edit-step-controls { grid-column: 2; }
   .review-step > input[type="checkbox"] { grid-column: 3; }
-  .review-email-code { padding-left: 0; }
+  .review-email-code { padding-left: 36px; }
   .step-instruction { grid-template-columns: 18px minmax(0, 1fr); }
 
   .setup-panel .review-step textarea::placeholder {
@@ -1353,7 +1352,7 @@ select {
 /* Stages: a short heading over each run of steps with one purpose. */
 .organizing-notice { display: flex; align-items: center; gap: 8px; }
 .review-stage + .review-stage { border-top: 1px solid #d9dbe7; }
-.setup-panel input.review-stage-name { display: block; width: calc(100% - 16px); margin: 8px 8px 2px; padding: 4px 6px 4px 50px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: #4e38a0; font-size: .78rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.setup-panel input.review-stage-name { display: block; width: calc(100% - 16px); margin: 8px 8px 2px; padding: 4px 6px 4px 28px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: #4e38a0; font-size: .78rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
 .setup-panel input.review-stage-name:hover { border-color: #e4e5ee; }
 .setup-panel input.review-stage-name:focus { border-color: #6546c9; outline: none; text-transform: none; letter-spacing: 0; }
 .test-stage, .edit-stage { padding: 10px 14px 2px; color: #4e38a0; font-size: .72rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }

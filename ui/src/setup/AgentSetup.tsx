@@ -352,7 +352,7 @@ export default function AgentSetup() {
   }
 
   function updateStep(id: string, updates: Partial<SetupStep>): void {
-    setSteps((current) => current.map((step) => step.id === id ? { ...step, ...updates } : step));
+    setSteps((current) => current.map((step) => step.id === id ? updateStepFields(step, updates) : step));
     invalidateTest();
   }
 
@@ -1062,7 +1062,7 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
           </div> : null; })}
           {stages.some((stage) => !isObject(stage) || stage.type !== "agent") && <p className="raw-preserved">Then: {stages.filter((stage) => !isObject(stage) || stage.type !== "agent").map((stage) => preservedStageLabel(isObject(stage) ? stage : null)).join(" · ")} — kept as is</p>}
         </section> : <section className="edit-card edit-instructions"><h2>Steps</h2><p className="field-note expected-outcome-help"><HelpTip label="Expected outcome">The agent checks this before moving on. Leave empty unless a step is easy to get wrong.</HelpTip></p>
-          <StepEditor variant="edit" steps={draft.steps} goal={draft.goal} busy={readOnly} credentialsAllowed={credentialsAllowed} savedCredentials={agent.credentials?.saved ?? []} fieldRefs={fieldRefs} onRequestOtp={() => void requestEditOtp()} onUpdateStep={(id, updates) => update({ steps: draft.steps.map((step) => step.id === id ? { ...step, ...updates } : step) })} onRemoveStep={(id) => update({ steps: draft.steps.filter((step) => step.id !== id) })} onMergeSteps={(ids) => update({ steps: combineDateSteps(draft.steps, ids) })} onUndoMergedStep={(id) => update({ steps: undoDateMerge(draft.steps, id) })} onMoveStep={(index, delta) => update({ steps: moveStep(draft.steps, index, delta) })} onRenameStage={(index, name) => update({ steps: renameStageAt(draft.steps, index, name) })} onInsert={insertStep} />
+          <StepEditor variant="edit" steps={draft.steps} goal={draft.goal} busy={readOnly} credentialsAllowed={credentialsAllowed} savedCredentials={agent.credentials?.saved ?? []} fieldRefs={fieldRefs} onRequestOtp={() => void requestEditOtp()} onUpdateStep={(id, updates) => update({ steps: draft.steps.map((step) => step.id === id ? updateStepFields(step, updates) : step) })} onRemoveStep={(id) => update({ steps: draft.steps.filter((step) => step.id !== id) })} onMergeSteps={(ids) => update({ steps: combineDateSteps(draft.steps, ids) })} onUndoMergedStep={(id) => update({ steps: undoDateMerge(draft.steps, id) })} onMoveStep={(index, delta) => update({ steps: moveStep(draft.steps, index, delta) })} onRenameStage={(index, name) => update({ steps: renameStageAt(draft.steps, index, name) })} onInsert={insertStep} />
           <div className="redemo-controls">
             <div className="edit-actions"><label>Re-demonstrate from step<select aria-label="Re-demonstrate from step" value={selectedFromStep} disabled={readOnly || draft.steps.length === 0} onChange={(e) => setFromStep(Number(e.target.value))}>{draft.steps.map((_, index) => <option key={index} value={index}>{index + 1}</option>)}</select></label>
               <button className="button button-quiet" disabled={readOnly} onClick={() => void startRecording()}>Re-demonstrate</button>
@@ -1131,6 +1131,12 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
 }
 
 function validStepLimit(value: string): boolean { return value.trim() !== "" && Number.isInteger(Number(value)) && Number(value) >= 1 && Number(value) <= 128; }
+
+function updateStepFields(step: SetupStep, updates: Partial<SetupStep>): SetupStep {
+  const next = { ...step, ...updates };
+  if (step.uiMerged === true) Object.defineProperty(next, "uiMerged", { configurable: true, value: true, writable: true });
+  return next;
+}
 
 function EditIcon({ name }: { name: "back" | "up" | "down" | "close" }): JSX.Element {
   const path = { back: "M19 12H5m6-6-6 6 6 6", up: "M12 19V5m-6 6 6-6 6 6", down: "M12 5v14m-6-6 6 6 6-6", close: "M6 6l12 12M18 6L6 18" }[name];
@@ -1360,7 +1366,7 @@ function StepEditor(props: StepEditorProps): JSX.Element {
   const toggleSelected = (id: string): void => setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
   return <>
     {questionCount > 0 && <div className="setup-notice question-notice" role="status">{questionCount} question{questionCount === 1 ? "" : "s"} to answer before testing</div>}
-    {hasMergeCandidates && <div className="merge-date-actions"><button type="button" className="button button-quiet merge-date-button" disabled={props.busy || !canMerge} onClick={() => { const first = props.steps[selected[0]!]; props.onMergeSteps?.(selected.map((index) => props.steps[index]!.id)); setSelectedIds([]); setFocusStepId(first?.id ?? null); }}>Combine into one date step</button><span className="field-note">Tick the day, month and year fields, then combine them.</span></div>}
+    {hasMergeCandidates && <div className="merge-date-actions"><button type="button" className="button button-quiet merge-date-button" disabled={props.busy || !canMerge} onClick={() => { const first = props.steps.find((step) => selectedIds.includes(step.id)); props.onMergeSteps?.(selected.map((index) => props.steps[index]!.id)); setSelectedIds([]); setFocusStepId(first?.id ?? null); }}>Combine into one date step</button><span className="field-note">Tick the day, month and year fields, then combine them.</span></div>}
     <div className={props.variant === "review" ? "review-list" : "edit-steps"}>
       {groups.map((group) => <section className={props.variant === "review" ? "review-stage" : "edit-stage-group"} key={group.steps[0]!.step.id} aria-label={group.stage ?? "Steps"}>
         {group.stage !== null && <input className={props.variant === "review" ? "review-stage-name" : "edit-stage"} aria-label={props.variant === "review" ? `Stage name for steps ${group.steps[0]!.index + 1}–${group.steps.at(-1)!.index + 1}` : `Stage name for step ${group.steps[0]!.index + 1}`} value={group.stage} maxLength={60} disabled={props.busy} placeholder="Stage name" onChange={(event) => props.onRenameStage?.(group.steps[0]!.index, event.target.value)} />}
