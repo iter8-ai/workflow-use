@@ -2512,9 +2512,23 @@ test("stops an edit test and keeps publishing unavailable", async ({ page }) => 
   await expect(setup.locator(".edit-result-stopped")).toContainText("Stopped by you");
   await expect(setup.locator(".edit-result-stopped")).toHaveAttribute("role", "status");
   await expect(setup.getByRole("complementary", { name: "Test activity" }).locator("header span")).toHaveText("Stopped");
+  await expect(setup.getByRole("log", { name: "Agent activity" }).getByText("Failed")).toHaveCount(0);
   await expect(setup.getByRole("button", { name: "Publish changes" })).toHaveAccessibleDescription("Test your changes before publishing.");
   await expect.poll(() => page.locator('[data-testid="stop-requests"]').textContent()).toBe('[{"agentId":"agent-1","runId":"run-1"}]');
   await page.screenshot({ path: "e2e-artifacts/stop-edit.png" });
+});
+
+test("recovers when an older host rejects Stop test", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=stop-rejected`);
+  const setup = page.frameLocator("iframe");
+  await completeToTest(setup);
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await setup.getByRole("button", { name: "Stop test" }).click();
+  await expect(setup.getByRole("alert")).toContainText("Stopping this test is not available.");
+  await expect(setup.getByRole("button", { name: "Stop test" })).toBeEnabled();
+  await setup.getByRole("button", { name: "Close setup" }).click();
+  await setup.getByRole("button", { name: "Close setup" }).last().click();
+  await expect.poll(() => page.evaluate(() => window.__closeRequests.length)).toBe(1);
 });
 
 for (const scenario of ["stop-test", "edit-stop-test"]) {
@@ -2750,6 +2764,7 @@ function hostPage(url: string): string {
     else if (request.method === "saveAgent") { if (window.__savedSchedule || scenario === "rerun-save-rejection" && window.__savedAgents.length > 0) fail("This agent is scheduled. Edit it in agent settings."); else { window.__savedAgents.push(request.params); send({ id: "agent-1" }); } }
     else if (request.method === "testAgent") { testAttempts += 1; window.__testArguments.push(request.params.arguments); exportSentAt = Date.now(); if (scenario === "email-cutoff" && window.__testArguments.length > 1) setTimeout(() => send({ id: "run-" + window.__testArguments.length }), 1000); else send({ id: "run-" + window.__testArguments.length }); }
     else if (request.method === "stopTest") {
+      if (scenario === "stop-rejected") { fail("Stopping this test is not available."); return; }
       window.__stopRequests.push(request.params);
       stopLog.textContent = JSON.stringify(window.__stopRequests);
       stopPolls = 0;
@@ -2780,7 +2795,7 @@ function hostPage(url: string): string {
       else if ((emailScenario || scenario === "text-result") && window.__testArguments.length === 1) send({ status: "failed", failure: { kind: "result", message: "No file was downloaded." }, stoppedAtStep: null, screens: [screen] });
       else if (scenario === "agent-notes") send({ status: "succeeded", files: [{ name: "statement.pdf", url: "https://files.example.test/statement.pdf" }], screens: agentNoteScreens, confirmation: "Download started: statement.pdf" });
       else if (scenario === "failed" || (scenario === "edit-fail-pass" && testAttempts === 1)) send({ status: "failed", error: "The website rejected the request." });
-      else if (scenario === "watch" || scenario === "edit-watch") send({ status: "running", liveViewUrl: "https://www.browserbase.com/devtools-fullscreen/inspector.html", activity: { revision: 1, browser: "live", snapshot: { image: portalScreen("Reports"), sequence: 1 }, items: [{ sequence: 1, kind: "lifecycle", status: "completed", text: "Browser opened" }] } });
+      else if (scenario === "watch" || scenario === "edit-watch" || scenario === "stop-rejected") send({ status: "running", liveViewUrl: "https://www.browserbase.com/devtools-fullscreen/inspector.html", activity: { revision: 1, browser: "live", snapshot: { image: portalScreen("Reports"), sequence: 1 }, items: [{ sequence: 1, kind: "lifecycle", status: "completed", text: "Browser opened" }] } });
       else send({ status: "succeeded", files: emailScenario || scenario === "described-success" ? [] : [{ name: "statement.pdf", url: "https://files.example.test/statement.pdf" }], screens: [screen], confirmation: scenario === "described-success" ? "The green toast says Export sent" : "Export sent" });
     } else if (request.method === "createEmailRoute") { window.__createdRoutes.push(request.params); send({ channelId: "route-1", address: "reports+agent@reiterate.com" }); }
     else if (request.method === "getEmailArrival") {

@@ -17,11 +17,12 @@ export type Recording = {
 
 export type TestRun = {
   status: "running" | "succeeded" | "failed";
+  stopping?: boolean;
   error?: string;
   files?: Array<{ name: string; url: string }>;
   /** Watch-only view of the running test's browser. */
   liveViewUrl?: string | null;
-  failure?: { kind: "service" | "signin" | "website" | "steps" | "result" | "check" | "unknown"; message: string } | null;
+  failure?: { kind: "service" | "signin" | "website" | "steps" | "result" | "check" | "stopped" | "unknown"; message: string } | null;
   stoppedAtStep?: number | null;
   confirmation?: string | null;
   /** The finished run's screenshots, oldest first. */
@@ -76,6 +77,7 @@ type RequestMap = {
   saveDraft: { params: { draft: SetupDraft; config: unknown }; result: { draftId: string } };
   testAgent: { params: { agentId: string; arguments: Record<string, never> }; result: { id: string } };
   getTestRun: { params: { agentId: string; runId: string }; result: TestRun };
+  stopTest: { params: { agentId: string; runId: string }; result: null };
   createEmailRoute: { params: { name: string }; result: { channelId: string; address: string } };
   getEmailArrival: { params: { channelId: string; since: string }; result: { status: "waiting" | "routed" | "rejected" | "no_documents"; from?: string; files?: Array<{ name: string; url: string }> } };
   allowEmailSender: { params: { channelId: string; sender: string }; result: undefined };

@@ -42,6 +42,7 @@ export function applyTestRunUpdate<R extends WorkbenchRun>(current: R | null, ru
   return {
     ...current,
     status: next.status,
+    stopping: next.status === "running" && (next.stopping === true || current.stopping === true),
     error: next.error,
     failure: next.failure,
     stoppedAtStep: next.stoppedAtStep,
