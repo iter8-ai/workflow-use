@@ -568,6 +568,10 @@ test("merges day/month/year inputs, including month/day/year labels, without mer
   assert.equal(merged.length, 1);
   assert.deepEqual(merged[0]?.date, { value: "2026-09-06", format: "parts", rule: null });
   assert.equal(merged[0]?.description, "Enter the From date");
+  const preserved = mergeDateSteps(dateParts("To").map((step) => ({ ...step, stage: "Reports", expectedOutcome: "The date is accepted", url: "https://portal.example.test/reports" })));
+  assert.equal(preserved[0]?.stage, "Reports");
+  assert.equal(preserved[0]?.expectedOutcome, "The date is accepted");
+  assert.equal(preserved[0]?.url, "https://portal.example.test/reports");
   assert.equal(mergeDateSteps(merged)[0]?.id, merged[0]?.id);
   const us = mergeDateSteps([
     { id: "month", type: "input", description: "Enter From month", target: "month", value: "09" },
@@ -631,6 +635,7 @@ test("recommends date rules from goals and resolves month/week boundaries", () =
   const to = { ...from, id: "to", description: "Enter To date", target: "To" };
   assert.equal(dateRuleChoices(from, "Download last month's statement", "2026-10-05")[0]?.rule.kind, "start_of_last_month");
   assert.equal(dateRuleChoices(to, "Download last month's statement", "2026-10-05")[0]?.rule.kind, "end_of_last_month");
+  assert.equal(dateRuleChoices(to, "Laadi alla eelmise kuu väljavõte", "2026-10-05")[0]?.rule.kind, "end_of_last_month");
   assert.equal(dateRuleChoices(from, "daily export of yesterday's transactions", "2026-10-05")[0]?.rule.kind, "yesterday");
   assert.equal(dateRuleChoices(to, "No match", "2026-10-05")[0]?.rule.kind, "today");
   assert.equal(dateRuleChoices(from, "Laadi alla eelmise kuu väljavõte", "2026-10-05")[0]?.rule.kind, "start_of_last_month");

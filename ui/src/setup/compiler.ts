@@ -201,7 +201,7 @@ export function dateRuleChoices(step: SetupStep, goal: string, today: DateToday)
   let recommended: DateRule = side === "to" ? { kind: "today" } : side === "from" ? { kind: "start_of_last_month" } : { kind: "today" };
   const days = /\b(\d{1,3})\s+(?:days?|päeva?)\b/.exec(text);
   if (days !== null && Number(days[1]) >= 1 && Number(days[1]) <= 366) recommended = side === "from" ? { kind: "days_ago", days: Number(days[1]) } : { kind: "today" };
-  else if (/last month|previous month|eelmine kuu/.test(text)) recommended = side === "to" ? { kind: "end_of_last_month" } : { kind: "start_of_last_month" };
+  else if (/last month|previous month|eelm(?:ine|ise) kuu/.test(text)) recommended = side === "to" ? { kind: "end_of_last_month" } : { kind: "start_of_last_month" };
   else if (/yesterday|eile/.test(text)) recommended = { kind: "yesterday" };
   else if (/this month|see kuu/.test(text)) recommended = side === "from" ? { kind: "start_of_this_month" } : { kind: "today" };
   else if (/last week|eelmine nädal/.test(text)) recommended = side === "to" ? { kind: "end_of_last_week" } : { kind: "start_of_last_week" };
@@ -254,7 +254,7 @@ function singleDateValue(value: string): { iso: string; format: string } | null 
   return parseFormattedDate(value);
 }
 
-export function mergeDateSteps(steps: SetupStep[]): SetupStep[] {
+export function mergeDateSteps(steps: SetupStep[], force = false): SetupStep[] {
   const merged: SetupStep[] = [];
   for (let index = 0; index < steps.length;) {
     const step = steps[index]!;
@@ -262,13 +262,17 @@ export function mergeDateSteps(steps: SetupStep[]): SetupStep[] {
     const run: SetupStep[] = [];
     for (let end = index; end < Math.min(steps.length, index + 3) && steps[end]?.type === "input"; end += 1) run.push(steps[end]!);
     const sides = new Set(run.map((item) => dateSide(item)).filter((side): side is "from" | "to" => side !== null));
-    if (run.length >= 2 && run.length <= 3 && sides.size <= 1 && run.every((item) => datePartKind(item) !== null) && new Set(run.map((item) => datePartKind(item))).size === run.length) {
-      const values = new Map(run.map((item) => [datePartKind(item)!, Number(item.value)]));
+    const namedParts = run.every((item) => datePartKind(item) !== null) && new Set(run.map((item) => datePartKind(item))).size === run.length;
+    const forcedParts = force && run.length === 3 && run.every((item) => /^\d+$/.test(item.value ?? ""))
+      ? ["day", "month", "year"] as const
+      : null;
+    if (run.length >= 2 && run.length <= 3 && sides.size <= 1 && (namedParts || forcedParts !== null)) {
+      const values = new Map(run.map((item, partIndex) => [forcedParts?.[partIndex] ?? datePartKind(item)!, Number(item.value)]));
       const iso = dateFromParts(values.get("year")!, values.get("month")!, values.get("day")!);
       if (iso !== null) {
         const first = run[0]!;
         const field = dateFieldName(first);
-        merged.push({ id: first.id, type: "date", description: field === "the date field" ? "Enter date" : `Enter the ${field} date`, target: field === "the date field" ? null : field, value: null, date: { value: iso, format: run.length === 3 ? "parts" : dateFormatForParts(run), rule: null }, parts: run });
+        merged.push({ ...first, type: "date", description: field === "the date field" ? "Enter date" : `Enter the ${field} date`, target: field === "the date field" ? null : field, value: null, date: { value: iso, format: run.length === 3 ? "parts" : dateFormatForParts(run), rule: null }, parts: run });
         index += run.length;
         continue;
       }
