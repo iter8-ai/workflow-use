@@ -179,6 +179,10 @@ select {
   margin-inline: 0;
 }
 
+.review-panel {
+  gap: 8px;
+}
+
 .setup-panel-compact {
   width: min(720px, 100%);
   gap: 14px;
