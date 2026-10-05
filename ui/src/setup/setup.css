@@ -527,7 +527,7 @@ select {
 
 /* Review: one dense row per step so a typical 10-step demonstration fits one screen. */
 .review-list {
-  --review-columns: 28px minmax(0, 3fr) minmax(0, 2fr) 32px;
+  --review-columns: 28px minmax(0, 3fr) minmax(0, 2fr) 78px 32px;
   border: 1px solid #d9dbe7;
   border-radius: 8px;
   background: #ffffff;
@@ -627,6 +627,9 @@ select {
   color: #5f667c;
   font-size: 0.82rem;
 }
+.review-step > .icon-button { grid-column: 5; grid-row: 1; }
+.review-step .review-email-code { grid-column: 4; grid-row: 1; justify-content: center; align-self: center; padding: 0; margin: 0; }
+.review-email-code span { display: none; }
 .setup-panel .review-step-note input[type="checkbox"] { width: 16px; height: 16px; margin: 0; padding: 0; accent-color: #6546c9; }
 
 .setup-panel .review-step-kind {
@@ -979,6 +982,11 @@ select {
   .review-columns span:nth-child(3) {
     display: none;
   }
+
+  .review-columns span:nth-child(4) { display: none; }
+  .review-step > .icon-button { grid-column: 3; }
+  .review-step .review-email-code { grid-column: 2 / -1; grid-row: 3; justify-content: flex-start; }
+  .review-email-code span { display: inline; }
 
   /* Without a column header, the outcome reads as secondary text under its instruction. */
   .setup-panel .review-step textarea + textarea {

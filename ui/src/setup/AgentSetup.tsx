@@ -1248,6 +1248,7 @@ function Review(props: { steps: SetupStep[]; organizing: boolean; busy: boolean;
           <span>#</span>
           <span>Instruction</span>
           <span>Expected outcome <em>optional</em></span>
+          <span>Email code</span>
         </div>
         {groups.map((group) => (
         <section className="review-stage" key={group.steps[0]!.step.id} aria-label={group.stage ?? "Steps"}>
@@ -1263,7 +1264,7 @@ function Review(props: { steps: SetupStep[]; organizing: boolean; busy: boolean;
                 <button type="button" className="icon-button" aria-label={`Remove step ${index + 1}`} title="Remove step" onClick={() => props.onRemoveStep(step.id)} disabled={props.busy}>
                   <svg aria-hidden="true" viewBox="0 0 16 16" width="16" height="16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg>
                 </button>
-                {step.type === "click" && <label className="review-step-note"><input type="checkbox" aria-label={`Step ${index + 1} requests or resends email code`} checked={step.requestsEmailCode === true} onChange={(event) => props.onUpdateStep(step.id, { requestsEmailCode: event.target.checked })} /> Requests or resends email code</label>}
+                {step.type === "click" && <label className="review-step-note review-email-code"><input type="checkbox" aria-label={`Step ${index + 1} requests or resends email code`} checked={step.requestsEmailCode === true} onChange={(event) => props.onUpdateStep(step.id, { requestsEmailCode: event.target.checked })} /><span>Requests or resends email code</span></label>}
                 {(typedField || step.type === "select_change") && (
                   <div className="review-step-note">
                     {typedField && (
