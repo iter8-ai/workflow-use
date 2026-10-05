@@ -133,7 +133,7 @@ SCHEMA: dict[str, Any] = {
                         "items": {
                             "type": "object",
                             "additionalProperties": False,
-                            "required": ["n", "description", "date"],
+                            "required": ["n", "description"],
                             "properties": {
                                 "n": {
                                     "anyOf": [
@@ -188,7 +188,7 @@ def step_lines(steps: Sequence[SetupStep]) -> str:
     """Return one JSON line per step, exposing only safe date-like input values.
 
     Input values are included only for 1-4 digit values or values matching FIRE's date formats. Credential values
-    are always just their kind, and free text, select choices, and other secrets never reach the organizer.
+    are omitted entirely, and free text, select choices, and other secrets never reach the organizer.
     """
     lines = []
     for number, step in enumerate(steps, start=1):
@@ -338,8 +338,6 @@ def _parse_date_info(raw: Any, numbers: tuple[int, ...], steps: Sequence[SetupSt
             return None
         return OrganizedDate(raw["value"], fmt)
     if len(parts) != 1 or fmt not in FORMATS or parts[0].value is None or render(value, fmt) != parts[0].value:
-        return None
-    if not any(token in fmt for token in ("%d", "%-d", "%o")):
         return None
     if not _DATE_FIELD_WORD.search(f"{parts[0].target or ''} {parts[0].description}"):
         return None
