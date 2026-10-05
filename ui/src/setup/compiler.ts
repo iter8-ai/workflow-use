@@ -417,6 +417,11 @@ export function applyOrganizedSteps(current: SetupStep[], recorded: SetupStep[],
   for (const next of organized.filter((step) => step.type === "date" && step.parts?.length)) {
     const ids = next.parts!.map((part) => part.id);
     const first = result.findIndex((step) => step.id === next.id);
+    const current = result[first];
+    if (current?.type === "date") {
+      result[first] = { ...current, date: next.date, parts: current.parts ?? next.parts };
+      continue;
+    }
     if (first === -1 || ids.some((id) => !result.some((step) => step.id === id))) continue;
     const currentParts = result.filter((step) => ids.includes(step.id));
     const replacement = { ...next, parts: currentParts };

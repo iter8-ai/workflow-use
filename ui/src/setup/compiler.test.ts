@@ -517,6 +517,20 @@ test("organized wording arrives without undoing a step the user already edited o
   ]);
 });
 
+test("organizer date metadata wins when the UI already merged the same parts", () => {
+  const recorded = dateParts("To");
+  const current = mergeDateSteps(recorded);
+  const organized: SetupStep[] = [{
+    id: recorded[0]!.id,
+    type: "date",
+    description: "Enter the To date",
+    target: "To",
+    date: { value: "2026-09-06", format: "parts", rule: { kind: "today" } },
+    parts: recorded,
+  }];
+  assert.equal(applyOrganizedSteps(current, recorded, organized)[0]?.date?.rule?.kind, "today");
+});
+
 test("stage names are checked like instructions", () => {
   const draft = baseDraft();
   draft.steps[0] = { ...draft.steps[0]!, stage: "password: hunter22" };
