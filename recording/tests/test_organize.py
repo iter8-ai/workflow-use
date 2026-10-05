@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections.abc import Sequence
 from typing import Any
@@ -11,7 +12,7 @@ from test_api import FakeProvider, create_recording, headers
 
 from workflow_use_recording.api import RecordingConfig, create_app
 from workflow_use_recording.models import SetupStep
-from workflow_use_recording.organize import OrganizedStep, parse_organized, step_lines
+from workflow_use_recording.organize import OrganizedDate, OrganizedStep, parse_organized, step_lines
 
 
 class StubOrganizer:
@@ -77,6 +78,36 @@ async def test_finished_demonstration_is_grouped_into_stages_with_clearer_steps(
 
 
 @pytest.mark.asyncio
+async def test_get_returns_one_date_step_with_original_parts() -> None:
+    provider = FakeProvider()
+    organizer = StubOrganizer(
+        [
+            OrganizedStep("Set date", "Open the portal", (1,)),
+            OrganizedStep(
+                "Set date",
+                "Enter the From date",
+                (2, 3, 4),
+                OrganizedDate("2026-09-06", "parts"),
+            ),
+        ]
+    )
+    with organized_client(provider, organizer) as http:
+        recording = create_recording(http)
+        session = provider.sessions[0]
+        await session.emit({"type": "input", "target": "From day", "value": "06"})
+        await session.emit({"type": "input", "target": "From month", "value": "09"})
+        await session.emit({"type": "input", "target": "From year", "value": "2026"})
+        http.post(f"/recordings/{recording['id']}/stop", headers=headers())
+        body = settled(http, recording["id"])
+
+    assert [step["type"] for step in body["steps"]] == ["navigation", "date"]
+    assert body["steps"][1]["id"] == body["steps"][1]["parts"][0]["id"]
+    assert body["steps"][1]["target"] == "From"
+    assert body["steps"][1]["date"] == {"value": "2026-09-06", "format": "parts", "rule": None}
+    assert [part["value"] for part in body["steps"][1]["parts"]] == ["06", "09", "2026"]
+
+
+@pytest.mark.asyncio
 async def test_steps_stay_as_recorded_when_organizing_fails() -> None:
     provider = FakeProvider()
     with organized_client(provider, StubOrganizer(error=RuntimeError("model unavailable"))) as http:
@@ -111,6 +142,127 @@ def test_an_answer_that_drops_or_reorders_steps_is_rejected() -> None:
     answer = '{"stages":[{"title":"Sign in","steps":[{"n":2,"description":"Click"},{"n":1,"description":"Open"}]}]}'
     assert parse_organized(answer, 2) is None
     assert parse_organized('{"stages":[{"title":"Sign in","steps":[{"n":1,"description":"Open"}]}]}', 2) is None
+
+
+def _input_steps(*parts: tuple[str, str]) -> list[SetupStep]:
+    return [
+        SetupStep(id=str(index), type="input", target=target, value=value, description=f"Enter {target}")
+        for index, (target, value) in enumerate(parts, 1)
+    ]
+
+
+def _organized_answer(
+    numbers: int | list[int],
+    description: str,
+    *,
+    date_value: str | None = None,
+    date_format: str | None = None,
+) -> str:
+    item: dict[str, object] = {"n": numbers, "description": description}
+    if date_value is not None or date_format is not None:
+        item["date"] = {"value": date_value, "format": date_format}
+    return json.dumps({"stages": [{"title": "Set date", "steps": [item]}]})
+
+
+def test_parts_date_merge_uses_recorded_day_month_year_order() -> None:
+    steps = _input_steps(("day", "06"), ("month", "09"), ("year", "2026"))
+    organized = parse_organized(
+        _organized_answer([1, 2, 3], "Enter the date", date_value="2026-09-06", date_format="parts"), steps
+    )
+
+    assert organized is not None
+    assert organized[0].numbers == (1, 2, 3)
+    assert organized[0].date == OrganizedDate("2026-09-06", "parts")
+
+
+def test_parts_date_merge_infers_month_day_year_from_targets() -> None:
+    steps = _input_steps(("month", "09"), ("day", "06"), ("year", "2026"))
+    organized = parse_organized(
+        _organized_answer([1, 2, 3], "Enter the date", date_value="2026-09-06", date_format="parts"), steps
+    )
+
+    assert organized is not None and organized[0].date == OrganizedDate("2026-09-06", "parts")
+
+
+def test_invalid_date_merge_falls_back_to_original_descriptions() -> None:
+    steps = _input_steps(("day", "31"), ("month", "02"), ("year", "2026"))
+    organized = parse_organized(
+        _organized_answer([1, 2, 3], "Enter the date", date_value="2026-02-31", date_format="parts"), steps
+    )
+
+    assert organized is not None
+    assert [item.numbers for item in organized] == [(1,), (2,), (3,)]
+    assert [item.description for item in organized] == [step.description for step in steps]
+
+
+def test_non_input_group_falls_back_to_separate_steps() -> None:
+    steps = [
+        SetupStep(id="1", type="input", target="day", value="06", description="Enter day"),
+        SetupStep(id="2", type="click", target="Apply", description="Click Apply"),
+        SetupStep(id="3", type="input", target="year", value="2026", description="Enter year"),
+    ]
+    answer = {
+        "stages": [
+            {
+                "title": "Set date",
+                "steps": [
+                    {"n": [1, 2], "description": "Enter the date", "date": {"value": "2026-09-06", "format": "parts"}},
+                    {"n": 3, "description": "Enter year"},
+                ],
+            }
+        ]
+    }
+    organized = parse_organized(json.dumps(answer), steps)
+
+    assert organized is not None
+    assert [item.numbers for item in organized] == [(1,), (2,), (3,)]
+    assert [item.description for item in organized] == ["Enter day", "Click Apply", "Enter year"]
+
+
+def test_single_field_date_merge_requires_a_matching_fire_format() -> None:
+    steps = _input_steps(("date", "06.09.2026"))
+    organized = parse_organized(
+        _organized_answer([1], "Enter the date", date_value="2026-09-06", date_format="%d.%m.%Y"), steps
+    )
+
+    assert organized is not None and organized[0].date == OrganizedDate("2026-09-06", "%d.%m.%Y")
+
+
+def test_step_lines_exposes_only_date_like_input_values() -> None:
+    steps = [
+        SetupStep(id="1", type="input", target="day", value="06", description="Enter 06"),
+        SetupStep(id="2", type="input", target="notes", value="private text", description="Enter private text"),
+        SetupStep(id="3", type="credential", target="Password", value="password", description="Enter saved password"),
+    ]
+    sent = step_lines(steps)
+
+    assert '"value": "06"' in sent
+    assert "private text" not in sent
+    assert '"value": "password"' in sent
+
+
+def test_legacy_single_number_output_still_parses() -> None:
+    answer = '{"stages":[{"title":"Open","steps":[{"n":1,"description":"Open the portal"}]}]}'
+
+    organized = parse_organized(answer, 1)
+
+    assert organized is not None and organized[0].numbers == (1,)
+
+
+def test_setup_step_serializes_date_and_parts() -> None:
+    parts = _input_steps(("day", "06"), ("month", "09"), ("year", "2026"))
+    step = SetupStep(
+        id="1",
+        type="date",
+        description="Enter the date",
+        date={"value": "2026-09-06", "format": "parts", "rule": None},
+        parts=parts,
+    )
+
+    serialized = step.model_dump(mode="json")
+
+    assert serialized["date"] == {"value": "2026-09-06", "format": "parts", "rule": None}
+    assert serialized["parts"] == [part.model_dump(mode="json") for part in parts]
 
 
 @pytest.mark.asyncio

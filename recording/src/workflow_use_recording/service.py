@@ -4,13 +4,14 @@ import asyncio
 import logging
 import re
 from collections import OrderedDict
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 from uuid import uuid4
 
-from .models import RecordedDownload, RecordingResponse, SetupStep
-from .organize import StepOrganizer
+from .models import RecordedDownload, RecordingResponse, SetupStep, StepDate
+from .organize import OrganizedStep, StepOrganizer
 from .provider import BrowserProvider, BrowserSession
 from .security import safe_public_url
 
@@ -227,9 +228,7 @@ class RecordingService:
         if len(recording.steps) >= MAX_STEPS:
             recording.blocked_reason = CAPTURE_LIMIT_REASON
             return
-        recording.steps.append(
-            SetupStep(id=download_id, type="download", description=f"Download {name}", value=name)
-        )
+        recording.steps.append(SetupStep(id=download_id, type="download", description=f"Download {name}", value=name))
         recording.last_input_key = None
 
     def _start_organizing(self, recording: Recording) -> None:
@@ -263,10 +262,7 @@ class RecordingService:
             async with recording.lock:
                 if [step.id for step in recording.steps] != [step.id for step in steps]:
                     return
-                recording.steps = [
-                    step.model_copy(update={"stage": item.stage, "description": item.description})
-                    for step, item in zip(steps, organized, strict=True)
-                ]
+                recording.steps = _apply_organized(steps, organized)
         finally:
             recording.organizing = False
 
@@ -380,6 +376,55 @@ def _text(value: Any, *, maximum: int = MAX_FIELD_LENGTH) -> str | None:
         return None
     clipped = value[:maximum]
     return clipped or None
+
+
+_DATE_TARGET_WORDS = re.compile(r"\b(?:day|month|year|dd|mm|yyyy|päev|kuu|aasta)\b", re.I)
+
+
+def _date_target(parts: Sequence[SetupStep]) -> str | None:
+    if len(parts) == 1:
+        return parts[0].target
+    labels: list[str] = []
+    for part in parts:
+        target = _DATE_TARGET_WORDS.sub("", part.target or "")
+        target = re.sub(r"\s+", " ", target).strip(" /,;:-")
+        if target and target not in labels:
+            labels.append(target)
+    return " / ".join(labels) or None
+
+
+def _apply_organized(steps: list[SetupStep], organized: list[OrganizedStep]) -> list[SetupStep]:
+    """Apply validated organizer items while retaining every original date part for replay."""
+    result: list[SetupStep] = []
+    offset = 0
+    try:
+        for item in organized:
+            numbers = item.numbers or (offset + 1,)
+            if numbers != tuple(range(offset + 1, offset + len(numbers) + 1)):
+                return steps
+            parts = steps[offset : offset + len(numbers)]
+            if len(parts) != len(numbers):
+                return steps
+            if item.date is None:
+                if len(parts) != 1:
+                    return steps
+                result.append(parts[0].model_copy(update={"stage": item.stage, "description": item.description}))
+            else:
+                result.append(
+                    SetupStep(
+                        id=parts[0].id,
+                        type="date",
+                        description=item.description,
+                        target=_date_target(parts),
+                        stage=item.stage,
+                        date=StepDate(value=item.date.value, format=item.date.format, rule=None),
+                        parts=parts,
+                    )
+                )
+            offset += len(numbers)
+    except (IndexError, TypeError, ValueError):
+        return steps
+    return result if offset == len(steps) else steps
 
 
 def _to_step(event: dict[str, Any]) -> SetupStep | None:
