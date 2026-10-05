@@ -112,10 +112,10 @@ const statusLabels: Record<TestActivity["items"][number]["status"], string | nul
 export function ActivityLog(props: { run: WorkbenchRun | null }): JSX.Element {
   const run = props.run;
   const running = run?.status === "running";
-  const items = (run?.activity?.items ?? []).filter((item) => knownKinds.includes(item.kind) && Object.prototype.hasOwnProperty.call(statusLabels, item.status));
-  const groupedItems = groupActivityItems(items, running);
+  const activityItems = run?.activity?.items ?? [];
+  const groupedItems = groupActivityItems(activityItems, running).filter((item) => knownKinds.includes(item.kind) && Object.prototype.hasOwnProperty.call(statusLabels, item.status));
   // The feed keeps the latest 200 entries, so its length stops changing; follow the newest entry instead.
-  const lastSequence = items.at(-1)?.sequence;
+  const lastSequence = activityItems.at(-1)?.sequence;
   const listRef = useRef<HTMLDivElement>(null);
   const followRef = useRef(true);
   // Follow new entries unless the user scrolled up to read earlier ones.
@@ -139,7 +139,7 @@ export function ActivityLog(props: { run: WorkbenchRun | null }): JSX.Element {
         </li>)}
         {running && <li className="activity-working"><span className="edit-spinner" aria-hidden="true" />{run.connectionLost ? "Reconnecting…" : "Working"}</li>}
         {!running && run.connectionLost && <li className="activity-empty">The last update couldn’t be read, so this list may be incomplete.</li>}
-        {!running && !run.connectionLost && items.length === 0 && <li className="activity-empty">No activity was recorded for this run.</li>}
+        {!running && !run.connectionLost && groupedItems.length === 0 && <li className="activity-empty">No activity was recorded for this run.</li>}
       </ol>}
   </div>;
 }

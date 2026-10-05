@@ -51,6 +51,14 @@ test("does not group across a failed Wait action or non-Wait activity", () => {
   assert.deepEqual(groupActivityItems(items, true), [action(1, "Waited 2s"), action(2, "Wait", "failed"), action(3, "Waited 2s"), action(4, "Type")]);
 });
 
+test("does not group across activity entries that the rail omits", () => {
+  const hidden = { sequence: 2, kind: "unknown", status: "executed", text: "Hidden" } as unknown as TestActivity["items"][number];
+  const html = rail(running({ activity: activity({ items: [action(1, "Wait"), hidden, action(3, "Wait")] }) }));
+  assert.match(html, /Waited 2s/);
+  assert.match(html, /Wait 2s…/);
+  assert.doesNotMatch(html, /Wait 4s…/);
+});
+
 test("shows the latest screen of a live browser as a picture, never the provider's viewer", () => {
   const html = browser(running({ activity: activity(), liveViewUrl: liveUrl }));
   assert.match(html, new RegExp(`<img[^>]*src="${firstScreen.replace(/[+/]/g, "\\$&")}"`));
