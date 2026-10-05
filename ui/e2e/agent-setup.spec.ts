@@ -107,6 +107,56 @@ test("edits stage names and keeps a moved step in the stage it moves into", asyn
   expect(saved.config.stages[0].prompt).toContain("Open reports:\n1. ");
 });
 
+test("merges recorded date fields and asks a goal-driven question", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=date-create`);
+  const setup = page.frameLocator("iframe");
+  await describeAndDemonstrate(setup);
+  await expect(setup.getByLabel("Step 2 description")).toHaveValue("Enter the From date");
+  await expect(setup.getByLabel("Step 4 description")).toHaveValue("Download the statement");
+  await expect(setup.getByText("1 question to answer before testing", { exact: true })).toBeVisible();
+  if (!process.env.CI) await page.screenshot({ path: "/Users/joonatan/.hermes/cache/scratch/date-steps/shots/review-date-open-1440.png" });
+  await expect(setup.getByRole("button", { name: "Continue to test" })).toBeDisabled();
+  await expect(setup.getByText("Answer all open questions before testing.", { exact: true })).toBeVisible();
+  await expect(setup.locator(".review-list")).not.toContainText(/[{}]/);
+  await setup.getByRole("radio", { name: /End of last month/ }).click();
+  if (!process.env.CI) await page.screenshot({ path: "/Users/joonatan/.hermes/cache/scratch/date-steps/shots/review-date-answered-1440.png" });
+  await setup.getByRole("button", { name: "Continue to test" }).click();
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await expect.poll(() => page.evaluate(() => window.__savedAgents.length)).toBe(1);
+  const saved = await page.evaluate(() => window.__savedAgents[0]);
+  expect(saved.draft.steps).toHaveLength(4);
+  expect(saved.draft.steps[1].date.rule).toEqual({ kind: "end_of_last_month" });
+  expect(saved.config.stages[0].prompt).toContain("{end_of_last_month|");
+  expect(saved.config.stages[0].prompt).not.toContain("2026");
+});
+
+test("answers a date question in Edit and records a revertable change", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-date`);
+  const setup = page.frameLocator("iframe");
+  await expect(setup.getByLabel("Step 1 description")).toHaveValue("Enter the To date");
+  await expect(setup.getByText("1 question to answer before testing", { exact: true })).toBeVisible();
+  await expect(setup.getByRole("button", { name: "Test changes" })).toBeDisabled();
+  await expect(setup.locator(".edit-steps")).not.toContainText(/[{}]/);
+  await setup.getByRole("radio", { name: /End of last month/ }).click();
+  await expect(setup.getByText("Step 1 date", { exact: true })).toBeVisible();
+  await expect(setup.getByRole("button", { name: "Revert Step 1 date", exact: true })).toBeVisible();
+  await expect(setup.getByRole("button", { name: "Test changes" })).toBeEnabled();
+  await setup.getByRole("heading", { name: "Changes", exact: true }).evaluate((element) => element.scrollIntoView({ block: "center" }));
+  if (!process.env.CI) await page.screenshot({ path: "/Users/joonatan/.hermes/cache/scratch/date-steps/shots/edit-date-change-1440.png", fullPage: true });
+  await page.setViewportSize({ width: 1024, height: 768 });
+  if (!process.env.CI) await page.screenshot({ path: "/Users/joonatan/.hermes/cache/scratch/date-steps/shots/edit-date-change-1024.png", fullPage: true });
+});
+
+test("offers the OTP question in Review and requests an authenticator key", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=otp-create`);
+  const setup = page.frameLocator("iframe");
+  await describeAndDemonstrate(setup);
+  await expect(setup.getByText("needs a one-time code", { exact: false })).toBeVisible();
+  await setup.getByRole("radio", { name: "Authenticator key saved in Reiterate" }).click();
+  await expect.poll(() => page.evaluate(() => window.__credentialRequests)).toContainEqual({ kinds: ["otp"], replace: false });
+  await expect(setup.getByText("needs a one-time code", { exact: false })).toHaveCount(0);
+});
+
 test("nginx response policies allow finished-run PNG evidence", async ({ page }) => {
   const policies = [...readFileSync(new URL("../nginx.conf", import.meta.url), "utf8").matchAll(/add_header Content-Security-Policy "([^"]+)" always;/g)].map((match) => match[1]);
   expect(policies).toHaveLength(5);
@@ -477,7 +527,7 @@ test("keeps keyboard focus on the demonstration's next action and shows what was
   await expect(setup.getByText("Continue to review to check and edit them.", { exact: true })).toBeVisible();
   await expect(setup.getByRole("status").filter({ hasText: "Demonstration finished" })).toBeVisible();
   await page.keyboard.press("Enter");
-  await expect(setup.getByRole("heading", { name: "Review the draft" })).toBeFocused();
+  await expect(setup.getByRole("heading", { name: "Review and complete the setup" })).toBeFocused();
 });
 
 test("shows the running test's latest screen without embedding the provider's viewer", async ({ page }) => {
@@ -1526,7 +1576,7 @@ test("uses one top bar and the same title row on every stage", async ({ page }) 
   await setup.getByRole("button", { name: "Finish demonstration" }).click();
   formats.push(await expectStage("Demonstrate the task"));
   await setup.getByRole("button", { name: "Continue to review" }).click();
-  formats.push(await expectStage("Review the draft"));
+  formats.push(await expectStage("Review and complete the setup"));
   await setup.getByRole("button", { name: "Continue to test" }).click();
   // The test stage keeps its explanation behind a (?) next to the heading.
   const testFormat = await expectStage("Verify agent can follow the process");
@@ -2528,7 +2578,9 @@ function hostPage(url: string): string {
   window.__loadAvailable = scenario !== "edit-load-error";
   const edit = scenario.startsWith("edit");
   const staged = scenario === "edit-staged";
-  const editSteps = [
+  const editSteps = scenario === "edit-date" ? [
+    { id: "to-date", type: "date", description: "Enter the To date", target: "To", date: { value: "2026-09-06", format: "parts", rule: null }, parts: [{ id: "to-day", type: "input", description: "Enter the To day", target: "day", value: "06" }, { id: "to-month", type: "input", description: "Enter the To month", target: "month", value: "09" }, { id: "to-year", type: "input", description: "Enter the To year", target: "year", value: "2026" }] },
+  ] : [
     { id: "open-reports", type: "click", description: "Open the reports section", target: "Reports", expectedOutcome: "The reports list is visible", ...(staged ? { stage: "Open reports" } : {}) },
     { id: "download", type: "click", description: "Download the statement", target: "Download statement", ...(staged ? { stage: "Download" } : {}) },
   ];
@@ -2540,7 +2592,18 @@ function hostPage(url: string): string {
     editSteps[0].description += " with $password";
     editSteps[0].expectedOutcome += " after $otp";
   }
-  const steps = [
+  const steps = scenario === "date-create" ? [
+    { id: "from", type: "click", description: "Click From", target: "From" },
+    { id: "from-day", type: "input", description: "Enter the From day", target: "day", value: "06" },
+    { id: "from-month", type: "input", description: "Enter the From month", target: "month", value: "09" },
+    { id: "from-year", type: "input", description: "Enter the From year", target: "year", value: "2026" },
+    { id: "apply", type: "click", description: "Click Apply", target: "Apply" },
+    { id: "download", type: "download", description: "Download the statement", value: "statement.pdf" },
+  ] : scenario === "otp-create" ? [
+    { id: "open-reports", type: "click", description: "Open the reports section", target: "Reports" },
+    { id: "otp", type: "credential", description: "Enter the saved one-time code in Code", target: "Code", value: "otp" },
+    { id: "download", type: "download", description: "Download the statement", value: "statement.pdf" },
+  ] : [
     { id: "open-reports", type: "click", description: "Open the reports section", target: "Reports", expectedOutcome: scenario === "email-recipient-check" ? "Support contact me@example.test is visible" : "The reports list is visible" },
     ...(scenario === "email-ambiguous" ? [
       { id: "billing", type: "input", description: "Enter billing contact", target: "Billing email", value: "billing@example.test" },

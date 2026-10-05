@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { applyOrganizedSteps, compileAgent, doneWhenOptions, draftChanges, findUnambiguousEmailStep, groupSteps, replaceStepsFrom, requiredCredentials, type SetupDraft, type SetupStep } from "./compiler";
+import { applyOrganizedSteps, compileAgent, dateRuleChoices, dateRuleLabel, doneWhenOptions, draftChanges, findUnambiguousEmailStep, groupSteps, mergeDateSteps, openQuestions, replaceStepsFrom, requiredCredentials, resolveDateRule, type SetupDraft, type SetupStep } from "./compiler";
 
 const baseDraft = (): SetupDraft => ({
   name: "Download monthly statement",
@@ -517,6 +517,42 @@ test("organized wording arrives without undoing a step the user already edited o
   ]);
 });
 
+test("does not merge organizer date parts across an edited step", () => {
+  const recorded = dateParts("To");
+  const organized: SetupStep[] = [{
+    id: recorded[0]!.id,
+    type: "date",
+    description: "Enter the To date",
+    target: "To",
+    date: { value: "2026-09-06", format: "parts", rule: null },
+    parts: recorded,
+  }];
+  const current = [recorded[0]!, { id: "edited", type: "click" as const, description: "Click Apply" }, recorded[1]!, recorded[2]!];
+  assert.deepEqual(applyOrganizedSteps(current, recorded, organized).map(({ id, type, description }) => ({ id, type, description })), [
+    { id: "To-day", type: "input", description: "Enter the To date" },
+    { id: "edited", type: "click", description: "Click Apply" },
+    { id: "To-month", type: "input", description: "Enter the To month" },
+    { id: "To-year", type: "input", description: "Enter the To year" },
+  ]);
+});
+
+test("organizer date metadata wins when the UI already merged the same parts", () => {
+  const recorded = dateParts("To");
+  const current = mergeDateSteps(recorded);
+  const organized: SetupStep[] = [{
+    id: recorded[0]!.id,
+    type: "date",
+    description: "Enter the To date",
+    target: "To",
+    date: { value: "2026-09-06", format: "parts", rule: { kind: "today" } },
+    parts: recorded,
+  }];
+  const merged = applyOrganizedSteps(current, recorded, organized)[0];
+  assert.equal(merged?.date?.rule?.kind, "today");
+  assert.equal(merged?.description, "Enter the To date");
+  assert.equal(merged?.target, "To");
+});
+
 test("stage names are checked like instructions", () => {
   const draft = baseDraft();
   draft.steps[0] = { ...draft.steps[0]!, stage: "password: hunter22" };
@@ -541,4 +577,139 @@ test("steps added after organizing get a neutral heading instead of joining the 
     { id: "b", type: "click", description: "Click Export", target: "Export", stage: "" },
   ];
   assert.match((compileAgent(draft).stages[0] as { prompt: string }).prompt, /Sign in:\n1\. Click Log in\.\nThen:\n2\. Click Export\./);
+});
+
+const dateParts = (field = "From"): SetupStep[] => [
+  { id: `${field}-day`, type: "input", description: `Enter the ${field} day`, target: "day", value: "06" },
+  { id: `${field}-month`, type: "input", description: `Enter the ${field} month`, target: "month", value: "09" },
+  { id: `${field}-year`, type: "input", description: `Enter the ${field} year`, target: "year", value: "2026" },
+];
+
+test("merges day/month/year inputs, including month/day/year labels, without merging numbers", () => {
+  const merged = mergeDateSteps(dateParts());
+  assert.equal(merged.length, 1);
+  assert.deepEqual(merged[0]?.date, { value: "2026-09-06", format: "parts", rule: null });
+  assert.equal(merged[0]?.description, "Enter the From date");
+  const preserved = mergeDateSteps(dateParts("To").map((step) => ({ ...step, stage: "Reports", expectedOutcome: "The date is accepted", url: "https://portal.example.test/reports" })));
+  assert.equal(preserved[0]?.stage, "Reports");
+  assert.equal(preserved[0]?.expectedOutcome, "The date is accepted");
+  assert.equal(preserved[0]?.url, "https://portal.example.test/reports");
+  assert.equal(mergeDateSteps(merged)[0]?.id, merged[0]?.id);
+  const usParts: SetupStep[] = [
+    { id: "month", type: "input", description: "Enter From month", target: "month", value: "09" },
+    { id: "day", type: "input", description: "Enter From day", target: "day", value: "06" },
+    { id: "year", type: "input", description: "Enter From year", target: "year", value: "2026" },
+  ];
+  const us = mergeDateSteps(usParts);
+  assert.equal(us[0]?.date?.value, "2026-09-06");
+  assert.equal(mergeDateSteps(usParts, true)[0]?.date?.value, "2026-09-06");
+  assert.equal(mergeDateSteps([{ id: "n", type: "input", description: "Enter quantity", target: "Number", value: "06" }])[0]?.type, "input");
+  const mixed = mergeDateSteps([
+    { id: "from-day", type: "input", description: "Enter From day", target: "From day", value: "06" },
+    { id: "to-month", type: "input", description: "Enter To month", target: "To month", value: "09" },
+    { id: "from-year", type: "input", description: "Enter From year", target: "From year", value: "2026" },
+  ]);
+  assert.equal(mixed.every((step) => step.type === "input"), true);
+  assert.deepEqual(mergeDateSteps(merged), merged);
+});
+
+test("merges a single date field and leaves invalid dates alone", () => {
+  const merged = mergeDateSteps([{ id: "date", type: "input", description: "Enter the date", target: "From", value: "06.09.2026" }]);
+  assert.equal(merged[0]?.type, "date");
+  assert.equal(merged[0]?.date?.format, "%d.%m.%Y");
+  const textual = mergeDateSteps([{ id: "text-date", type: "input", description: "Enter the date", target: "From", value: "September 6, 2026" }]);
+  assert.equal(textual[0]?.date?.value, "2026-09-06");
+  const ambiguousSlash = mergeDateSteps([{ id: "ambiguous-date", type: "input", description: "Enter the date", target: "From", value: "09/06/2026" }]);
+  assert.equal(ambiguousSlash[0]?.type, "input");
+  const wrongWeekday = mergeDateSteps([{ id: "weekday-date", type: "input", description: "Enter the date", target: "From", value: "Monday, September 6, 2026" }]);
+  assert.equal(wrongWeekday[0]?.type, "input");
+  assert.equal(mergeDateSteps([{ id: "date", type: "input", description: "Enter the date", target: "From", value: "31.02.2026" }])[0]?.type, "input");
+});
+
+test("compiles every date rule with raw builtin fields and escapes user text", () => {
+  const step: SetupStep = { id: "from", type: "date", description: "Enter the From date", target: "From", date: { value: "2026-09-06", format: "%d.%m.%Y", rule: null } };
+  for (const rule of [
+    { kind: "fixed" }, { kind: "today" }, { kind: "yesterday" }, { kind: "days_ago", days: 3 },
+    { kind: "start_of_this_month" }, { kind: "end_of_this_month" }, { kind: "start_of_last_month" }, { kind: "end_of_last_month" },
+    { kind: "start_of_last_week" }, { kind: "end_of_last_week" }, { kind: "described", text: "the period {selected}" },
+  ] as const) {
+    const draft = baseDraft();
+    draft.steps = [{ ...step, date: { ...step.date!, rule } }];
+    const prompt = (compileAgent(draft).stages[0] as { prompt: string }).prompt;
+    if (rule.kind === "fixed") assert.match(prompt, /exactly/);
+    else if (rule.kind === "described") assert.match(prompt, /the period \{\{selected\}\}/);
+    else assert.match(prompt, /\{(?:today|yesterday|days_ago_3|start_of_this_month|end_of_this_month|start_of_last_month|end_of_last_month|start_of_last_week|end_of_last_week)\|/);
+  }
+});
+
+test("protects a user literal that resembles a date field from FIRE date filling", () => {
+  const draft = baseDraft();
+  draft.steps = [{ id: "date", type: "date", description: "Enter the date", target: "From", date: { value: "2026-09-06", format: "%d.%m.%Y", rule: { kind: "described", text: "the period {today|%Y}" } } }];
+  const prompt = (compileAgent(draft).stages[0] as { prompt: string }).prompt;
+  assert.match(prompt, /the period \{\{today\|%Y\}\}/);
+});
+
+test("keeps zero-padded day and month tokens for parts dates", () => {
+  const draft = baseDraft();
+  draft.steps = [{
+    id: "parts", type: "date", description: "Enter the From date", target: "From",
+    date: { value: "2026-09-06", format: "parts", rule: { kind: "today" } },
+    parts: dateParts(),
+  }];
+  const prompt = (compileAgent(draft).stages[0] as { prompt: string }).prompt;
+  assert.match(prompt, /\{today\|%d\}/);
+  assert.match(prompt, /\{today\|%m\}/);
+});
+
+test("preserves month/day/year order for parts dates", () => {
+  const draft = baseDraft();
+  const standard = dateParts();
+  const parts = [standard[1]!, standard[0]!, standard[2]!];
+  draft.steps = [{
+    id: "parts-us", type: "date", description: "Enter the From date", target: "From",
+    date: { value: "2026-09-06", format: "parts", rule: { kind: "today" } }, parts,
+  }];
+  const prompt = (compileAgent(draft).stages[0] as { prompt: string }).prompt;
+  assert.match(prompt, /type month \{today\|%m\}, day \{today\|%d\} and year \{today\|%Y\}/);
+});
+
+test("recommends date rules from goals and resolves month/week boundaries", () => {
+  const from: SetupStep = { id: "from", type: "date", description: "Enter From date", target: "From", date: { value: "2026-09-06", format: "%d.%m.%Y", rule: null } };
+  const to = { ...from, id: "to", description: "Enter To date", target: "To" };
+  assert.equal(dateRuleChoices(from, "Download last month's statement", "2026-10-05")[0]?.rule.kind, "start_of_last_month");
+  assert.equal(dateRuleChoices(to, "Download last month's statement", "2026-10-05")[0]?.rule.kind, "end_of_last_month");
+  assert.equal(dateRuleChoices(to, "Laadi alla eelmise kuu väljavõte", "2026-10-05")[0]?.rule.kind, "end_of_last_month");
+  assert.equal(dateRuleChoices(from, "daily export of yesterday's transactions", "2026-10-05")[0]?.rule.kind, "yesterday");
+  assert.equal(dateRuleChoices(to, "No match", "2026-10-05")[0]?.rule.kind, "today");
+  assert.equal(dateRuleChoices(from, "Laadi alla eelmise kuu väljavõte", "2026-10-05")[0]?.rule.kind, "start_of_last_month");
+  assert.equal(dateRuleChoices(from, "Laadi alla 3 päeva vanused tehingud", "2026-10-05")[0]?.rule.kind, "days_ago");
+  assert.equal(resolveDateRule({ kind: "end_of_last_month" }, "2026-03-01"), "2026-02-28");
+  assert.equal(resolveDateRule({ kind: "start_of_last_month" }, "2026-01-05"), "2025-12-01");
+  assert.equal(dateRuleLabel({ kind: "end_of_last_month" }, "2026-10-05", "%d.%m.%Y"), "End of last month");
+});
+
+test("opens date questions and reports a changed date rule", () => {
+  const unanswered: SetupStep = { id: "from", type: "date", description: "Enter the From date", target: "From", date: { value: "2026-09-06", format: "%d.%m.%Y", rule: null } };
+  const draft = { ...baseDraft(), goal: "Download last month's statement", steps: [unanswered] };
+  assert.match(openQuestions(draft, "2026-10-05")[0]!.text, /06\.09\.2026/);
+  const answered = { ...draft, steps: [{ ...unanswered, date: { ...unanswered.date!, rule: { kind: "end_of_last_month" as const } } }] };
+  assert.deepEqual(draftChanges(answered, draft).map(({ label, from, to }) => ({ label, from, to })), [{ label: "Step 1 date", from: "Unanswered", to: "End of last month" }]);
+  const fixed = { ...draft, steps: [{ ...unanswered, date: { ...unanswered.date!, rule: { kind: "fixed" as const } } }] };
+  assert.deepEqual(draftChanges(fixed, draft).map(({ from, to }) => ({ from, to })), [{ from: "Unanswered", to: "Always 06.09.2026" }]);
+  assert.equal(dateRuleChoices(unanswered, draft.goal, "2026-10-05").find((choice) => choice.rule.kind === "fixed")?.value, "06.09.2026");
+});
+
+test("validates date values, formats, relative ranges, and described answers", () => {
+  const baseDate: SetupStep = { id: "date", type: "date", description: "Enter date", target: "Date", date: { value: "2026-09-06", format: "%d.%m.%Y", rule: { kind: "days_ago", days: 3 } } };
+  for (const [change, message] of [
+    [{ date: { ...baseDate.date!, value: "2026-02-30" } }, /valid ISO date/],
+    [{ date: { ...baseDate.date!, format: "%Q" } }, /supported date format/],
+    [{ date: { ...baseDate.date!, rule: { kind: "days_ago", days: 0 } } }, /between 1 and 366/],
+    [{ date: { ...baseDate.date!, rule: { kind: "described", text: "x".repeat(121) } } }, /1 to 120/],
+    [{ date: { ...baseDate.date!, rule: { kind: "described", text: "password: hunter2" } } }, /Remove sign-in details/],
+  ] as const) {
+    const draft = baseDraft();
+    draft.steps = [{ ...baseDate, ...change }];
+    assert.throws(() => compileAgent(draft), message);
+  }
 });
