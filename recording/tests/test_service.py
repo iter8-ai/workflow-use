@@ -26,9 +26,7 @@ class DeferredProvider(BrowserProvider):
         self.release = asyncio.Event()
         self.session = DeferredSession()
 
-    async def create(
-        self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]
-    ) -> BrowserSession:
+    async def create(self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]) -> BrowserSession:
         self.started.set()
         await self.release.wait()
         return self.session
@@ -56,9 +54,7 @@ class SequentialProvider(BrowserProvider):
         self.created: list[DeferredSession] = [CloseFailingSession(), DeferredSession()]
         self.sessions = list(self.created)
 
-    async def create(
-        self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]
-    ) -> BrowserSession:
+    async def create(self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]) -> BrowserSession:
         return self.sessions.pop(0)
 
 
@@ -66,9 +62,7 @@ class RetryProvider(BrowserProvider):
     def __init__(self) -> None:
         self.session = RetryCloseSession()
 
-    async def create(
-        self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]
-    ) -> BrowserSession:
+    async def create(self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]) -> BrowserSession:
         return self.session
 
 
@@ -94,9 +88,7 @@ class Runtime:
 async def test_browser_returned_after_shutdown_is_closed() -> None:
     provider = DeferredProvider()
     service = RecordingService(provider)
-    task = asyncio.create_task(
-        service.create(RecordingOwner("iter7", "owner@iter7.example"), "https://example.com")
-    )
+    task = asyncio.create_task(service.create(RecordingOwner("iter7", "owner@iter7.example"), "https://example.com"))
     await provider.started.wait()
 
     await service.close()
@@ -111,9 +103,7 @@ async def test_browser_returned_after_shutdown_is_closed() -> None:
 async def test_browser_returned_after_expiry_is_closed() -> None:
     provider = DeferredProvider()
     service = RecordingService(provider, timeout_seconds=1)
-    task = asyncio.create_task(
-        service.create(RecordingOwner("iter7", "owner@iter7.example"), "https://example.com")
-    )
+    task = asyncio.create_task(service.create(RecordingOwner("iter7", "owner@iter7.example"), "https://example.com"))
     await provider.started.wait()
 
     await asyncio.sleep(1.05)
@@ -167,9 +157,7 @@ async def test_playwright_session_retries_after_a_transient_browser_close_failur
         nonlocal released
         released = True
 
-    session = PlaywrightRecordingSession(
-        browser=browser, runtime=runtime, live_view_url=None, release=release
-    )
+    session = PlaywrightRecordingSession(browser=browser, runtime=runtime, live_view_url=None, release=release)
 
     with pytest.raises(RuntimeError, match="transient-browser-close-failure"):
         await session.close()

@@ -5,7 +5,7 @@ import os
 import secrets
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
-from typing import Annotated, AsyncIterator
+from typing import Annotated, Any, AsyncIterator
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
 from fastapi.responses import JSONResponse
@@ -31,9 +31,7 @@ class RecordingConfig:
             raise ValueError("timeout_seconds must be between 1 and 900.")
 
 
-def create_app(
-    provider: BrowserProvider, config: RecordingConfig, organizer: StepOrganizer | None = None
-) -> FastAPI:
+def create_app(provider: BrowserProvider, config: RecordingConfig, organizer: StepOrganizer | None = None) -> FastAPI:
     service = RecordingService(
         provider, timeout_seconds=config.timeout_seconds, max_sessions=config.max_sessions, organizer=organizer
     )
@@ -84,9 +82,7 @@ def create_app(
         except InvalidRecordingUrl as error:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
         except Exception:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=SERVICE_UNAVAILABLE
-            ) from None
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=SERVICE_UNAVAILABLE) from None
         return _response(service.response(recording), status_code=status.HTTP_201_CREATED)
 
     @app.get("/recordings/{recording_id}", response_model=RecordingResponse)
@@ -94,9 +90,7 @@ def create_app(
         try:
             recording = await service.get(recording_id, recording_owner)
         except Exception:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=SERVICE_UNAVAILABLE
-            ) from None
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=SERVICE_UNAVAILABLE) from None
         if recording is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -109,9 +103,7 @@ def create_app(
         try:
             recording = await service.stop(recording_id, recording_owner)
         except Exception:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=SERVICE_UNAVAILABLE
-            ) from None
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=SERVICE_UNAVAILABLE) from None
         if recording is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording not found.")
         # Only the stop response carries captured sign-in values, once; the host stores them encrypted.
@@ -125,9 +117,7 @@ def create_app(
         try:
             deleted = await service.delete(recording_id, recording_owner)
         except Exception:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=SERVICE_UNAVAILABLE
-            ) from None
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=SERVICE_UNAVAILABLE) from None
         if not deleted:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording not found.")
         return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -142,10 +132,17 @@ def _response(
     credentials: dict[str, str] | None = None,
 ) -> JSONResponse:
     body = recording.model_dump(mode="json", by_alias=True)
-    body["steps"] = [step.model_dump(mode="json", by_alias=True, exclude_none=True) for step in recording.steps]
+    body["steps"] = [_step_body(step) for step in recording.steps]
     if credentials:
         body["credentials"] = credentials
     return JSONResponse(status_code=status_code, content=body)
+
+
+def _step_body(step: Any) -> dict[str, Any]:
+    body = step.model_dump(mode="json", by_alias=True, exclude_none=True)
+    if step.date is not None:
+        body["date"] = step.date.model_dump(mode="json", exclude_none=False)
+    return body
 
 
 def create_default_app() -> FastAPI:

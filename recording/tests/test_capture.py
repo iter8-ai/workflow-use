@@ -407,7 +407,7 @@ async def test_clicks_on_web_components_labels_rows_and_double_clicks_are_named(
         '<x-button></x-button><label for="notes">Notes</label><input id="notes" name="notes">'
         '<label><input type="checkbox"> Remember me</label>'
         '<div role="grid"><div role="row" id="row"><span>INV-1001</span><span>12.00</span></div></div>'
-        '<button>Next page</button>'
+        "<button>Next page</button>"
         "<script>customElements.define('x-button', class extends HTMLElement { constructor() { super();"
         " this.attachShadow({ mode: 'open' }).innerHTML = '<button>Save changes</button>'; } });</script>"
     )

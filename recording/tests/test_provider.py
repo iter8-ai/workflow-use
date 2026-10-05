@@ -207,15 +207,18 @@ async def test_browser_startup_records_only_top_level_navigation(
             if url == "https://example.com/redirect":
                 await route.fulfill(content_type="text/html", body="<script>location.replace('/')</script>")
             elif url == "https://example.com/":
-                await route.fulfill(content_type="text/html", body='''
+                await route.fulfill(
+                    content_type="text/html",
+                    body="""
                     <iframe name="reports" src="https://example.com/widget"></iframe>
                     <iframe src="https://widgets.example.org/embedded"></iframe>
                     <a href="/next">Next</a>
-                ''')
+                """,
+                )
             elif url.endswith("/widget"):
-                await route.fulfill(content_type="text/html", body='<button>Reports</button>')
+                await route.fulfill(content_type="text/html", body="<button>Reports</button>")
             elif url.endswith("/embedded"):
-                await route.fulfill(content_type="text/html", body='<button>Embedded reports</button>')
+                await route.fulfill(content_type="text/html", body="<button>Embedded reports</button>")
             else:
                 await route.fulfill(content_type="text/html", body='<a href="/">Back to start</a>')
 
