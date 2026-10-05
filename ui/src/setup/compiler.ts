@@ -263,7 +263,7 @@ export function mergeDateSteps(steps: SetupStep[], force = false): SetupStep[] {
     for (let end = index; end < Math.min(steps.length, index + 3) && steps[end]?.type === "input"; end += 1) run.push(steps[end]!);
     const sides = new Set(run.map((item) => dateSide(item)).filter((side): side is "from" | "to" => side !== null));
     const namedParts = run.every((item) => datePartKind(item) !== null) && new Set(run.map((item) => datePartKind(item))).size === run.length;
-    const forcedParts = force && run.length === 3 && run.every((item) => /^\d+$/.test(item.value ?? ""))
+    const forcedParts = force && !namedParts && run.length === 3 && run.every((item) => /^\d+$/.test(item.value ?? ""))
       ? ["day", "month", "year"] as const
       : null;
     if (run.length >= 2 && run.length <= 3 && sides.size <= 1 && (namedParts || forcedParts !== null)) {
@@ -430,8 +430,9 @@ export function applyOrganizedSteps(current: SetupStep[], recorded: SetupStep[],
       result[first] = { ...current, date: next.date === undefined ? current.date : { ...next.date, rule: current.date?.rule ?? next.date.rule }, parts: current.parts ?? next.parts };
       continue;
     }
-    if (first === -1 || ids.some((id) => !result.some((step) => step.id === id))) continue;
-    const currentParts = result.filter((step) => ids.includes(step.id));
+    const positions = ids.map((id) => result.findIndex((step) => step.id === id));
+    if (first === -1 || positions.some((position, index) => position !== first + index)) continue;
+    const currentParts = result.slice(first, first + ids.length);
     const replacement = { ...next, parts: currentParts };
     result.splice(first, ids.length, replacement);
   }
@@ -666,6 +667,16 @@ function datePartFormatToken(step: SetupStep, kind: "day" | "month" | "year"): s
   return value.length === 2 && value.startsWith("0") ? kind === "day" ? "%d" : "%m" : kind === "day" ? "%-d" : "%-m";
 }
 
+function datePartOrder(step: SetupStep): Array<"day" | "month" | "year"> {
+  const order = step.parts?.map(datePartKind);
+  return order?.length === 3 && order.every((kind): kind is "day" | "month" | "year" => kind !== null) && new Set(order).size === 3
+    ? order : ["day", "month", "year"];
+}
+
+function joinDateParts(parts: string[]): string {
+  return parts.length === 3 ? `${parts[0]}, ${parts[1]} and ${parts[2]}` : parts.join(" and ");
+}
+
 function formatInstruction(
   step: SetupStep,
   target: string | undefined,
@@ -678,17 +689,19 @@ function formatInstruction(
     return `Navigate to ${escapeLiteral(step.url ?? step.target ?? step.description)} to ${intent}.`;
   }
   if (step.type === "date" && step.date !== undefined) {
+    const date = step.date;
     const field = target ?? "the date field";
-    const rule = step.date.rule ?? { kind: "fixed" as const };
+    const rule = date.rule ?? { kind: "fixed" as const };
     if (rule.kind === "fixed") {
-      return step.date.format === "parts"
-        ? `Set ${field} to exactly day ${quoted(step.parts?.find((part) => datePartKind(part) === "day")?.value ?? formatDate(step.date.value, "%-d").padStart(2, "0"))}, month ${quoted(step.parts?.find((part) => datePartKind(part) === "month")?.value ?? formatDate(step.date.value, "%-m").padStart(2, "0"))} and year ${quoted(step.parts?.find((part) => datePartKind(part) === "year")?.value ?? formatDate(step.date.value, "%Y"))} in their separate boxes.`
-        : `Set ${field} to exactly ${quoted(formatDate(step.date.value, step.date.format))}.`;
+      const partOrder = datePartOrder(step);
+      return date.format === "parts"
+        ? `Set ${field} to exactly ${joinDateParts(partOrder.map((kind) => `${kind} ${quoted(step.parts?.find((part) => datePartKind(part) === kind)?.value ?? formatDate(date.value, kind === "day" ? "%-d" : kind === "month" ? "%-m" : "%Y").padStart(kind === "year" ? 4 : 2, "0"))}`))} in their separate boxes.`
+        : `Set ${field} to exactly ${quoted(formatDate(date.value, date.format))}.`;
     }
-    if (rule.kind === "described") return `Set ${field} to the date meaning ${quoted(rule.text)} relative to today, {today|%Y-%m-%d}, written like the demonstration's ${quoted(formatDate(step.date.value, step.date.format))} (format ${escapeLiteral(step.date.format === "parts" ? "day.month.year" : humanDateFormat(step.date.format))}).`;
+    if (rule.kind === "described") return `Set ${field} to the date meaning ${quoted(rule.text)} relative to today, {today|%Y-%m-%d}, written like the demonstration's ${quoted(formatDate(date.value, date.format))} (format ${escapeLiteral(date.format === "parts" ? "day.month.year" : humanDateFormat(date.format))}).`;
     const name = rule.kind === "days_ago" ? `days_ago_${rule.days}` : dateRuleNames[rule.kind];
-    if (step.date.format === "parts") return `Set ${field} to the date {${name}|%Y-%m-%d}: type day {${name}|${datePartFormatToken(step, "day")}}, month {${name}|${datePartFormatToken(step, "month")}} and year {${name}|%Y} into their separate boxes.`;
-    return `Set ${field} to {${name}|${step.date.format}}.`;
+    if (date.format === "parts") return `Set ${field} to the date {${name}|%Y-%m-%d}: type ${joinDateParts(datePartOrder(step).map((kind) => `${kind} {${name}|${datePartFormatToken(step, kind)}}`))} into their separate boxes.`;
+    return `Set ${field} to {${name}|${date.format}}.`;
   }
   if (step.type === "click") {
     const times = clickCount(step);

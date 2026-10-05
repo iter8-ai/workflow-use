@@ -517,6 +517,25 @@ test("organized wording arrives without undoing a step the user already edited o
   ]);
 });
 
+test("does not merge organizer date parts across an edited step", () => {
+  const recorded = dateParts("To");
+  const organized: SetupStep[] = [{
+    id: recorded[0]!.id,
+    type: "date",
+    description: "Enter the To date",
+    target: "To",
+    date: { value: "2026-09-06", format: "parts", rule: null },
+    parts: recorded,
+  }];
+  const current = [recorded[0]!, { id: "edited", type: "click" as const, description: "Click Apply" }, recorded[1]!, recorded[2]!];
+  assert.deepEqual(applyOrganizedSteps(current, recorded, organized).map(({ id, type, description }) => ({ id, type, description })), [
+    { id: "To-day", type: "input", description: "Enter the To date" },
+    { id: "edited", type: "click", description: "Click Apply" },
+    { id: "To-month", type: "input", description: "Enter the To month" },
+    { id: "To-year", type: "input", description: "Enter the To year" },
+  ]);
+});
+
 test("organizer date metadata wins when the UI already merged the same parts", () => {
   const recorded = dateParts("To");
   const current = mergeDateSteps(recorded);
@@ -573,12 +592,14 @@ test("merges day/month/year inputs, including month/day/year labels, without mer
   assert.equal(preserved[0]?.expectedOutcome, "The date is accepted");
   assert.equal(preserved[0]?.url, "https://portal.example.test/reports");
   assert.equal(mergeDateSteps(merged)[0]?.id, merged[0]?.id);
-  const us = mergeDateSteps([
+  const usParts: SetupStep[] = [
     { id: "month", type: "input", description: "Enter From month", target: "month", value: "09" },
     { id: "day", type: "input", description: "Enter From day", target: "day", value: "06" },
     { id: "year", type: "input", description: "Enter From year", target: "year", value: "2026" },
-  ]);
+  ];
+  const us = mergeDateSteps(usParts);
   assert.equal(us[0]?.date?.value, "2026-09-06");
+  assert.equal(mergeDateSteps(usParts, true)[0]?.date?.value, "2026-09-06");
   assert.equal(mergeDateSteps([{ id: "n", type: "input", description: "Enter quantity", target: "Number", value: "06" }])[0]?.type, "input");
   const mixed = mergeDateSteps([
     { id: "from-day", type: "input", description: "Enter From day", target: "From day", value: "06" },
@@ -628,6 +649,18 @@ test("keeps zero-padded day and month tokens for parts dates", () => {
   const prompt = (compileAgent(draft).stages[0] as { prompt: string }).prompt;
   assert.match(prompt, /\{today\|%d\}/);
   assert.match(prompt, /\{today\|%m\}/);
+});
+
+test("preserves month/day/year order for parts dates", () => {
+  const draft = baseDraft();
+  const standard = dateParts();
+  const parts = [standard[1]!, standard[0]!, standard[2]!];
+  draft.steps = [{
+    id: "parts-us", type: "date", description: "Enter the From date", target: "From",
+    date: { value: "2026-09-06", format: "parts", rule: { kind: "today" } }, parts,
+  }];
+  const prompt = (compileAgent(draft).stages[0] as { prompt: string }).prompt;
+  assert.match(prompt, /type month \{today\|%m\}, day \{today\|%d\} and year \{today\|%Y\}/);
 });
 
 test("recommends date rules from goals and resolves month/week boundaries", () => {
