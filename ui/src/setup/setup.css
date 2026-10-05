@@ -179,6 +179,7 @@ select {
   margin-inline: 0;
 }
 
+/* Keep long reviews' actions within a 900px desktop viewport. */
 .review-panel {
   gap: 8px;
 }
