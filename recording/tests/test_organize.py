@@ -175,6 +175,30 @@ def test_parts_date_merge_uses_recorded_day_month_year_order() -> None:
     assert organized[0].date == OrganizedDate("2026-09-06", "parts")
 
 
+def test_parts_date_merge_keeps_following_steps_in_order() -> None:
+    steps = _input_steps(("day", "06"), ("month", "09"), ("year", "2026"), ("notes", "1234"))
+    answer = {
+        "stages": [
+            {
+                "title": "Set date",
+                "steps": [
+                    {
+                        "n": [1, 2, 3],
+                        "description": "Enter the date",
+                        "date": {"value": "2026-09-06", "format": "parts"},
+                    },
+                    {"n": 4, "description": "Enter the notes"},
+                ],
+            }
+        ]
+    }
+
+    organized = parse_organized(json.dumps(answer), steps)
+
+    assert organized is not None
+    assert [item.numbers for item in organized] == [(1, 2, 3), (4,)]
+
+
 def test_parts_date_merge_infers_month_day_year_from_targets() -> None:
     steps = _input_steps(("month", "09"), ("day", "06"), ("year", "2026"))
     organized = parse_organized(

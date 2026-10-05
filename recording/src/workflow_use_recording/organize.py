@@ -240,7 +240,7 @@ def parse_organized(text: str, steps_or_count: Sequence[SetupStep] | int) -> lis
                     numbers = tuple(raw_numbers)
                 else:
                     return None
-                expected = len(organized) + 1
+                expected = sum(len(existing.numbers) for existing in organized) + 1
                 if numbers != tuple(range(expected, expected + len(numbers))):
                     return None
                 description = " ".join(item["description"].split())
