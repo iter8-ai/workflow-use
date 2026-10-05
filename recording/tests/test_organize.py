@@ -263,6 +263,24 @@ def test_single_field_date_merge_requires_a_matching_fire_format() -> None:
     assert organized is not None and organized[0].date == OrganizedDate("2026-09-06", "%d.%m.%Y")
 
 
+def test_partial_month_year_format_cannot_invent_a_day() -> None:
+    steps = _input_steps(("date", "Sep 2026"))
+    organized = parse_organized(
+        _organized_answer([1], "Enter the date", date_value="2026-09-01", date_format="%b %Y"), steps
+    )
+
+    assert organized is not None and organized[0].date is None
+
+
+def test_date_like_value_in_unrelated_field_stays_a_regular_input() -> None:
+    steps = _input_steps(("Invoice reference", "06.09.2026"))
+    organized = parse_organized(
+        _organized_answer([1], "Enter the date", date_value="2026-09-06", date_format="%d.%m.%Y"), steps
+    )
+
+    assert organized is not None and organized[0].date is None
+
+
 def test_step_lines_exposes_only_date_like_input_values() -> None:
     steps = [
         SetupStep(id="1", type="input", target="day", value="06", description="Enter 06"),

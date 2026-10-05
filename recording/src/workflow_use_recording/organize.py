@@ -281,6 +281,7 @@ _PART_WORDS = {
     "aasta": "y",
 }
 _PART_WORD = re.compile(r"(?<![\wäöõü])(" + "|".join(_PART_WORDS) + r")(?![\wäöõü])", re.I)
+_DATE_FIELD_WORD = re.compile(r"(?<![\wäöõü])(date|from|to|kuupäev)(?![\wäöõü])", re.I)
 _ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
@@ -337,6 +338,10 @@ def _parse_date_info(raw: Any, numbers: tuple[int, ...], steps: Sequence[SetupSt
             return None
         return OrganizedDate(raw["value"], fmt)
     if len(parts) != 1 or fmt not in FORMATS or parts[0].value is None or render(value, fmt) != parts[0].value:
+        return None
+    if not any(token in fmt for token in ("%d", "%-d", "%o")):
+        return None
+    if not _DATE_FIELD_WORD.search(f"{parts[0].target or ''} {parts[0].description}"):
         return None
     return OrganizedDate(raw["value"], fmt)
 
