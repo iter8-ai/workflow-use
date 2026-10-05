@@ -196,13 +196,13 @@ export function dateRuleChoices(step: SetupStep, goal: string, today: DateToday)
   const text = goal.toLowerCase();
   const side = dateSide(step);
   let recommended: DateRule = side === "to" ? { kind: "today" } : side === "from" ? { kind: "start_of_last_month" } : { kind: "today" };
-  const days = /\b(\d{1,3})\s+days?\b/.exec(text);
+  const days = /\b(\d{1,3})\s+(?:days?|päeva?)\b/.exec(text);
   if (days !== null && Number(days[1]) >= 1 && Number(days[1]) <= 366) recommended = side === "from" ? { kind: "days_ago", days: Number(days[1]) } : { kind: "today" };
   else if (/last month|previous month|eelmine kuu/.test(text)) recommended = side === "to" ? { kind: "end_of_last_month" } : { kind: "start_of_last_month" };
   else if (/yesterday|eile/.test(text)) recommended = { kind: "yesterday" };
-  else if (/this month/.test(text)) recommended = side === "from" ? { kind: "start_of_this_month" } : { kind: "today" };
-  else if (/last week/.test(text)) recommended = side === "to" ? { kind: "end_of_last_week" } : { kind: "start_of_last_week" };
-  else if (/daily|today/.test(text)) recommended = { kind: "today" };
+  else if (/this month|see kuu/.test(text)) recommended = side === "from" ? { kind: "start_of_this_month" } : { kind: "today" };
+  else if (/last week|eelmine nädal/.test(text)) recommended = side === "to" ? { kind: "end_of_last_week" } : { kind: "start_of_last_week" };
+  else if (/daily|today|igapäevane|iga päev|täna/.test(text)) recommended = { kind: "today" };
   const rules: DateRule[] = [
     recommended, { kind: "today" }, { kind: "yesterday" }, { kind: "start_of_this_month" }, { kind: "end_of_this_month" },
     { kind: "start_of_last_month" }, { kind: "end_of_last_month" }, { kind: "start_of_last_week" }, { kind: "end_of_last_week" }, { kind: "fixed" },

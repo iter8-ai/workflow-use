@@ -610,6 +610,8 @@ test("recommends date rules from goals and resolves month/week boundaries", () =
   assert.equal(dateRuleChoices(to, "Download last month's statement", "2026-10-05")[0]?.rule.kind, "end_of_last_month");
   assert.equal(dateRuleChoices(from, "daily export of yesterday's transactions", "2026-10-05")[0]?.rule.kind, "yesterday");
   assert.equal(dateRuleChoices(to, "No match", "2026-10-05")[0]?.rule.kind, "today");
+  assert.equal(dateRuleChoices(from, "Laadi alla eelmise kuu väljavõte", "2026-10-05")[0]?.rule.kind, "start_of_last_month");
+  assert.equal(dateRuleChoices(from, "Laadi alla 3 päeva vanused tehingud", "2026-10-05")[0]?.rule.kind, "days_ago");
   assert.equal(resolveDateRule({ kind: "end_of_last_month" }, "2026-03-01"), "2026-02-28");
   assert.equal(resolveDateRule({ kind: "start_of_last_month" }, "2026-01-05"), "2025-12-01");
   assert.equal(dateRuleLabel({ kind: "end_of_last_month" }, "2026-10-05", "%d.%m.%Y"), "End of last month");
