@@ -1,8 +1,11 @@
 import { useEffect, useRef } from "react";
 import type { GoogleSignInPromptState } from "./googleSignIn";
 
-/** The offer to finish the Google sign-in setup after a demonstration, or the note left when the user skips it. */
-export function GoogleSignInPrompt({ prompt }: { prompt: GoogleSignInPromptState }): JSX.Element | null {
+/**
+ * The offer to finish the Google sign-in setup after a demonstration, or the note left when the user skips it.
+ * `disabled` holds the offer while the page is busy: a save would discard a running test.
+ */
+export function GoogleSignInPrompt({ prompt, disabled = false }: { prompt: GoogleSignInPromptState; disabled?: boolean }): JSX.Element | null {
   const noteRef = useRef<HTMLParagraphElement>(null);
   const wasOffered = useRef(prompt.state === "offer");
   // Skip and Cancel remove the buttons; keep keyboard focus on the note that replaces them.
@@ -22,8 +25,8 @@ export function GoogleSignInPrompt({ prompt }: { prompt: GoogleSignInPromptState
       <p>You signed in with Google during the demonstration. Google asks for a verification code every time the agent signs in, so the agent needs your Google password and an authenticator key. It takes about two minutes.</p>
       {prompt.error && <p className="google-signin-error" role="alert">{prompt.error}</p>}
       <div className="setup-actions">
-        <button type="button" className="button button-primary" onClick={prompt.onSetUp} disabled={prompt.busy}>Set up Google sign-in</button>
-        <button type="button" className="button button-quiet" onClick={prompt.onSkip} disabled={prompt.busy}>Skip for now</button>
+        <button type="button" className="button button-primary" onClick={prompt.onSetUp} disabled={disabled || prompt.busy}>Set up Google sign-in</button>
+        <button type="button" className="button button-quiet" onClick={prompt.onSkip} disabled={disabled || prompt.busy}>Skip for now</button>
       </div>
     </div>
   </section>;

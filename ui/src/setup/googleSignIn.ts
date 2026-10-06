@@ -55,29 +55,32 @@ export function useGoogleSignInPrompt(bridge: HostBridge | null | undefined, all
     checkRef.current += 1;
     setState("hidden"); setError(null);
   };
-  const open = async (reason: "demonstration" | "test" | "edit") => {
+  const open = async (reason: "demonstration" | "test" | "edit", check = checkRef.current) => {
     if (!bridge) return null;
     const result = await bridge.request("setUpGoogleSignIn", { reason }, { timeoutMs: setUpTimeoutMs });
+    // A reset during the save started a new demonstration, which this reply can't skip or invalidate.
+    const current = check === checkRef.current;
     // A status check still in flight was asked before this save, so its answer can't bring the offer back.
     if (result.status === "ready") checkRef.current += 1;
     // Cancel keeps the user moving: the offer becomes the skip note.
-    setState((current) => result.status === "ready" ? "hidden" : current === "offer" ? "skipped" : current);
-    return result;
+    setState((state) => result.status === "ready" ? "hidden" : current && state === "offer" ? "skipped" : state);
+    return { ...result, current };
   };
   const setUp = async (reason: "demonstration" | "test" | "edit"): Promise<boolean> => (await open(reason))?.changed === true;
   const onSetUp = (): void => {
     const check = checkRef.current;
     setBusy(true); setError(null);
-    open("demonstration")
+    open("demonstration", check)
       .then((result) => {
-        if (result?.changed === true) page.onChanged();
-        // The offer is gone; keep keyboard focus on the page it was part of, unless a reset came during the save.
-        if (result?.status === "ready" && checkRef.current === check + 1) {
+        if (!result?.current) return;
+        if (result.changed) page.onChanged();
+        // The offer is gone; keep keyboard focus on the page it was part of.
+        if (result.status === "ready") {
           const heading = page.heading();
           if (heading) { heading.tabIndex = -1; heading.focus({ preventScroll: true }); }
         }
       })
-      .catch((requestError: unknown) => setError(requestError instanceof Error ? requestError.message : "The Google sign-in couldn't be saved. Try again."))
+      .catch((requestError: unknown) => { if (check === checkRef.current) setError(requestError instanceof Error ? requestError.message : "The Google sign-in couldn't be saved. Try again."); })
       .finally(() => setBusy(false));
   };
 
