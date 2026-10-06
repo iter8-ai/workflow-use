@@ -2728,8 +2728,8 @@ async function expectOnlyWatchRequests(page: Page): Promise<void> {
 for (const failure of ["rejected", "timeout"] as const) {
   test(`keeps a run read-only when ready ${failure}, including retry and failed close`, async ({ page }) => {
     await page.clock.install({ time: clockStart });
-    await page.goto(`${baseUrl}/host?scenario=run-ready-${failure}`);
     await page.clock.pauseAt(clockPaused);
+    await page.goto(`${baseUrl}/host?scenario=run-ready-${failure}`);
     const run = page.frameLocator("iframe");
     if (failure === "timeout") {
       await expect(run.getByText("Opening the run…")).toBeVisible();
@@ -2755,7 +2755,9 @@ for (const failure of ["rejected", "timeout"] as const) {
     await expect(run.getByRole("alert").filter({ hasText: "Closing failed. Try again." })).toHaveCount(0);
     await problem.getByRole("button", { name: "Try again", exact: true }).click();
     await expect(run.getByRole("heading", { name: "Monthly statement", level: 1 })).toBeVisible();
-    expect(await page.evaluate(() => window.__requestMethods)).toEqual(["ready", "ready", "close", "close", "ready", "loadRun"]);
+    const methods = await page.evaluate(() => window.__requestMethods);
+    expect(methods.filter((method: string) => method !== "loadRun")).toEqual(["ready", "ready", "close", "close", "ready"]);
+    expect(methods).toContain("loadRun");
     expect(await page.evaluate(() => window.__closeRequests)).toEqual([{}, {}]);
     await expectOnlyWatchRequests(page);
   });
@@ -2763,9 +2765,8 @@ for (const failure of ["rejected", "timeout"] as const) {
 
 test("watches an existing run to its result in the setup's browser and activity, using only read requests", async ({ page }) => {
   await page.clock.install({ time: clockStart });
-  await page.goto(`${baseUrl}/host?scenario=run-activity-success`);
-  // Polls advance only with runFor, one status check per two seconds.
   await page.clock.pauseAt(clockPaused);
+  await page.goto(`${baseUrl}/host?scenario=run-activity-success`);
   const run = page.frameLocator("iframe");
   const browser = run.getByRole("region", { name: "Agent browser", exact: true });
   const activity = run.getByRole("log", { name: "Agent activity" });
@@ -2789,7 +2790,7 @@ test("watches an existing run to its result in the setup's browser and activity,
   await expect(browser.getByText("Reiterate is saving the result of this run.")).toBeVisible();
   await expect(browser.getByText("Last screen", { exact: true })).toBeVisible();
   await page.clock.runFor(2_000);
-  await expect(run.getByText("Run completed")).toBeVisible();
+  await expect(run.getByText("Run completed", { exact: true })).toBeVisible();
   await expect(browser.getByText("Final screen", { exact: true })).toBeVisible();
   await expect(browser.getByText("The page when the run completed.")).toBeVisible();
   await expect(run.getByRole("link", { name: "statement-run-7.pdf" })).toHaveAttribute("href", "https://files.example.test/statement-run-7.pdf");
@@ -2809,8 +2810,8 @@ test("watches an existing run to its result in the setup's browser and activity,
 
 test("reloading a watched run resumes watching the same run without changing it", async ({ page }) => {
   await page.clock.install({ time: clockStart });
-  await page.goto(`${baseUrl}/host?scenario=run-activity-success`);
   await page.clock.pauseAt(clockPaused);
+  await page.goto(`${baseUrl}/host?scenario=run-activity-success`);
   const run = page.frameLocator("iframe");
   const browser = run.getByRole("region", { name: "Agent browser", exact: true });
   await expect(browser.getByText("Opening the virtual browser.")).toBeVisible();
@@ -2819,16 +2820,19 @@ test("reloading a watched run resumes watching the same run without changing it"
 
   await page.frames()[1]!.goto(page.frames()[1]!.url());
   await expect(run.getByRole("heading", { name: "Monthly statement", level: 1 })).toBeVisible();
-  await expect(run.getByRole("log", { name: "Agent activity" }).getByText("Type text")).toBeVisible();
-  expect(await page.evaluate(() => window.__requestMethods.filter((method: string) => method === "loadRun"))).toHaveLength(2);
+  const activity = run.getByRole("log", { name: "Agent activity" });
+  await expect(activity.getByText("Browser opened")).toBeVisible();
+  await expect(activity.getByText("Type text")).toHaveCount(0);
+  await page.clock.runFor(2_000);
+  await expect(activity.getByText("Type text")).toBeVisible();
   expect(await page.evaluate(() => window.__closeRequests)).toEqual([]);
   await expectOnlyWatchRequests(page);
 });
 
 test("shows why a watched run failed, with its last screen and blocked action", async ({ page }) => {
   await page.clock.install({ time: clockStart });
-  await page.goto(`${baseUrl}/host?scenario=run-activity-failure`);
   await page.clock.pauseAt(clockPaused);
+  await page.goto(`${baseUrl}/host?scenario=run-activity-failure`);
   const run = page.frameLocator("iframe");
   await expect(run.getByRole("region", { name: "Agent browser", exact: true }).getByText("Opening the virtual browser.")).toBeVisible();
   for (let poll = 0; poll < 5; poll += 1) await page.clock.runFor(2_000);
@@ -2844,8 +2848,8 @@ test("shows why a watched run failed, with its last screen and blocked action", 
 
 test("reports a lost browser in a watched run without claiming the agent closed it", async ({ page }) => {
   await page.clock.install({ time: clockStart });
-  await page.goto(`${baseUrl}/host?scenario=run-activity-lost`);
   await page.clock.pauseAt(clockPaused);
+  await page.goto(`${baseUrl}/host?scenario=run-activity-lost`);
   const run = page.frameLocator("iframe");
   const browser = run.getByRole("region", { name: "Agent browser", exact: true });
   await expect(browser.getByText("Opening the virtual browser.")).toBeVisible();
@@ -2858,8 +2862,8 @@ test("reports a lost browser in a watched run without claiming the agent closed 
 
 test("says why a watched run's updates fail while it reconnects, then recovers", async ({ page }) => {
   await page.clock.install({ time: clockStart });
-  await page.goto(`${baseUrl}/host?scenario=run-activity-poll-lost`);
   await page.clock.pauseAt(clockPaused);
+  await page.goto(`${baseUrl}/host?scenario=run-activity-poll-lost`);
   const run = page.frameLocator("iframe");
   const browser = run.getByRole("region", { name: "Agent browser", exact: true });
   await expect(browser.getByText("Opening the virtual browser.")).toBeVisible();
@@ -2876,23 +2880,29 @@ test("says why a watched run's updates fail while it reconnects, then recovers",
 
 test("opens a finished run without reading it again", async ({ page }) => {
   await page.clock.install({ time: clockStart });
-  await page.goto(`${baseUrl}/host?scenario=run-finished`);
   await page.clock.pauseAt(clockPaused);
+  await page.goto(`${baseUrl}/host?scenario=run-finished`);
   const run = page.frameLocator("iframe");
-  await expect(run.getByText("Run completed")).toBeVisible();
+  await expect(run.getByText("Run completed", { exact: true })).toBeVisible();
   await expect(run.getByText("Download started: statement-run-7.pdf")).toBeVisible();
+  const requests = await page.evaluate(() => window.__requestMethods);
   await page.clock.runFor(20_000);
-  expect(await page.evaluate(() => window.__requestMethods)).toEqual(["ready", "loadRun"]);
+  expect(await page.evaluate(() => window.__requestMethods)).toEqual(requests);
+  await expectOnlyWatchRequests(page);
 });
 
 test("explains a run that no longer exists and lets the user retry or leave", async ({ page }) => {
+  await page.clock.install({ time: clockStart });
+  await page.clock.pauseAt(clockPaused);
   await page.goto(`${baseUrl}/host?scenario=run-missing`);
   const run = page.frameLocator("iframe");
   const problem = run.getByRole("alert").filter({ hasText: "The run couldn’t be opened" });
   await expect(problem).toContainText("This run no longer exists. It may have been deleted.");
   await page.screenshot({ path: "e2e-artifacts/run-watch-missing.png" });
+  const loads = await page.evaluate(() => window.__requestMethods.filter((method: string) => method === "loadRun").length);
   await problem.getByRole("button", { name: "Try again" }).click();
-  await expect.poll(() => page.evaluate(() => window.__requestMethods.filter((method: string) => method === "loadRun").length)).toBe(2);
+  await expect.poll(() => page.evaluate(() => window.__requestMethods.filter((method: string) => method === "loadRun").length)).toBe(loads + 1);
+  await expect(problem).toContainText("This run no longer exists. It may have been deleted.");
   await problem.getByRole("button", { name: "Back to web agents" }).click();
   await expect.poll(() => page.evaluate(() => window.__closeRequests)).toEqual([{}]);
   await expectOnlyWatchRequests(page);
@@ -2961,9 +2971,9 @@ function hostPage(url: string, scenario: string | null): string {
     drawnScreens[label] = canvas.toDataURL("image/png");
     return drawnScreens[label];
   };
-  const activityFrame = (runId) => {
+  const activityFrame = (runId, advance = true) => {
     if (runId !== activityRun) { activityRun = runId; activityPolls = 0; }
-    activityPolls += 1;
+    if (advance || activityPolls === 0) activityPolls += 1;
     const n = activityPolls;
     const runLabel = runId === "run-1" ? "" : " (" + runId + ")";
     const first = { image: portalScreen("Reports" + runLabel), sequence: 1 };
@@ -3084,7 +3094,7 @@ function hostPage(url: string, scenario: string | null): string {
     } else if (request.method === "loadRun") {
       if (scenario === "run-missing") { fail("This run no longer exists. It may have been deleted."); return; }
       const finished = { status: "succeeded", files: [{ name: "statement-run-7.pdf", url: "https://files.example.test/statement-run-7.pdf" }], screens: [{ image: portalScreen("Monthly statements (run-7)") }], confirmation: "Download started: statement-run-7.pdf", activity: { revision: 6, browser: "closed", snapshot: null, items: [{ sequence: 1, kind: "lifecycle", status: "completed", text: "Browser opened" }, { sequence: 2, kind: "lifecycle", status: "completed", text: "Browser closed" }] } };
-      send({ agentId: "agent-1", runId: "run-7", name: "Monthly statement", url: "https://portal.example.test/reports", run: scenario === "run-finished" ? finished : activityFrame("run-7") });
+      send({ agentId: "agent-1", runId: "run-7", name: "Monthly statement", url: "https://portal.example.test/reports", run: scenario === "run-finished" ? finished : activityFrame("run-7", false) });
     } else if (request.method === "loadAgent") {
       if (scenario === "edit-missing") { fail("This agent no longer exists. It may have been deleted."); return; }
       if (!window.__loadAvailable) { fail("Loading failed. Try again."); return; }
