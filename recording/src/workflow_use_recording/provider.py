@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 from uuid import uuid4
 
 from .capture import CAPTURE_SCRIPT, install_sign_in_capture, page_event
-from .security import is_public_http_url, resolves_to_public_host, safe_public_url
+from .security import is_google_sign_in, is_public_http_url, resolves_to_public_host, safe_public_url
 
 EventSink = Callable[[dict[str, Any]], Awaitable[None]]
+logger = logging.getLogger(__name__)
 
 
 class BrowserSession(Protocol):
@@ -36,6 +38,10 @@ class PlaywrightRecordingSession:
         self.browser = browser
         self.runtime = runtime
         self.live_view_url = live_view_url
+        self._first_live_view_url = live_view_url
+        # Tabs opened during the demonstration (e.g. a "Continue with Google" window), oldest first, each with
+        # its own live view. The person demonstrating sees the newest one still open.
+        self._opened_tabs: list[tuple[Any, str]] = []
         self._release = release
         self._tasks: set[asyncio.Task[None]] = set()
         # Waits on downloads still in progress; nothing to report once the browser is gone.
@@ -43,6 +49,15 @@ class PlaywrightRecordingSession:
         self._browser_closed = False
         self._runtime_stopped = False
         self._released = False
+
+    def show_tab(self, page: Any, live_view_url: str) -> None:
+        self._opened_tabs = [(tab, url) for tab, url in self._opened_tabs if tab is not page]
+        self._opened_tabs.append((page, live_view_url))
+        self.live_view_url = live_view_url
+
+    def forget_tab(self, page: Any) -> None:
+        self._opened_tabs = [(tab, url) for tab, url in self._opened_tabs if tab is not page]
+        self.live_view_url = self._opened_tabs[-1][1] if self._opened_tabs else self._first_live_view_url
 
     def track(self, coroutine: Awaitable[None]) -> None:
         task = asyncio.create_task(coroutine)
@@ -79,9 +94,16 @@ async def _configure_context(context: Any, on_event: EventSink) -> None:
             return
         await route.continue_()
 
+    async def record(source: dict[str, Any], event: object) -> None:
+        # Signing in to Google is not a step an agent repeats: it uses the agent's connected Google account.
+        frame = source.get("frame")
+        if frame is not None and is_google_sign_in(frame.url):
+            return
+        await on_event(page_event(event))
+
     await context.route("**/*", guarded_route)
     # Page scripts can call this binding too, so nothing arriving through it may carry a sign-in value.
-    await context.expose_binding("workflowUseRecord", lambda _source, event: on_event(page_event(event)))
+    await context.expose_binding("workflowUseRecord", record)
     await context.add_init_script(CAPTURE_SCRIPT)
 
 
@@ -89,7 +111,7 @@ async def _install_page_events(session: PlaywrightRecordingSession, page: Any, o
     def on_navigation(frame: Any) -> None:
         # Embedded documents load on their own; they are not instructions to navigate the browser.
         # Their demonstrated interactions still arrive through the context's capture binding.
-        if frame != page.main_frame or not is_public_http_url(frame.url):
+        if frame != page.main_frame or not is_public_http_url(frame.url) or is_google_sign_in(frame.url):
             return
         session.track(on_event({"type": "navigation", "url": frame.url}))
 
@@ -108,6 +130,34 @@ async def _report_download(download: Any, on_event: EventSink) -> None:
     await on_event({"type": "download", "downloadId": download_id, "state": "started", "value": name})
     failure = await download.failure()
     await on_event({"type": "download", "downloadId": download_id, "state": "failed" if failure else "completed"})
+
+
+async def _show_opened_tab(session: PlaywrightRecordingSession, client: Any, session_id: str, page: Any) -> None:
+    """Point the live view at a tab the website opened, and back once it closes.
+
+    Browserbase's live view shows one tab. Without this, a sign-in window opened by "Continue with Google"
+    stays invisible and the page looks like it ignored the click.
+    """
+    page.on("close", lambda _page: session.forget_tab(page))
+    try:
+        cdp = await page.context.new_cdp_session(page)
+        try:
+            target_id = (await cdp.send("Target.getTargetInfo"))["targetInfo"]["targetId"]
+        finally:
+            await cdp.detach()
+        for _ in range(10):
+            debug = await client.sessions.debug(session_id)
+            listed = next((tab for tab in debug.pages or [] if tab.id == target_id), None)
+            if listed is not None:
+                if not page.is_closed():
+                    session.show_tab(page, listed.debugger_fullscreen_url)
+                return
+            await asyncio.sleep(0.3)
+        logger.warning("Opened tab has no live view")
+    except Exception:
+        # The demonstration continues in the tab already shown.
+        if not page.is_closed():
+            logger.warning("Could not show the opened tab", exc_info=True)
 
 
 class BrowserbaseProvider:
@@ -172,6 +222,7 @@ class BrowserbaseProvider:
 
             def on_new_page(new_page: Any) -> None:
                 session.track(_install_page_events(session, new_page, on_event))
+                session.watch(_show_opened_tab(session, client, created.id, new_page))
 
             context.on("page", on_new_page)
             await page.goto(start_url, wait_until="domcontentloaded", timeout=self.timeout_seconds * 1000)
