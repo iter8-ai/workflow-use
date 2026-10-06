@@ -19,6 +19,7 @@ MAX_STEPS = 200
 MAX_FIELD_LENGTH = 2000
 MAX_DOWNLOADS = 20
 ORGANIZE_TIMEOUT_SECONDS = 45
+HANDOFF_RETRY_WINDOW = timedelta(minutes=60)
 CREDENTIAL_KINDS = frozenset({"username", "password", "otp"})
 # Backstop for the page script: typing into a field labelled like a secret never keeps the text.
 _SECRET_TARGETS = (
@@ -71,6 +72,7 @@ class Recording:
     context_delete: Callable[[], Awaitable[None]] | None = field(default=None, repr=False)
     context_state: Literal["owned", "lent", "released"] = "owned"
     context_delete_pending: bool = False
+    handoff_resolved_at: datetime | None = None
     deleted: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -316,6 +318,13 @@ class RecordingService:
         for recording in list(self._handoffs.values()):
             if recording.context_state == "owned" and recording.context_id is not None:
                 await self._delete_context(recording)
+            if (
+                recording.handoff_resolved_at is not None
+                and now >= recording.handoff_resolved_at + HANDOFF_RETRY_WINDOW
+                and recording.context_id is None
+                and not recording.context_delete_pending
+            ):
+                self._handoffs.pop(recording.id, None)
 
     async def close(self) -> None:
         self._closed = True
@@ -396,6 +405,7 @@ class RecordingService:
             if recording.context_state != "lent":
                 return False
             recording.context_state = "released"
+            recording.handoff_resolved_at = datetime.now(UTC)
             recording.context_id = None
             recording.context_delete = None
             recording.context_delete_pending = False
@@ -415,6 +425,7 @@ class RecordingService:
                 return False
             if recording.context_state == "lent":
                 recording.context_state = "owned"
+                recording.handoff_resolved_at = datetime.now(UTC)
             elif not (
                 recording.status != "recording"
                 and recording.google_signed_in

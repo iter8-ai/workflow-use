@@ -327,6 +327,45 @@ async def test_lent_handoff_remains_confirmable_after_recording_removal(cleanup:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("resolution", ["returned", "adopted"])
+async def test_resolved_handoff_is_forgotten_after_retry_window(resolution: str) -> None:
+    provider = ContextProvider()
+    service = RecordingService(provider, max_sessions=1)
+    owner = RecordingOwner("iter7", "owner@iter7.example")
+    recording = await service.create(owner, "https://example.com")
+    await service.stop(recording.id, owner)
+    assert await service.claim_google_context(recording.id, owner) == "private-context"
+    await service.create(owner, "https://example.org")
+    confirm = service.return_google_context if resolution == "returned" else service.adopt_google_context
+    assert await confirm(recording.id, owner)
+    assert await confirm(recording.id, owner)
+    recording.handoff_resolved_at = datetime.now(UTC) - timedelta(minutes=61)
+    await service.cleanup()
+    assert recording.id not in service._handoffs
+
+
+@pytest.mark.asyncio
+async def test_unresolved_loan_and_pending_delete_survive_retry_window() -> None:
+    provider = ContextProvider()
+    service = RecordingService(provider, max_sessions=1)
+    owner = RecordingOwner("iter7", "owner@iter7.example")
+    recording = await service.create(owner, "https://example.com")
+    await service.stop(recording.id, owner)
+    assert await service.claim_google_context(recording.id, owner) == "private-context"
+    await service.create(owner, "https://example.org")
+    recording.stopped_at = datetime.now(UTC) - timedelta(minutes=61)
+    await service.cleanup()
+    assert recording.id in service._handoffs
+    provider.sessions[0].delete_failures = 2
+    assert await service.return_google_context(recording.id, owner)
+    recording.handoff_resolved_at = datetime.now(UTC) - timedelta(minutes=61)
+    await service.cleanup()
+    assert recording.id in service._handoffs
+    await service.cleanup()
+    assert recording.id not in service._handoffs
+
+
+@pytest.mark.asyncio
 async def test_failed_startup_context_cleanup_stays_owned_for_sweep_retry() -> None:
     attempts = 0
 
