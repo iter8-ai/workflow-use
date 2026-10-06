@@ -950,6 +950,7 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
     finally { setBusy(false); setOperation(null); }
   };
   const connectGoogle = async (): Promise<void> => {
+    if (readOnly) return;
     setBusy(true); setError(null);
     try {
       if ((await bridge.request("connectGoogle", { agentId: agent.agentId }, { timeoutMs: interactiveRequestTimeoutMs })).connected) {
@@ -1184,7 +1185,7 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
       <b>{succeeded ? "Test completed" : testRun.failure?.kind === "stopped" ? "Test stopped" : "Test failed"}</b>
       {!succeeded && <>
         <b>{failureLabel(testRun.failure?.kind)}</b>
-        {testRun.failure?.kind === "google" && <><h3>The agent needs a Google sign-in</h3><p>Connect the Google account this website uses, then run the test again.</p>{googleAllowed ? <button className="button button-quiet" disabled={busy} onClick={() => void connectGoogle()}>Connect Google</button> : <p>Open Credentials → Connect Google for this agent.</p>}</>}
+        {testRun.failure?.kind === "google" && <><h3>The agent needs a Google sign-in</h3><p>Connect the Google account this website uses, then run the test again.</p>{googleAllowed ? <button className="button button-quiet" disabled={readOnly} onClick={() => void connectGoogle()}>Connect Google</button> : <p>Open Credentials → Connect Google for this agent.</p>}</>}
         {(testRun.failure?.message || testRun.error) && testRun.failure?.kind !== "google" && <p>{testRun.failure?.message || testRun.error}</p>}
       </>}
       {testRun.stoppedAtStep != null && <p>Stopped at step {testRun.stoppedAtStep}{draft.steps[testRun.stoppedAtStep - 1]?.description ? `: ${draft.steps[testRun.stoppedAtStep - 1]!.description}` : ""}</p>}
