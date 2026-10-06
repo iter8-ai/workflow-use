@@ -785,7 +785,7 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
       reading = true;
       void bridge.request("getRecording", { id }).then((next) => {
         // A reply read before Finish, Cancel or a newer demonstration must not bring that session back.
-        if (!active || demoActionRef.current || recordingRef.current?.id !== id || recordingRef.current.status !== "recording") return;
+        if (!active || demoActionRef.current || recordingRef.current?.id !== id || recordingRef.current.status !== "recording" || !isRecording(next) || next.id !== id) return;
         if (next.status === "expired") void closeDemonstration(next, "The demonstration expired before it was finished.");
         else showRecording(next);
       }).catch((e) => { if (active && !demoActionRef.current) setError(errorMessage(e)); }).finally(() => { reading = false; });
@@ -922,6 +922,7 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
   const nextRunTime = agent.nextRunAt ? formatNextRun(agent.nextRunAt) : null;
   const succeeded = testRun?.status === "succeeded";
   const recordingActive = recording?.status === "recording";
+  const finishRetryable = recording !== null && recording.id !== appliedRecordingId && (recording.status === "recording" || recording.status === "stopped");
   // Running, or finished without usable steps and not yet closed on the host.
   const demonstrating = lateRecording !== null || recording !== null && recording.id !== appliedRecordingId;
   const readOnly = agent.internal || busy || dialogOpen || demonstrating || testRun?.status === "running";
@@ -1056,7 +1057,7 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
   };
   const finishDemonstration = async (): Promise<void> => {
     const current = recordingRef.current;
-    if (current?.status !== "recording" || demoActionRef.current) return;
+    if (current === null || current.id === appliedRecordingId || (current.status !== "recording" && current.status !== "stopped") || demoActionRef.current) return;
     demoActionRef.current = true; setDemoAction("finish"); setBusy(true); setError(null);
     let stopped: Recording;
     try { stopped = await bridge.request("stopRecording", { id: current.id }); }
@@ -1067,6 +1068,10 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
     }
     demoActionRef.current = false; setDemoAction(null); setBusy(false);
     if (recordingRef.current?.id !== current.id) return;
+    if (!isRecording(stopped) || stopped.id !== current.id || (stopped.status === "stopped" && !Array.isArray(stopped.steps))) {
+      setError("The demonstration response could not be used. Select Finish demonstration to try again, or cancel it.");
+      return;
+    }
     // Only a stopped demonstration can replace the instructions; one still recording stays open for another try.
     if (stopped.status !== "stopped" && stopped.status !== "expired") {
       setError("The demonstration has not stopped yet. Select Finish demonstration to try again, or cancel it.");
@@ -1162,13 +1167,14 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
 
   const demonstrationControls = <div className="redemo-controls">
     {recording !== null && recording.id !== appliedRecordingId ? <div className="edit-actions">
-      {recordingActive && <button className="button button-primary" disabled={busy} aria-busy={demoAction === "finish"} onClick={() => void finishDemonstration()}>{demoAction === "finish" ? "Finishing…" : "Finish demonstration"}</button>}
+      {finishRetryable && <button className="button button-primary" disabled={busy} aria-busy={demoAction === "finish"} onClick={() => void finishDemonstration()}>{demoAction === "finish" ? "Finishing…" : "Finish demonstration"}</button>}
       <button className="button button-quiet" disabled={busy} aria-busy={demoAction === "cancel"} onClick={() => void closeDemonstration(recording, null)}>{demoAction === "cancel" ? "Canceling…" : "Cancel demonstration"}</button>
     </div> : !demonstrating && <div className="edit-actions">
       {!rawView && <label>Replace from step<select aria-label="Replace from step" value={selectedFromStep} disabled={readOnly || draft.steps.length === 0} onChange={(e) => setFromStep(Number(e.target.value))}>{draft.steps.map((_, index) => <option key={index} value={index}>{index + 1}</option>)}</select></label>}
       <button className="button button-quiet" disabled={readOnly} aria-busy={demoAction === "start"} onClick={() => void startDemonstration()}>{demoAction === "start" ? "Opening the browser…" : "New demonstration"}</button>
     </div>}
     <p>{recordingActive ? `Do the task in the browser below, then finish. ${rawView ? "The written instructions" : "Your steps"} stay as they are until then.`
+      : finishRetryable ? "The browser stopped. Finish the demonstration to use its steps, or cancel it."
       : demonstrating ? "Closing the demonstration. Your instructions are unchanged."
       : rawView ? "Demonstrate the task in a browser. Its steps replace these written instructions; nothing is published until you test and publish."
       : `Replaces step ${selectedFromStep + 1} and every later step with a new demonstration.`}</p>

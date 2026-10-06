@@ -2216,6 +2216,49 @@ test("keeps the written instructions and the demonstration open when Finish find
   await expect(setup.getByRole("alert")).toHaveCount(0);
 });
 
+for (const raw of [true, false]) {
+  test(`retries a stopped ${raw ? "written-instructions" : "step"} demonstration after Finish times out`, async ({ page }) => {
+    await page.clock.install();
+    await page.goto(`${baseUrl}/host?scenario=${raw ? "edit-raw" : "edit"}-demo-stop-timeout`);
+    const setup = page.frameLocator("iframe");
+    const original = setup.getByLabel(raw ? "Agent instructions" : "Step 1 description", { exact: true });
+    const originalText = raw ? "Open the locally revised reports" : "Open the locally revised reports step";
+    await original.fill(originalText);
+    await setup.getByLabel("Goal", { exact: true }).fill("Download the revised report.");
+    await setup.getByRole("button", { name: "New demonstration" }).click();
+    await setup.getByRole("button", { name: "Finish demonstration" }).click();
+    await page.clock.runFor(45_100);
+    await expect(setup.getByRole("alert")).toContainText("The demonstration could not be finished. The request timed out.");
+    await page.clock.runFor(1_600);
+    await expect(setup.getByTitle("Virtual browser")).toHaveCount(0);
+    await expect(original).toHaveValue(originalText);
+    await expect(setup.getByLabel("Goal", { exact: true })).toHaveValue("Download the revised report.");
+    await expect(setup.getByRole("button", { name: "Test changes" })).toBeDisabled();
+    await expect(setup.getByRole("button", { name: "Finish demonstration" })).toBeEnabled();
+    await expect(original).toHaveValue(originalText);
+    await setup.getByRole("button", { name: "Finish demonstration" }).click();
+    await expect(setup.getByLabel("Step 1 description")).toHaveValue("Download the refreshed statement");
+    await expect(setup.getByLabel("Goal", { exact: true })).toHaveValue("Download the revised report.");
+    await setup.getByLabel("Step 1 description").fill("Keep this later edit");
+    await page.clock.runFor(3_000);
+    await expect(setup.getByLabel("Step 1 description")).toHaveValue("Keep this later edit");
+    await expect(setup.getByRole("button", { name: "Finish demonstration" })).toHaveCount(0);
+  });
+}
+
+test("keeps written instructions when Finish answers for another recording", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-raw-demo-wrong-id`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByLabel("Agent instructions", { exact: true }).fill("Open the revised reports");
+  await setup.getByRole("button", { name: "New demonstration" }).click();
+  await setup.getByRole("button", { name: "Finish demonstration" }).click();
+  await expect(setup.getByRole("alert")).toContainText("The demonstration response could not be used.");
+  await expect(setup.getByLabel("Agent instructions", { exact: true })).toHaveValue("Open the revised reports");
+  await expect(setup.getByRole("button", { name: "Finish demonstration" })).toBeEnabled();
+  await setup.getByRole("button", { name: "Finish demonstration" }).click();
+  await expect(setup.getByLabel("Step 1 description")).toHaveValue("Download the refreshed statement");
+});
+
 test("keeps the written instructions when a demonstration expires while recording", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=edit-raw-demo-expired`);
   const setup = page.frameLocator("iframe");
@@ -3387,6 +3430,12 @@ function hostPage(url: string, scenario: string | null): string {
         steps: stopped && !organizing ? recorded.map((step, index) => ({ ...step, stage: organized[index][0], description: organized[index][1] })) : recorded,
         downloads: [{ id: "file", name: "statement-2026-09.csv", state: downloadState }], organizing, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null });
     }
+    else if (edit && scenario.endsWith("demo-stop-timeout") && (request.method === "getRecording" || request.method === "stopRecording")) {
+      if (request.method === "stopRecording") { recordingActive = false; window.__demoStops += 1; }
+      const reply = { id: "recording-1", status: recordingActive ? "recording" : "stopped", liveViewUrl: recordingActive ? "https://live.browserbase.com/session" : null, steps: recordingActive ? [] : redemonstrationSteps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null };
+      if (request.method === "stopRecording" && window.__demoStops === 1) setTimeout(() => send({ ...reply, steps: [{ ...redemonstrationSteps[0], description: "Late first answer" }] }), 49_000);
+      else send(reply);
+    }
     else if (edit && scenario.startsWith("edit-raw-demo-") && (request.method === "getRecording" || request.method === "stopRecording")) {
       // Demonstration outcomes for a written-instructions agent: expired while recording, empty, blocked, or a status read that answers late.
       // A first Finish whose reply says the browser is still recording must leave the demonstration open.
@@ -3397,7 +3446,9 @@ function hostPage(url: string, scenario: string | null): string {
         steps: request.method === "stopRecording" && scenario !== "edit-raw-demo-empty" ? redemonstrationSteps : [], expiresAt: "2026-09-11T12:00:00Z",
         blockedReason: stopping && scenario === "edit-raw-demo-blocked" ? "The website asked for a payment." : null,
         downloads: scenario === "edit-raw-demo-download" ? [{ id: "file", name: "statement.pdf", state: "completed" }] : undefined };
-      if (scenario === "edit-raw-demo-late-poll" && !stopping) setTimeout(() => send(reply), 2500); else send(reply);
+      if (scenario === "edit-raw-demo-late-poll" && !stopping) setTimeout(() => send(reply), 2500);
+      else if (scenario === "edit-raw-demo-wrong-id" && stopping && ++window.__demoStops === 1) send({ ...reply, id: "recording-other" });
+      else send(reply);
     }
     else if (request.method === "getRecording" || request.method === "stopRecording") { if (request.method === "stopRecording") recordingActive = false; send({ id: "recording-1", status: request.method === "getRecording" && recordingActive ? "recording" : "stopped", liveViewUrl: request.method === "getRecording" && recordingActive ? "https://live.browserbase.com/session" : null, liveViewSwitching: scenario.endsWith("window-switch") && window.__liveViewSwitching, steps: edit ? (request.method === "stopRecording" ? redemonstrationSteps : []) : steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
     else if (request.method === "cancelRecording") { demoCancels += 1; if ((scenario === "edit-raw-demo-cancel-fail" || scenario === "edit-raw-demo-late-start-cancel-fail") && demoCancels === 1) { fail("The demonstration service did not respond."); return; } recordingActive = false; recordingExists = false; send(undefined); }
