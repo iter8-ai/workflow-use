@@ -28,6 +28,8 @@ npm run test:e2e
 
 The browser tests use a controlled host fixture. They do not prove a live Browserbase session or an actual computer-use run.
 
+For no-mistakes gate validation, see [.no-mistakes.yaml](.no-mistakes.yaml).
+
 ## Deployment and current limits
 
 Build and run the public UI as an unprivileged static service:

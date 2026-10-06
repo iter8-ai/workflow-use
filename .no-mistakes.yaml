@@ -1,0 +1,17 @@
+# no-mistakes gate for workflow-use. Read only from the trusted default branch (main),
+# so edits apply to later runs.
+commands:
+  prepare: "scripts/gate-test.sh prepare"
+  test: "scripts/gate-test.sh test"
+  lint: "scripts/gate-test.sh lint"
+
+test:
+  instructions: |
+    commands.test (scripts/gate-test.sh test) is the validation for this repository. For the
+    setup UI it runs the unit tests, tsc and the fixture-driven Playwright suite
+    (ui/e2e/agent-setup.spec.ts) on a private port with the cached Playwright Chromium; add
+    focused cases to that suite rather than building a separate host or harness. Never install
+    Playwright browsers. Live provider runs (Browserbase, the deployed recorder), staging E2E and
+    acceptance in the user's Chrome happen outside the gate through Codex; report those scenarios
+    untested with that reason. The CFE host is a separate repository: test the iframe contract
+    with the fixture host in agent-setup.spec.ts, not a checkout of commercials-flow-editor.
