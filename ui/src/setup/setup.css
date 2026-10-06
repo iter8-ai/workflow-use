@@ -759,7 +759,6 @@ select {
 .step-instruction textarea { grid-column: 2; }
 
 .instructions-editor .review-step textarea {
-  height: 34px;
   min-height: 34px;
   padding: 4px 9px;
   border-color: transparent;

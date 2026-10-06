@@ -28,7 +28,7 @@ export function StepEditor(props: StepEditorProps): JSX.Element {
   const [moreOptionsOpen, setMoreOptionsOpen] = useState<Record<string, boolean>>({});
   const [otherText, setOtherText] = useState<Record<string, string>>({});
   // The field to focus once the list has re-rendered: a step's instruction, or its newly opened expected outcome.
-  const [focusKey, setFocusKey] = useState<string | null>(null);
+  const focusRef = useRef<string | null>(null);
   const ownFieldRefs = useRef<FieldRefs["current"]>({});
   const fieldRefs = props.fieldRefs ?? ownFieldRefs;
   // The step count when Insert step was pressed; the next longer list puts focus on its new last step.
@@ -46,10 +46,10 @@ export function StepEditor(props: StepEditorProps): JSX.Element {
     fieldRefs.current[`step:${props.steps.at(-1)!.id}:description`]?.focus();
   }, [fieldRefs, props.steps]);
   useEffect(() => {
-    if (focusKey === null) return;
-    fieldRefs.current[focusKey]?.focus();
-    setFocusKey(null);
-  }, [focusKey, fieldRefs, props.steps]);
+    const key = focusRef.current;
+    focusRef.current = null;
+    if (key !== null) fieldRefs.current[key]?.focus();
+  });
   const answerOther = (stepId: string, text: string): void => {
     const value = text.trim();
     if (value) props.onUpdateStep(stepId, { date: { ...props.steps.find((step) => step.id === stepId)!.date!, rule: { kind: "described", text: value } } });
@@ -65,16 +65,16 @@ export function StepEditor(props: StepEditorProps): JSX.Element {
     const stepIndex = props.steps.findIndex((item) => item.id === id);
     const next = props.steps[stepIndex + 1] ?? props.steps[stepIndex - 1];
     props.onRemoveStep(id);
-    setFocusKey(next ? `step:${next.id}:description` : null);
+    focusRef.current = next ? `step:${next.id}:description` : null;
   };
   const undoMergedStep = (id: string): void => {
     const current = props.steps.find((item) => item.id === id);
     props.onUndoMergedStep(id);
-    setFocusKey(current?.parts?.[0] ? `step:${current.parts[0].id}:description` : null);
+    focusRef.current = current?.parts?.[0] ? `step:${current.parts[0].id}:description` : null;
   };
   return <div className="instructions-editor">
     {questionCount > 0 && <div className="setup-notice question-notice" role="status">{questionCount} question{questionCount === 1 ? "" : "s"} to answer before testing</div>}
-    {hasMergeCandidates && <div className="merge-date-actions"><button type="button" className="button button-quiet merge-date-button" disabled={props.busy || !canMerge} onClick={() => { const first = props.steps.find((step) => selectedIds.includes(step.id)); props.onMergeSteps(selected.map((index) => props.steps[index]!.id)); setSelectedIds([]); setFocusKey(first ? `step:${first.id}:description` : null); }}>Combine into one date step</button><span className="field-note">Tick the day, month and year fields, then combine them.</span></div>}
+    {hasMergeCandidates && <div className="merge-date-actions"><button type="button" className="button button-quiet merge-date-button" disabled={props.busy || !canMerge} onClick={() => { const first = props.steps.find((step) => selectedIds.includes(step.id)); props.onMergeSteps(selected.map((index) => props.steps[index]!.id)); setSelectedIds([]); focusRef.current = first ? `step:${first.id}:description` : null; }}>Combine into one date step</button><span className="field-note">Tick the day, month and year fields, then combine them.</span></div>}
     <div className="review-list">
       {groups.map((group) => {
         const first = group.steps[0]!.index + 1, last = group.steps.at(-1)!.index + 1;
@@ -84,7 +84,7 @@ export function StepEditor(props: StepEditorProps): JSX.Element {
             expectedOutcomeOpen={expectedOutcomeOpen[step.id] === true || Boolean(step.expectedOutcome?.trim())}
             // Keep the field once it is in use, so clearing an outcome does not take the field away mid-edit.
             onExpectedOutcomeOpen={() => setExpectedOutcomeOpen((current) => current[step.id] ? current : { ...current, [step.id]: true })}
-            onAddExpectedOutcome={() => { setExpectedOutcomeOpen((current) => ({ ...current, [step.id]: true })); setFocusKey(`step:${step.id}:outcome`); }}
+            onAddExpectedOutcome={() => { setExpectedOutcomeOpen((current) => ({ ...current, [step.id]: true })); focusRef.current = `step:${step.id}:outcome`; }}
             onSetFieldKind={setFieldKind} onRemoveStep={removeStep} onUndoMergedStep={undoMergedStep}
             otherOpen={otherOpen[step.id] === true} onOtherOpen={(open) => setOtherOpen((current) => ({ ...current, [step.id]: open }))}
             moreOptionsOpen={moreOptionsOpen[step.id] === true} onMoreOptionsOpen={(open) => setMoreOptionsOpen((current) => ({ ...current, [step.id]: open }))}

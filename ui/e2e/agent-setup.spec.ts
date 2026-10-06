@@ -107,6 +107,57 @@ test("opens an expected outcome in Edit without changing the agent and keeps a c
   await expect(rail.getByText("No changes yet.")).toBeVisible();
 });
 
+test("keeps the first outcome focused when it is cleared during the added outcome's focus reset", { tag: "@local" }, async ({ page }) => {
+  await page.addInitScript(() => {
+    const events: string[] = [];
+    Object.assign(window, { __pendingFocusEvents: events });
+    document.addEventListener("focusin", (event) => {
+      const label = (event.target as HTMLElement).getAttribute("aria-label");
+      if (label === "Step 1 expected outcome") events.push("Step 1 focused");
+      if (label !== "Step 2 expected outcome") return;
+      events.push("Step 2 focused");
+      if (events.filter((item) => item === "Step 2 focused").length > 1) return;
+      queueMicrotask(() => {
+        const field = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Step 1 expected outcome"]')!;
+        field.focus();
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(field, "");
+        field.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "deleteContentForward" }));
+        events.push("Step 1 cleared");
+      });
+    });
+  });
+  await page.goto(`${baseUrl}/host?scenario=edit`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByRole("button", { name: "Add expected outcome" }).click();
+  const existing = setup.getByRole("textbox", { name: "Step 1 expected outcome", exact: true });
+  await expect(existing).toHaveValue("");
+  await expect(setup.locator(".edit-changes").getByText("No changes yet.")).toHaveCount(0);
+  const events = await existing.evaluate((field) => (field.ownerDocument.defaultView as Window & { __pendingFocusEvents: string[] }).__pendingFocusEvents);
+  await expect(existing, events.join(" → ")).toBeFocused();
+  expect(events.slice(0, 3)).toEqual(["Step 2 focused", "Step 1 focused", "Step 1 cleared"]);
+});
+
+test("keeps wrapped and multiline instructions fully visible at narrow width", { tag: "@local" }, async ({ page }) => {
+  await page.setViewportSize({ width: 480, height: 900 });
+  await page.goto(`${baseUrl}/host?scenario=edit`);
+  const description = page.frameLocator("iframe").getByLabel("Step 2 description");
+  for (const value of [
+    "Download the monthly statement for the selected account from the reports page and verify that the selected period is correct",
+    "Open the reports page\nChoose the selected account\nDownload the statement",
+  ]) {
+    await description.fill(value);
+    await description.press("Tab");
+    await expect(description).not.toBeFocused();
+    const beforeFocus = await description.evaluate((field) => ({ visible: field.clientHeight, content: field.scrollHeight }));
+    expect(beforeFocus.content).toBeGreaterThan(34);
+    expect(beforeFocus.content).toBeLessThanOrEqual(beforeFocus.visible + 1);
+    await description.focus();
+    await expect(description).toBeFocused();
+    const afterFocus = await description.evaluate((field) => ({ visible: field.clientHeight, content: field.scrollHeight }));
+    expect(afterFocus.content).toBeLessThanOrEqual(afterFocus.visible + 1);
+  }
+});
+
 test("inserts, reorders and removes Review steps with focus kept in the list", { tag: "@local" }, async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=success`);
   const setup = page.frameLocator("iframe");
@@ -271,6 +322,23 @@ test("merges recorded date fields and asks a goal-driven question", async ({ pag
   expect(saved.draft.steps[1].date.rule).toEqual({ kind: "end_of_last_month" });
   expect(saved.config.stages[0].prompt).toContain("{end_of_last_month|");
   expect(saved.config.stages[0].prompt).not.toContain("2026");
+});
+
+test("keeps focus through date merge Undo and Combine", { tag: "@local" }, async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=date-create`);
+  const setup = page.frameLocator("iframe");
+  await describeAndDemonstrate(setup);
+  await setup.getByRole("button", { name: "Undo", exact: true }).click();
+  const firstPart = setup.getByLabel("Step 2 description");
+  await expect(firstPart).toHaveValue("Enter the From day");
+  await expect(firstPart).toBeFocused();
+  for (const step of [2, 3, 4]) await setup.getByLabel(`Select step ${step} for date merge`).check();
+  await setup.getByRole("button", { name: "Combine into one date step" }).click();
+  await expect(firstPart).toHaveValue("Enter the From date");
+  await expect(firstPart).toBeFocused();
+  await setup.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect(firstPart).toHaveValue("Enter the From day");
+  await expect(firstPart).toBeFocused();
 });
 
 test("answers a date question in Edit and records a revertable change", async ({ page }) => {
