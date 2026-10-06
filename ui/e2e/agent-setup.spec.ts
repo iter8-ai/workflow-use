@@ -2935,7 +2935,7 @@ for (const failure of ["rejected", "timeout"] as const) {
     }
     await expect(problem).toBeVisible();
     await expect(run.getByRole("navigation", { name: "Agent setup progress" })).toHaveCount(0);
-    expect(await page.evaluate(() => window.__requestMethods)).toEqual(["ready", "ready"]);
+    await expect.poll(() => page.evaluate(() => window.__requestMethods)).toEqual(["ready", "ready"]);
     await run.getByRole("button", { name: "Close run", exact: true }).click();
     await expect(run.getByRole("alert").filter({ hasText: "Closing failed. Try again." })).toBeVisible();
     await expect(problem).toBeVisible();
