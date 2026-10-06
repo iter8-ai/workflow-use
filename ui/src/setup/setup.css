@@ -689,36 +689,6 @@ select {
   justify-self: start;
 }
 
-.expected-outcome-help {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.edit-step { grid-template-columns: minmax(0, 1fr) auto 24px; }
-
-.edit-step > input[type="checkbox"] {
-  grid-column: 3;
-  width: 17px;
-  height: 17px;
-  margin-top: 6px;
-  accent-color: #6546c9;
-}
-
-.edit-step > div:first-child {
-  display: grid;
-  gap: 8px;
-  min-width: 0;
-}
-
-.edit-step .question-block {
-  grid-column: 1 / -1;
-}
-
-.edit-stage-group + .edit-stage-group {
-  border-top: 1px solid #e4e5ee;
-}
-
 .review-columns {
   padding-block: 8px;
   border-bottom: 1px solid #e4e5ee;
@@ -776,7 +746,7 @@ select {
 .step-instruction .edit-field-label,
 .step-instruction textarea { grid-column: 2; }
 
-.setup-panel .review-step textarea {
+.instructions-editor .review-step textarea {
   height: 34px;
   min-height: 34px;
   padding: 4px 9px;
@@ -787,23 +757,23 @@ select {
   field-sizing: content;
 }
 
-.setup-panel .review-step textarea:hover {
+.instructions-editor .review-step textarea:hover {
   border-color: #d9dbe7;
 }
 
-.setup-panel .review-step textarea:focus {
+.instructions-editor .review-step textarea:focus {
   border-color: #6546c9;
   background: #ffffff;
 }
 
-.setup-panel .review-step textarea::placeholder {
+.instructions-editor .review-step textarea::placeholder {
   color: #767c92;
   opacity: 0;
 }
 
 /* The empty-outcome hint appears on the row being worked on, not ten times at once. */
 .review-step:hover textarea::placeholder,
-.setup-panel .review-step textarea:focus::placeholder {
+.instructions-editor .review-step textarea:focus::placeholder {
   opacity: 1;
 }
 
@@ -857,13 +827,13 @@ select {
   font-weight: 600;
 }
 
-.setup-panel .review-step .review-expected-outcome textarea {
+.instructions-editor .review-step .review-expected-outcome textarea {
   border-color: #d9dbe7;
   background: #ffffff;
 }
-.setup-panel .review-step-note input[type="checkbox"] { width: 16px; height: 16px; margin: 0; padding: 0; accent-color: #6546c9; }
+.instructions-editor .review-step-note input[type="checkbox"] { width: 16px; height: 16px; margin: 0; padding: 0; accent-color: #6546c9; }
 
-.setup-panel .review-step-kind {
+.instructions-editor .review-step-kind {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -872,7 +842,7 @@ select {
   font-weight: 650;
 }
 
-.setup-panel .review-step-value {
+.instructions-editor .review-step-value {
   display: flex;
   flex: 1 1 260px;
   max-width: 480px;
@@ -883,8 +853,8 @@ select {
   font-weight: 650;
 }
 
-.setup-panel .review-step-value input,
-.setup-panel .review-step-value textarea {
+.instructions-editor .review-step-value input,
+.instructions-editor .review-step-value textarea {
   min-height: 28px;
   padding: 2px 8px;
   font-size: 0.86rem;
@@ -893,7 +863,7 @@ select {
   field-sizing: content;
 }
 
-.setup-panel .review-step-kind select {
+.instructions-editor .review-step-kind select {
   width: auto;
   min-height: 28px;
   padding: 2px 6px;
@@ -907,7 +877,7 @@ select {
   gap: 6px 10px;
 }
 
-.setup-panel .review-step .merge-note {
+.instructions-editor .review-step .merge-note {
   margin: 0;
   margin-left: 36px;
   color: #5f667c;
@@ -1053,15 +1023,7 @@ select {
 .edit-card input, .edit-card textarea { width: 100%; border: 1px solid #c8cad8; border-radius: 6px; padding: 8px; color: #17233d; background: #fff; font-size: .875rem; font-weight: 400; }
 .edit-card textarea { min-height: 56px; resize: vertical; }
 .edit-card p { margin: 0; color: #5f667c; font-size: .875rem; line-height: 1.45; }
-.edit-steps { display: grid; }
-.edit-step { display: grid; grid-template-columns: minmax(0, 1fr) auto 24px; gap: 10px; align-items: start; padding: 12px 0; }
-.edit-step + .edit-step { border-top: 1px solid #e4e5ee; }
-.edit-step > div:first-child { display: grid; gap: 8px; min-width: 0; }
-.edit-step textarea { min-height: 34px; padding: 6px 8px; field-sizing: content; resize: none; }
 .edit-step-controls { display: flex; gap: 4px; }
-.edit-step label { display: grid; gap: 4px; }
-.edit-step label.field-note { display: flex; align-items: center; gap: 7px; }
-.edit-card .edit-step input[type="checkbox"] { width: 16px; height: 16px; margin: 0; padding: 0; accent-color: #6546c9; }
 .edit-field-label { color: #5f667c; font-size: .82rem; font-weight: 650; }
 .edit-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
 .edit-actions .result-check { display: flex; align-items: center; gap: 6px; font-size: .82rem; color: #5f667c; white-space: nowrap; }
@@ -1235,7 +1197,7 @@ select {
   .review-email-code { padding-left: 36px; }
   .step-instruction { grid-template-columns: 18px minmax(0, 1fr); }
 
-  .setup-panel .review-step textarea::placeholder {
+  .instructions-editor .review-step textarea::placeholder {
     opacity: 1;
   }
 }
@@ -1360,13 +1322,10 @@ select {
 /* Stages: a short heading over each run of steps with one purpose. */
 .organizing-notice { display: flex; align-items: center; gap: 8px; }
 .review-stage + .review-stage { border-top: 1px solid #d9dbe7; }
-.setup-panel input.review-stage-name { display: block; width: calc(100% - 16px); margin: 8px 8px 2px; padding: 4px 6px 4px 28px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: #4e38a0; font-size: .78rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
-.setup-panel input.review-stage-name:hover { border-color: #e4e5ee; }
-.setup-panel input.review-stage-name:focus { border-color: #6546c9; outline: none; text-transform: none; letter-spacing: 0; }
-.test-stage, .edit-stage { padding: 10px 14px 2px; color: #4e38a0; font-size: .72rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
-input.edit-stage { width: 100%; margin-top: 6px; padding: 4px 6px; border: 1px solid transparent; border-radius: 6px; background: transparent; }
-input.edit-stage:hover:not(:disabled) { border-color: #e4e5ee; }
-input.edit-stage:focus { border-color: #cfc5f2; outline: none; text-transform: none; letter-spacing: 0; }
+.instructions-editor input.review-stage-name { display: block; width: calc(100% - 16px); margin: 8px 8px 2px; padding: 4px 6px 4px 28px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: #4e38a0; font-size: .78rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.instructions-editor input.review-stage-name:hover { border-color: #e4e5ee; }
+.instructions-editor input.review-stage-name:focus { border-color: #6546c9; outline: none; text-transform: none; letter-spacing: 0; }
+.test-stage { padding: 10px 14px 2px; color: #4e38a0; font-size: .72rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
 @media (prefers-reduced-motion: reduce) { .organizing-notice .edit-spinner { animation: none; } }
 
 /* Testing workbench, shared by the create and edit pages: the agent's browser beside what it did. */
@@ -1413,3 +1372,19 @@ input.edit-stage:focus { border-color: #cfc5f2; outline: none; text-transform: n
   .edit-test .test-rail { flex: none; height: 360px; }
 }
 @media (prefers-reduced-motion: reduce) { .browser-notice .edit-spinner, .activity-working .edit-spinner { animation: none; } }
+
+/* Instructions: one editor for setup's Review and the edit page. Its controls restate the Review panel's
+   field styles so the same step looks the same inside either page; the more specific row rules above still apply. */
+.review-instructions { display: grid; gap: 8px; }
+.instructions-editor { display: grid; gap: 8px; min-width: 0; }
+.instructions-editor label { display: grid; gap: 7px; color: #363b50; font-size: .9rem; font-weight: 650; }
+.instructions-editor input,
+.instructions-editor textarea,
+.instructions-editor select { width: 100%; border: 1px solid #c8cad7; border-radius: 7px; background: #ffffff; color: #17182b; padding: 10px 11px; font-size: inherit; font-weight: inherit; outline: none; }
+.instructions-editor textarea { min-height: 72px; resize: vertical; }
+.instructions-editor input:focus,
+.instructions-editor textarea:focus,
+.instructions-editor select:focus { border-color: #6546c9; box-shadow: 0 0 0 3px #eeeaff; }
+.instructions-editor .review-email-code { display: flex; }
+.instructions-editor .review-email-code input { width: 16px; height: 16px; margin: 0; padding: 0; accent-color: #6546c9; }
+.instructions-editor .insert-step { justify-self: start; }

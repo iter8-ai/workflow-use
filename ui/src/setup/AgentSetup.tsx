@@ -1,7 +1,9 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { applyOrganizedSteps, compileAgent, credentialKinds, dateRuleChoices, dateRuleLabel, doneWhenOptions, draftChanges, findUnambiguousEmailStep, formatDate, groupSteps, mergeDateSteps, openQuestions, replaceStepsFrom, requiredCredentials, resolveDateRule, type CredentialKind, type DateRule, type DoneWhen, type SetupDraft, type SetupStep } from "./compiler";
+import { applyOrganizedSteps, compileAgent, credentialKinds, doneWhenOptions, draftChanges, findUnambiguousEmailStep, groupSteps, mergeDateSteps, openQuestions, replaceStepsFrom, requiredCredentials, type CredentialKind, type DoneWhen, type SetupDraft, type SetupStep } from "./compiler";
 import { browserbaseLiveViewUrl, createHostBridge, HostRequestTimeoutError, type EditAgent as EditAgentData, type HostBridge, type RecordedDownload, type Recording } from "./host";
 import { HelpTip } from "./HelpTip";
+import { EditIcon, StepEditor } from "./StepEditor";
+import { combineDateSteps, credentialLabel, moveStep, openQuestionCount, renameStageAt, undoDateMerge } from "./stepList";
 import { applyTestRunUpdate, type WorkbenchRun } from "./testRun";
 import { ActivityLog, TestBrowser } from "./TestWorkbench";
 import "./setup.css";
@@ -1082,8 +1084,8 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
             <label>Agent instructions<textarea ref={(field) => { fieldRefs.current[`stage:${index}:prompt`] = field; }} aria-label="Agent instructions" value={String(item.prompt ?? "")} disabled={readOnly} onChange={(e) => updateStage(index, { prompt: e.target.value })} /></label>
           </div> : null; })}
           {stages.some((stage) => !isObject(stage) || stage.type !== "agent") && <p className="raw-preserved">Then: {stages.filter((stage) => !isObject(stage) || stage.type !== "agent").map((stage) => preservedStageLabel(isObject(stage) ? stage : null)).join(" · ")} — kept as is</p>}
-        </section> : <section className="edit-card edit-instructions"><h2>Steps</h2><p className="field-note expected-outcome-help"><HelpTip label="Expected outcome">The agent checks this before moving on. Leave empty unless a step is easy to get wrong.</HelpTip></p>
-          <StepEditor variant="edit" steps={draft.steps} goal={draft.goal} busy={readOnly} credentialsAllowed={credentialsAllowed} savedCredentials={agent.credentials?.saved ?? []} fieldRefs={fieldRefs} onRequestOtp={() => void requestEditOtp()} onUpdateStep={(id, updates) => update({ steps: draft.steps.map((step) => step.id === id ? updateStepFields(step, updates) : step) })} onRemoveStep={(id) => update({ steps: draft.steps.filter((step) => step.id !== id) })} onMergeSteps={(ids) => update({ steps: combineDateSteps(draft.steps, ids) })} onUndoMergedStep={(id) => update({ steps: undoDateMerge(draft.steps, id) })} onMoveStep={(index, delta) => update({ steps: moveStep(draft.steps, index, delta) })} onRenameStage={(index, name) => update({ steps: renameStageAt(draft.steps, index, name) })} onInsert={insertStep} />
+        </section> : <section className="edit-card edit-instructions"><h2>Instructions</h2>
+          <StepEditor steps={draft.steps} goal={draft.goal} busy={readOnly} credentialsAllowed={credentialsAllowed} savedCredentials={agent.credentials?.saved ?? []} fieldRefs={fieldRefs} onRequestOtp={() => void requestEditOtp()} onUpdateStep={(id, updates) => update({ steps: draft.steps.map((step) => step.id === id ? updateStepFields(step, updates) : step) })} onRemoveStep={(id) => update({ steps: draft.steps.filter((step) => step.id !== id) })} onMergeSteps={(ids) => update({ steps: combineDateSteps(draft.steps, ids) })} onUndoMergedStep={(id) => update({ steps: undoDateMerge(draft.steps, id) })} onMoveStep={(index, delta) => update({ steps: moveStep(draft.steps, index, delta) })} onRenameStage={(index, name) => update({ steps: renameStageAt(draft.steps, index, name) })} onInsert={insertStep} />
           <div className="redemo-controls">
             <div className="edit-actions"><label>Re-demonstrate from step<select aria-label="Re-demonstrate from step" value={selectedFromStep} disabled={readOnly || draft.steps.length === 0} onChange={(e) => setFromStep(Number(e.target.value))}>{draft.steps.map((_, index) => <option key={index} value={index}>{index + 1}</option>)}</select></label>
               <button className="button button-quiet" disabled={readOnly} onClick={() => void startRecording()}>Re-demonstrate</button>
@@ -1159,11 +1161,6 @@ function updateStepFields(step: SetupStep, updates: Partial<SetupStep>): SetupSt
   return next;
 }
 
-function EditIcon({ name }: { name: "back" | "up" | "down" | "close" }): JSX.Element {
-  const path = { back: "M19 12H5m6-6-6 6 6 6", up: "M12 19V5m-6 6 6-6 6 6", down: "M12 5v14m-6-6 6 6 6-6", close: "M6 6l12 12M18 6L6 18" }[name];
-  return <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none"><path d={path} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>;
-}
-
 function editFailureLabel(kind: string | null | undefined): string {
   switch (kind) {
     case "stopped": return "Stopped by you";
@@ -1178,38 +1175,6 @@ function editFailureLabel(kind: string | null | undefined): string {
   }
 }
 function isObject(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null; }
-function combineDateSteps(steps: SetupStep[], ids: string[]): SetupStep[] {
-  const selected = steps.filter((step) => ids.includes(step.id));
-  if (selected.length < 2 || selected.length > 3) return steps;
-  const first = steps.findIndex((step) => step.id === selected[0]?.id);
-  if (first < 0 || selected.some((step, index) => steps[first + index]?.id !== step.id)) return steps;
-  const merged = mergeDateSteps(selected, true)[0];
-  if (merged?.type !== "date") return steps;
-  return [...steps.slice(0, first), merged, ...steps.slice(first + selected.length)];
-}
-
-function undoDateMerge(steps: SetupStep[], id: string): SetupStep[] {
-  const index = steps.findIndex((step) => step.id === id);
-  const merged = steps[index];
-  if (index < 0 || merged?.type !== "date" || merged.parts === undefined) return steps;
-  return [...steps.slice(0, index), ...merged.parts, ...steps.slice(index + 1)];
-}
-
-function moveStep(steps: SetupStep[], index: number, delta: number): SetupStep[] {
-  const next = [...steps]; const target = index + delta;
-  if (target < 0 || target >= next.length) return next;
-  const moved = next[index]!, neighbour = next[target]!;
-  // A step moved past the edge of its stage joins the stage it moved into.
-  next[index] = neighbour; next[target] = moved.stage === neighbour.stage ? moved : { ...moved, stage: neighbour.stage };
-  return next;
-}
-/** Rename the stage that starts at index: every following step with the same stage name. */
-function renameStageAt(steps: SetupStep[], index: number, name: string): SetupStep[] {
-  const stage = steps[index]?.stage;
-  let end = index;
-  while (end < steps.length && steps[end]!.stage === stage) end += 1;
-  return steps.map((step, i) => i >= index && i < end ? { ...step, stage: name } : step);
-}
 function rawStageChanges(current: unknown[], live: unknown[]): Array<{ key: string; label: string; from: string; to: string }> {
   return current.flatMap((stage, index) => {
     const original = live[index];
@@ -1331,138 +1296,13 @@ function DownloadNotice(props: { downloads: RecordedDownload[] }): JSX.Element |
   );
 }
 
-type StepEditorProps = {
-  steps: SetupStep[];
-  goal: string;
-  variant: "review" | "edit";
-  busy: boolean;
-  credentialsAllowed: boolean;
-  savedCredentials: CredentialKind[];
-  onRequestOtp(): void;
-  onUpdateStep(id: string, updates: Partial<SetupStep>): void;
-  onRemoveStep(id: string): void;
-  onMergeSteps?(ids: string[]): void;
-  onUndoMergedStep?(id: string): void;
-  onMoveStep?(index: number, delta: number): void;
-  onRenameStage?(index: number, name: string): void;
-  onInsert?(): void;
-  onContinue?(): void;
-  onBack?(): void;
-  fieldRefs?: { current: Record<string, HTMLInputElement | HTMLTextAreaElement | null> };
-};
-
-function StepEditor(props: StepEditorProps): JSX.Element {
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [otherOpen, setOtherOpen] = useState<Record<string, boolean>>({});
-  const [expectedOutcomeOpen, setExpectedOutcomeOpen] = useState<Record<string, boolean>>({});
-  const [moreOptionsOpen, setMoreOptionsOpen] = useState<Record<string, boolean>>({});
-  const [otherText, setOtherText] = useState<Record<string, string>>({});
-  const [focusStepId, setFocusStepId] = useState<string | null>(null);
-  const today = new Date();
-  const questions = openQuestions({ name: "", url: "https://example.test", goal: props.goal, steps: props.steps, inputs: [] }, today);
-  const otpQuestions = props.credentialsAllowed ? props.steps.flatMap((step, index) => step.type === "credential" && step.value === "otp" && !props.savedCredentials.includes("otp") ? [{ step, index }] : []) : [];
-  const questionCount = questions.length + otpQuestions.length;
-  const groups = groupSteps(props.steps);
-  const selected = selectedIds.map((id) => props.steps.findIndex((step) => step.id === id)).filter((index) => index >= 0);
-  const canMerge = selected.length >= 2 && selected.length <= 3 && selected.every((index) => props.steps[index]?.type === "input") && Math.max(...selected) - Math.min(...selected) + 1 === selected.length
-    && mergeDateSteps(selected.map((index) => props.steps[index]! ), true)[0]?.type === "date";
-  const hasMergeCandidates = props.steps.some((_, index) => isDateMergeCandidate(props.steps, index));
-  const emptyStep = props.variant === "edit" ? props.steps.find((step) => step.description === "") : undefined;
-  useEffect(() => {
-    if (emptyStep !== undefined) props.fieldRefs?.current[`step:${emptyStep.id}:description`]?.focus();
-  }, [emptyStep, props.fieldRefs]);
-  useEffect(() => {
-    if (focusStepId === null) return;
-    props.fieldRefs?.current[`step:${focusStepId}:description`]?.focus();
-    setFocusStepId(null);
-  }, [focusStepId, props.fieldRefs, props.steps]);
-  const answerOther = (stepId: string, text: string): void => {
-    const value = text.trim();
-    if (value) props.onUpdateStep(stepId, { date: { ...props.steps.find((step) => step.id === stepId)!.date!, rule: { kind: "described", text: value } } });
-  };
-  const setFieldKind = (step: SetupStep, kind: CredentialKind | ""): void => {
-    const field = step.target ?? "the field";
-    props.onUpdateStep(step.id, kind === ""
-      ? { type: "input", value: "", description: `Fill in ${field}` }
-      : { type: "credential", value: kind, description: `Enter the saved ${credentialLabel(kind)} in ${field}` });
-  };
-  const toggleSelected = (id: string): void => setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
-  return <>
-    {questionCount > 0 && <div className="setup-notice question-notice" role="status">{questionCount} question{questionCount === 1 ? "" : "s"} to answer before testing</div>}
-    {hasMergeCandidates && <div className="merge-date-actions"><button type="button" className="button button-quiet merge-date-button" disabled={props.busy || !canMerge} onClick={() => { const first = props.steps.find((step) => selectedIds.includes(step.id)); props.onMergeSteps?.(selected.map((index) => props.steps[index]!.id)); setSelectedIds([]); setFocusStepId(first?.id ?? null); }}>Combine into one date step</button><span className="field-note">Tick the day, month and year fields, then combine them.</span></div>}
-    <div className={props.variant === "review" ? "review-list" : "edit-steps"}>
-      {groups.map((group) => <section className={props.variant === "review" ? "review-stage" : "edit-stage-group"} key={group.steps[0]!.step.id} aria-label={group.stage ?? "Steps"}>
-        {group.stage !== null && <input className={props.variant === "review" ? "review-stage-name" : "edit-stage"} aria-label={props.variant === "review" ? `Stage name for steps ${group.steps[0]!.index + 1}–${group.steps.at(-1)!.index + 1}` : `Stage name for step ${group.steps[0]!.index + 1}`} value={group.stage} maxLength={60} disabled={props.busy} placeholder="Stage name" onChange={(event) => props.onRenameStage?.(group.steps[0]!.index, event.target.value)} />}
-        {props.variant === "review" ? <ol start={group.steps[0]!.index + 1}>{group.steps.map(({ step, index }) => <StepEditorRow key={step.id} {...props} step={step} index={index} selected={selectedIds.includes(step.id)} onToggleSelected={toggleSelected} expectedOutcomeOpen={expectedOutcomeOpen[step.id] === true || Boolean(step.expectedOutcome?.trim())} onExpectedOutcomeOpen={() => setExpectedOutcomeOpen((current) => ({ ...current, [step.id]: true }))} onSetFieldKind={setFieldKind} onRemoveStep={(id) => { const stepIndex = props.steps.findIndex((item) => item.id === id); const next = props.steps[stepIndex + 1] ?? props.steps[stepIndex - 1]; props.onRemoveStep(id); setFocusStepId(next?.id ?? null); }} onUndoMergedStep={(id) => { const current = props.steps.find((item) => item.id === id); props.onUndoMergedStep?.(id); setFocusStepId(current?.parts?.[0]?.id ?? null); }} otherOpen={otherOpen[step.id] === true} onOtherOpen={(open) => setOtherOpen((current) => ({ ...current, [step.id]: open }))} moreOptionsOpen={moreOptionsOpen[step.id] === true} onMoreOptionsOpen={(open) => setMoreOptionsOpen((current) => ({ ...current, [step.id]: open }))} otherText={otherText[step.id] ?? ""} onOtherText={(value) => setOtherText((current) => ({ ...current, [step.id]: value }))} onAnswerOther={answerOther} />)}</ol> : group.steps.map(({ step, index }) => <StepEditorRow key={step.id} {...props} step={step} index={index} selected={selectedIds.includes(step.id)} onToggleSelected={toggleSelected} expectedOutcomeOpen={expectedOutcomeOpen[step.id] === true || Boolean(step.expectedOutcome?.trim())} onExpectedOutcomeOpen={() => setExpectedOutcomeOpen((current) => ({ ...current, [step.id]: true }))} onSetFieldKind={setFieldKind} onRemoveStep={(id) => { const stepIndex = props.steps.findIndex((item) => item.id === id); const next = props.steps[stepIndex + 1] ?? props.steps[stepIndex - 1]; props.onRemoveStep(id); setFocusStepId(next?.id ?? null); }} onUndoMergedStep={(id) => { const current = props.steps.find((item) => item.id === id); props.onUndoMergedStep?.(id); setFocusStepId(current?.parts?.[0]?.id ?? null); }} otherOpen={otherOpen[step.id] === true} onOtherOpen={(open) => setOtherOpen((current) => ({ ...current, [step.id]: open }))} moreOptionsOpen={moreOptionsOpen[step.id] === true} onMoreOptionsOpen={(open) => setMoreOptionsOpen((current) => ({ ...current, [step.id]: open }))} otherText={otherText[step.id] ?? ""} onOtherText={(value) => setOtherText((current) => ({ ...current, [step.id]: value }))} onAnswerOther={answerOther} />)}
-      </section>)}
-    </div>
-    {props.variant === "edit" && props.onInsert && <button type="button" className="button button-quiet" disabled={props.busy} onClick={props.onInsert}>Insert step</button>}
-    {props.variant === "review" && <div className="setup-actions"><button className="button button-quiet" type="button" onClick={props.onInsert} disabled={props.busy}>Insert step</button><button className="button button-quiet" type="button" onClick={props.onBack} disabled={props.busy}>Back to demonstration</button><button className="button button-primary" type="button" onClick={props.onContinue} disabled={props.busy || questionCount > 0} aria-describedby={questionCount > 0 ? "open-question-reason" : undefined}>Continue to test</button>{questionCount > 0 && <span id="open-question-reason" className="field-note">Answer all open questions before testing.</span>}</div>}
-  </>;
-}
-
-function isDateMergeCandidate(steps: SetupStep[], index: number): boolean {
-  const step = steps[index];
-  if (step?.type !== "input" || !/^\d{1,4}$/.test(step.value ?? "")) return false;
-  let start = index;
-  while (start > 0 && steps[start - 1]?.type === "input" && /^\d{1,4}$/.test(steps[start - 1]?.value ?? "")) start -= 1;
-  let end = index + 1;
-  while (end < steps.length && steps[end]?.type === "input" && /^\d{1,4}$/.test(steps[end]?.value ?? "")) end += 1;
-  return end - start >= 2 && end - start <= 3;
-}
-
-function StepEditorRow(props: StepEditorProps & { step: SetupStep; index: number; selected: boolean; onToggleSelected(id: string): void; onSetFieldKind(step: SetupStep, kind: CredentialKind | ""): void; onRemoveStep(id: string): void; onUndoMergedStep(id: string): void; expectedOutcomeOpen: boolean; onExpectedOutcomeOpen(): void; otherOpen: boolean; onOtherOpen(open: boolean): void; moreOptionsOpen: boolean; onMoreOptionsOpen(open: boolean): void; otherText: string; onOtherText(value: string): void; onAnswerOther(id: string, text: string): void }): JSX.Element {
-  const typedField = props.step.type === "input" || props.step.type === "credential";
-  const dateQuestion = props.step.type === "date" && props.step.date?.rule === null ? openQuestions({ name: "", url: "https://example.test", goal: props.goal, steps: props.steps, inputs: [] }, new Date()).find((question) => question.stepId === props.step.id) ?? {
-    kind: "date" as const,
-    stepId: props.step.id,
-    stepIndex: props.index,
-    text: `Step ${props.index + 1} enters the date ${formatDate(props.step.date?.value ?? "1970-01-01", props.step.date?.format ?? "parts")} into ${props.step.target ?? "the date field"}. What should it be on future runs?`,
-    choices: [],
-  } : undefined;
-  const dateChoices = props.step.type === "date" && props.step.date !== undefined
-    ? dateRuleChoices({ ...props.step, date: { ...props.step.date, rule: null } }, props.goal, new Date())
-    : dateQuestion?.choices ?? [];
-  const selectedRule = props.step.date?.rule ?? null;
-  const selectedChoice = selectedRule === null || selectedRule === undefined ? undefined : dateChoices.find((choice) => JSON.stringify(choice.rule) === JSON.stringify(selectedRule));
-  const defaultChoices = dateChoices.filter((choice) => choice.recommended || choice.rule.kind === (dateChoices.find((item) => item.recommended)?.rule.kind === "end_of_last_month" ? "start_of_last_month" : "end_of_last_month") || choice.rule.kind === "fixed");
-  const visibleDateChoices = props.moreOptionsOpen ? dateChoices : selectedChoice && !defaultChoices.includes(selectedChoice) ? [...defaultChoices, selectedChoice] : defaultChoices;
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const selectedValue = selectedRule === null || props.step.date === undefined ? "Choose an answer" : selectedChoice?.value
-    ?? (selectedRule.kind === "fixed" ? formatDate(props.step.date.value, props.step.date.format) : formatDate(resolveDateRule(selectedRule, new Date()), props.step.date.format));
-  const emailCodeCandidate = props.step.type === "click" && /code|resend|send|sms|verify/i.test(`${props.step.target ?? ""} ${props.step.description}`);
-  const moveRadio = (event: ReactKeyboardEvent<HTMLButtonElement>): void => {
-    if (!["ArrowDown", "ArrowRight", "ArrowUp", "ArrowLeft"].includes(event.key)) return;
-    const group = event.currentTarget.closest<HTMLElement>('[role="radiogroup"]');
-    const radios = group === null ? [] : Array.from(group.querySelectorAll<HTMLButtonElement>('[role="radio"]'));
-    const current = radios.indexOf(event.currentTarget);
-    if (current < 0 || radios.length === 0) return;
-    const next = event.key === "ArrowDown" || event.key === "ArrowRight" ? (current + 1) % radios.length : (current + radios.length - 1) % radios.length;
-    event.preventDefault();
-    radios[next]?.focus();
-  };
-  const answer = (rule: DateRule): void => props.onUpdateStep(props.step.id, { date: { ...props.step.date!, rule } });
-  const content = <>
-    <label className="step-instruction"><span className="step-number-prefix" aria-hidden="true">{props.index + 1}</span><span className={props.variant === "review" ? "visually-hidden" : "edit-field-label"}>Instruction</span><textarea ref={(field) => { if (props.fieldRefs) { props.fieldRefs.current[`step:${props.step.id}:description`] = field; props.fieldRefs.current[`removed:${props.step.id}`] = field; } }} rows={1} placeholder="Describe the action" aria-label={`Step ${props.index + 1} description`} value={props.step.description} disabled={props.busy} onChange={(event) => props.onUpdateStep(props.step.id, { description: event.target.value })} /></label>
-    {props.step.type === "date" && <div className="date-preview"><span>{selectedRule === null ? "Not answered" : selectedChoice?.label ?? dateRuleLabel(selectedRule, new Date(), props.step.date?.format ?? "parts")}</span><b>→</b><span>{selectedValue}</span>{selectedRule !== null && <button type="button" className="text-button" disabled={props.busy} onClick={() => props.onUpdateStep(props.step.id, { date: { ...props.step.date!, rule: null } })}>Change answer</button>}</div>}
-    {props.variant === "review" && <span id={`step-${props.step.id}-expected-outcome-help`} className="visually-hidden">The agent checks this before moving on. Leave empty unless a step is easy to get wrong.</span>}
-    {props.variant === "review" ? props.expectedOutcomeOpen ? <label className="review-expected-outcome"><span className="edit-field-label">Expected outcome (optional)</span><textarea ref={(field) => { if (props.fieldRefs) props.fieldRefs.current[`step:${props.step.id}:outcome`] = field; }} rows={1} placeholder="What should the agent see after this step? (optional)" aria-label={`Step ${props.index + 1} expected outcome`} aria-describedby={`step-${props.step.id}-expected-outcome-help`} value={props.step.expectedOutcome ?? ""} disabled={props.busy} onChange={(event) => props.onUpdateStep(props.step.id, { expectedOutcome: event.target.value || undefined })} /></label> : <button type="button" className="expected-outcome-disclosure" title="The agent checks this before moving on. Leave empty unless a step is easy to get wrong." aria-describedby={`step-${props.step.id}-expected-outcome-help`} disabled={props.busy} onClick={props.onExpectedOutcomeOpen}>Add expected outcome</button> : <label><span className="edit-field-label">Expected outcome (optional)</span><textarea ref={(field) => { if (props.fieldRefs) props.fieldRefs.current[`step:${props.step.id}:outcome`] = field; }} rows={1} placeholder="What should the agent see after this step? (optional)" aria-label={`Step ${props.index + 1} expected outcome`} value={props.step.expectedOutcome ?? ""} disabled={props.busy} onChange={(event) => props.onUpdateStep(props.step.id, { expectedOutcome: event.target.value || undefined })} /></label>}
-    {emailCodeCandidate && <label className="review-email-code"><input ref={(field) => { if (props.fieldRefs) props.fieldRefs.current[`step:${props.step.id}:email-code`] = field; }} type="checkbox" aria-label={`Step ${props.index + 1} requests or resends email code`} checked={props.step.requestsEmailCode === true} disabled={props.busy} onChange={(event) => props.onUpdateStep(props.step.id, { requestsEmailCode: event.target.checked })} /><span>Requests email code</span></label>}
-    {typedField && <div className="review-step-note"><label className="review-step-kind">Field<select aria-label={`Step ${props.index + 1} field type`} value={props.step.type === "credential" ? props.step.value ?? "" : ""} disabled={props.busy} onChange={(event) => props.onSetFieldKind(props.step, event.target.value as CredentialKind | "")}><option value="">Text</option><option value="username">Saved username</option><option value="password">Saved password</option><option value="otp">Saved one-time code</option></select></label>{props.step.type !== "credential" ? <label className="review-step-value">{props.step.type === "select_change" ? "Choose" : "Type"}{props.step.type === "select_change" ? <input aria-label={`Step ${props.index + 1} option`} value={props.step.value ?? ""} placeholder="Option to choose" disabled={props.busy} onChange={(event) => props.onUpdateStep(props.step.id, choiceUpdate(props.step, event.target.value))} /> : <textarea rows={1} aria-label={`Step ${props.index + 1} text`} value={props.step.value ?? ""} placeholder="Leave empty to clear the field" disabled={props.busy} onChange={(event) => props.onUpdateStep(props.step.id, { value: event.target.value })} />}</label> : <span>Uses the {credentialLabel(props.step.value)} from your demonstration, stored encrypted; never part of these instructions.</span>}</div>}
-    {props.step.type === "select_change" && !typedField && <label className="review-step-value">Choose<input aria-label={`Step ${props.index + 1} option`} value={props.step.value ?? ""} placeholder="Option to choose" disabled={props.busy} onChange={(event) => props.onUpdateStep(props.step.id, choiceUpdate(props.step, event.target.value))} /></label>}
-    {dateQuestion && <div className="question-block"><p id={`step-${props.step.id}-question`}>{dateQuestion.text}</p><div role="radiogroup" aria-labelledby={`step-${props.step.id}-question`}>{visibleDateChoices.map((choice, choiceIndex) => { const checked = JSON.stringify(choice.rule) === JSON.stringify(selectedRule); const consequence = choice.rule.kind === "fixed" ? choice.value : formatDate(resolveDateRule(choice.rule, tomorrow), props.step.date?.format ?? "parts"); return <button type="button" role="radio" key={JSON.stringify(choice.rule)} className="question-choice" aria-checked={checked} tabIndex={checked || (selectedRule === null && choiceIndex === 0) ? 0 : -1} disabled={props.busy} onKeyDown={moveRadio} onClick={() => answer(choice.rule)}><strong>{choice.label}</strong><span>{choice.value}</span>{choice.recommended && <em>Recommended</em>}{checked && <small className="question-consequence">Next run enters {consequence}</small>}{choice.rule.kind === "fixed" && <small className="question-warning">Every run will use this same date.</small>}</button>; })}<button type="button" className="text-button more-options" aria-expanded={props.moreOptionsOpen} disabled={props.busy} onClick={() => props.onMoreOptionsOpen(!props.moreOptionsOpen)}>More options…</button>{props.moreOptionsOpen && <button type="button" role="radio" className="question-choice" aria-checked={props.otherOpen && dateChoices.every((choice) => JSON.stringify(choice.rule) !== JSON.stringify(selectedRule))} tabIndex={props.otherOpen ? 0 : -1} disabled={props.busy} onKeyDown={moveRadio} onClick={() => props.onOtherOpen(true)}><strong>Other…</strong></button>}</div>{props.otherOpen && <input aria-label={`Other answer for step ${props.index + 1}`} placeholder="For example: the last working day of last month" value={props.otherText} disabled={props.busy} onChange={(event) => props.onOtherText(event.target.value)} onBlur={() => props.onAnswerOther(props.step.id, props.otherText)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); props.onAnswerOther(props.step.id, props.otherText); } }} />}</div>}
-    {props.step.type === "credential" && props.step.value === "otp" && props.credentialsAllowed && !props.savedCredentials.includes("otp") && <div className="question-block"><p id={`step-${props.step.id}-question`}>Step {props.index + 1} needs a one-time code. How should the agent get it?</p><div role="radiogroup" aria-labelledby={`step-${props.step.id}-question`}><button type="button" role="radio" className="question-choice" aria-checked={!props.otherOpen} tabIndex={props.otherOpen ? -1 : 0} disabled={props.busy} onKeyDown={moveRadio} onClick={props.onRequestOtp}><strong>Authenticator app or email code set up in Reiterate</strong><em>Recommended</em></button><button type="button" role="radio" className="question-choice" aria-checked={props.otherOpen} tabIndex={props.otherOpen ? 0 : -1} disabled={props.busy} onKeyDown={moveRadio} onClick={() => props.onOtherOpen(true)}><strong>Other…</strong></button></div>{props.otherOpen && <><input aria-label={`Other answer for step ${props.index + 1}`} placeholder="For example: a code sent by text message" value={props.otherText} disabled={props.busy} onChange={(event) => props.onOtherText(event.target.value)} /><small>Reiterate does not support this yet. Choose the first option to set up an authenticator app or email code.</small></>}</div>}
-  </>;
-  const mergeCandidate = props.step.type === "input" && isDateMergeCandidate(props.steps, props.index);
-  const mergeNote = props.step.type === "date" && props.step.uiMerged === true && props.step.parts !== undefined && <p className="merge-note">Combined from {props.step.parts.length} recorded steps · <button type="button" className="text-button" onClick={() => props.onUndoMergedStep(props.step.id)} disabled={props.busy}>Undo</button></p>;
-  if (props.variant === "review") return <li className={`review-step${props.step.type === "download" ? " review-step-download" : ""}`}><div>{content}{mergeNote}</div><div className="edit-step-controls"><button type="button" className="icon-button" aria-label={`Move step ${props.index + 1} up`} disabled={props.busy || props.index === 0} onClick={() => props.onMoveStep?.(props.index, -1)}><EditIcon name="up" /></button><button type="button" className="icon-button" aria-label={`Move step ${props.index + 1} down`} disabled={props.busy || props.index === props.steps.length - 1} onClick={() => props.onMoveStep?.(props.index, 1)}><EditIcon name="down" /></button><button type="button" className="icon-button" aria-label={`Remove step ${props.index + 1}`} disabled={props.busy} onClick={() => props.onRemoveStep(props.step.id)}><EditIcon name="close" /></button></div>{mergeCandidate && <input type="checkbox" aria-label={`Select step ${props.index + 1} for date merge`} checked={props.selected} disabled={props.busy} onChange={() => props.onToggleSelected(props.step.id)} />}</li>;
-  return <div className="edit-step"><div>{content}{mergeNote}</div><div className="edit-step-controls"><button className="icon-button" aria-label={`Move step ${props.index + 1} up`} disabled={props.busy || props.index === 0} onClick={() => props.onMoveStep?.(props.index, -1)}><EditIcon name="up" /></button><button className="icon-button" aria-label={`Move step ${props.index + 1} down`} disabled={props.busy || props.index === props.steps.length - 1} onClick={() => props.onMoveStep?.(props.index, 1)}><EditIcon name="down" /></button><button className="icon-button" aria-label={`Remove step ${props.index + 1}`} disabled={props.busy} onClick={() => props.onRemoveStep(props.step.id)}><EditIcon name="close" /></button></div>{mergeCandidate && <input type="checkbox" aria-label={`Select step ${props.index + 1} for date merge`} checked={props.selected} disabled={props.busy} onChange={() => props.onToggleSelected(props.step.id)} />}</div>;
-}
-
 function Review(props: { steps: SetupStep[]; goal: string; organizing: boolean; busy: boolean; credentialsAllowed: boolean; savedCredentials: CredentialKind[]; onRequestOtp(): void; onUpdateStep(id: string, updates: Partial<SetupStep>): void; onRemoveStep(id: string): void; onMergeSteps(ids: string[]): void; onUndoMergedStep(id: string): void; onMoveStep(index: number, delta: number): void; onBack(): void; onContinue(): void; onInsert(): void }): JSX.Element {
   const renameStage = (index: number, name: string): void => { const group = groupSteps(props.steps)[groupSteps(props.steps).findIndex((item) => item.steps.some(({ index: itemIndex }) => itemIndex === index))]; group?.steps.forEach(({ step }) => props.onUpdateStep(step.id, { stage: name })); };
-  return <div className="setup-panel review-panel"><div className="stage-title"><h2>Review and complete the setup</h2><p>Make each instruction clear. Typed text and choices are repeated on every run; sign-in fields use details you save in Reiterate.</p></div>{props.organizing && <p className="setup-notice organizing-notice" role="status"><span className="edit-spinner" aria-hidden="true" />Grouping your steps into stages and making them easier to read. You can edit while this finishes.</p>}<StepEditor variant="review" {...props} onRenameStage={renameStage} onInsert={props.onInsert} /></div>;
+  const questionCount = openQuestionCount(props);
+  return <div className="setup-panel review-panel"><div className="stage-title"><h2>Review and complete the setup</h2><p>Make each instruction clear. Typed text and choices are repeated on every run; sign-in fields use details you save in Reiterate.</p></div>{props.organizing && <p className="setup-notice organizing-notice" role="status"><span className="edit-spinner" aria-hidden="true" />Grouping your steps into stages and making them easier to read. You can edit while this finishes.</p>}
+    <section className="review-instructions" aria-labelledby="review-instructions-title"><h3 id="review-instructions-title">Instructions</h3><StepEditor {...props} onRenameStage={renameStage} /></section>
+    <div className="setup-actions"><button className="button button-quiet" type="button" onClick={props.onBack} disabled={props.busy}>Back to demonstration</button><button className="button button-primary" type="button" onClick={props.onContinue} disabled={props.busy || questionCount > 0} aria-describedby={questionCount > 0 ? "open-question-reason" : undefined}>Continue to test</button>{questionCount > 0 && <span id="open-question-reason" className="field-note">Answer all open questions before testing.</span>}</div>
+  </div>;
 }
 
 function Test(props: {
@@ -1602,17 +1442,6 @@ function startUrlError(value: string): string | null {
   } catch {
     return "Enter a valid http(s) website address before starting.";
   }
-}
-
-// The recorder writes "Choose <option> in <menu>"; keep that description in step with an edited option.
-function choiceUpdate(step: SetupStep, value: string): Partial<SetupStep> {
-  const menu = step.target ?? "menu";
-  const recorded = `Choose ${step.value || "option"} in ${menu}`;
-  return step.description === recorded ? { value, description: `Choose ${value || "option"} in ${menu}` } : { value };
-}
-
-function credentialLabel(kind: string | null | undefined): string {
-  return kind === "otp" ? "one-time code" : kind ?? "sign-in detail";
 }
 
 // A daily cron is stored in UTC. Converting with today's offset means the local time shifts by an hour at DST changes.
