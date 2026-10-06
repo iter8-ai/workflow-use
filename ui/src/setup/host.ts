@@ -6,6 +6,7 @@ export type Recording = {
   id: string;
   status: "recording" | "stopped" | "expired";
   liveViewUrl: string | null;
+  liveViewSwitching?: boolean;
   steps: SetupStep[];
   expiresAt: string;
   blockedReason: string | null;
@@ -22,7 +23,7 @@ export type TestRun = {
   files?: Array<{ name: string; url: string }>;
   /** Watch-only view of the running test's browser. */
   liveViewUrl?: string | null;
-  failure?: { kind: "service" | "signin" | "website" | "steps" | "result" | "check" | "stopped" | "unknown"; message: string } | null;
+  failure?: { kind: "service" | "signin" | "google" | "website" | "steps" | "result" | "check" | "stopped" | "unknown"; message: string } | null;
   stoppedAtStep?: number | null;
   confirmation?: string | null;
   /** The finished run's screenshots, oldest first. */
@@ -64,7 +65,8 @@ export type EditAgent = {
 };
 
 type RequestMap = {
-  ready: { params: Record<string, never>; result: { schedule: boolean; credentials?: boolean; emailRoutes?: boolean; chooseSchedule?: boolean; mode?: "create" | "edit" } };
+  ready: { params: Record<string, never>; result: { schedule: boolean; credentials?: boolean; google?: boolean; emailRoutes?: boolean; chooseSchedule?: boolean; mode?: "create" | "edit" } };
+  connectGoogle: { params: { agentId: string }; result: { connected: boolean } };
   // The host collects and stores the values; only the saved kinds come back.
   requestCredentials: { params: { kinds: CredentialKind[]; replace?: boolean }; result: { saved: CredentialKind[]; changed?: boolean; otpSource?: "authenticator" | "email" } };
   startRecording: { params: { url: string }; result: Recording };

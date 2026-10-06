@@ -113,18 +113,24 @@ class CreateRecordingRequest(BaseModel):
     url: str
 
 
+class RecordingGoogle(BaseModel):
+    signed_in: bool = Field(serialization_alias="signedIn")
+
+
 class RecordingResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     id: str
     status: Literal["recording", "stopped", "expired"]
     live_view_url: str | None = Field(serialization_alias="liveViewUrl")
+    live_view_switching: bool = Field(serialization_alias="liveViewSwitching")
     steps: list[SetupStep]
     expires_at: datetime = Field(serialization_alias="expiresAt")
     blocked_reason: str | None = Field(serialization_alias="blockedReason")
     downloads: list[RecordedDownload] = Field(default_factory=list)
     # True while the finished steps are being grouped into stages and reworded; poll until it is false.
     organizing: bool = False
+    google: RecordingGoogle | None = None
 
 
 class CapturedCredentials(BaseModel):

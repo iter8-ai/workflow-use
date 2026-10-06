@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from workflow_use_recording.provider import BrowserbaseProvider
+from workflow_use_recording.provider import BrowserbaseProvider, _PendingContextCleanup
 
 
 class FakePage:
@@ -16,6 +16,9 @@ class FakePage:
 
     def on(self, _event: str, _callback: Any) -> None:
         pass
+
+    def is_closed(self) -> bool:
+        return False
 
     async def goto(self, url: str, **_kwargs: Any) -> None:
         self.goto_urls.append(url)
@@ -40,6 +43,9 @@ class FakeContext:
 
     async def new_page(self) -> FakePage:
         return self._page
+
+    async def cookies(self) -> list[dict[str, Any]]:
+        return []
 
 
 class FakeBrowser:
@@ -88,7 +94,12 @@ async def test_browserbase_session_disables_provider_recording_and_logs(monkeypa
     class FakeAsyncBrowserbase:
         def __init__(self) -> None:
             self.sessions = FakeSessions()
+            self.contexts = SimpleNamespace(create=self.create_context)
             clients.append(self)
+
+        async def create_context(self, **kwargs: Any) -> Any:
+            assert kwargs == {"project_id": "project-1"}
+            return SimpleNamespace(id="context-secret")
 
         async def __aexit__(self, _type: Any, _value: Any, _traceback: Any) -> None:
             pass
@@ -114,6 +125,7 @@ async def test_browserbase_session_disables_provider_recording_and_logs(monkeypa
                 "viewport": {"width": 1280, "height": 720},
                 "record_session": False,
                 "log_session": False,
+                "context": {"id": "context-secret", "persist": True},
             },
         }
     ]
@@ -122,12 +134,105 @@ async def test_browserbase_session_disables_provider_recording_and_logs(monkeypa
     await session.close()
 
 
+@pytest.mark.asyncio
+async def test_browserbase_session_failure_deletes_the_new_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    deleted: list[tuple[str, dict[str, Any]]] = []
+
+    class FailingClient:
+        def __init__(self) -> None:
+            self.contexts = SimpleNamespace(create=self.create_context)
+            self.sessions = SimpleNamespace(create=self.create_session)
+
+        async def create_context(self, **_kwargs: Any) -> Any:
+            return SimpleNamespace(id="context-private")
+
+        async def create_session(self, **_kwargs: Any) -> Any:
+            raise RuntimeError("provider failure")
+
+        async def delete(self, path: str, **kwargs: Any) -> None:
+            deleted.append((path, kwargs))
+
+        async def __aexit__(self, *_args: Any) -> None:
+            pass
+
+    browserbase = ModuleType("browserbase")
+    browserbase.AsyncBrowserbase = FailingClient  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "browserbase", browserbase)
+    with pytest.raises(RuntimeError, match="provider failure"):
+        await BrowserbaseProvider(project_id="project-1").create("https://example.com", _ignore_event)
+    assert deleted == [("/v1/contexts/context-private", {"cast_to": object, "body": {}})]
+
+
+@pytest.mark.asyncio
+async def test_failed_startup_cleanup_can_be_retried_without_exposing_context_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deleted: list[str] = []
+
+    class FailingClient:
+        def __init__(self) -> None:
+            self.contexts = SimpleNamespace(create=self.create_context)
+            self.sessions = SimpleNamespace(create=self.create_session)
+
+        async def create_context(self, **_kwargs: Any) -> Any:
+            return SimpleNamespace(id="context-private")
+
+        async def create_session(self, **_kwargs: Any) -> Any:
+            raise RuntimeError("provider failure")
+
+        async def delete(self, path: str, **_kwargs: Any) -> None:
+            deleted.append(path)
+            if len(deleted) == 1:
+                raise RuntimeError("temporary delete failure")
+
+        async def __aexit__(self, *_args: Any) -> None:
+            pass
+
+    browserbase = ModuleType("browserbase")
+    browserbase.AsyncBrowserbase = FailingClient  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "browserbase", browserbase)
+
+    with pytest.raises(_PendingContextCleanup) as caught:
+        await BrowserbaseProvider(project_id="project-1").create("https://example.com", _ignore_event)
+
+    assert caught.value.context_id == "context-private"
+    assert "context-private" not in str(caught.value)
+    assert "context-private" not in repr(caught.value)
+    await caught.value.delete_context()
+    assert deleted == ["/v1/contexts/context-private"] * 2
+
+
 async def _ignore_event(_event: dict[str, Any]) -> None:
     pass
 
 
 async def _start(runtime: FakeRuntime) -> FakeRuntime:
     return runtime
+
+
+@pytest.mark.asyncio
+async def test_popup_closed_before_listener_attachment_is_ignored() -> None:
+    from workflow_use_recording.provider import PlaywrightRecordingSession, _install_page_events
+
+    class ClosingContext:
+        async def new_cdp_session(self, page: Any) -> Any:
+            page.closed = True
+            raise RuntimeError("Target.attachToTarget: No target with given id found")
+
+    class ClosingPage(FakePage):
+        def __init__(self) -> None:
+            super().__init__()
+            self.closed = False
+            self.context = ClosingContext()
+
+        def is_closed(self) -> bool:
+            return self.closed
+
+    page = ClosingPage()
+    session = PlaywrightRecordingSession(browser=object(), runtime=object(), live_view_url=None)
+    session.track(_install_page_events(session, page, _ignore_event))
+    await asyncio.gather(*session._tasks)
+    assert page.closed
 
 
 @pytest.mark.asyncio
@@ -258,8 +363,12 @@ async def test_browser_startup_records_only_top_level_navigation(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "google_host", ["accounts.google.com", "accounts.google.ee", "accounts.google.co.uk", "accounts.youtube.com"]
+)
 async def test_a_sign_in_window_the_website_opens_is_shown_in_the_live_view_and_not_recorded(
     monkeypatch: pytest.MonkeyPatch,
+    google_host: str,
 ) -> None:
     """Browserbase's live view shows one tab. When a site's "Continue with Google" opens a window, the person
     demonstrating must see that window, then the site again once it closes. Google's sign-in is not a step."""
@@ -272,14 +381,14 @@ async def test_a_sign_in_window_the_website_opens_is_shown_in_the_live_view_and_
         await context_route(context, pattern, handler, **kwargs)
 
         async def serve(route: Any) -> None:
-            if route.request.url.startswith("https://accounts.google.com/"):
+            if route.request.url.startswith(f"https://{google_host}/"):
                 body = """
                     <label>Email or phone <input type="email" autocomplete="username"></label>
                     <label>Password <input type="password" name="Passwd"></label>
                     <button>Next</button>
                 """
             else:
-                body = """<button onclick="window.open('https://accounts.google.com/signin', 'google', 'popup')">
+                body = f"""<button onclick="window.open('https://{google_host}/signin', 'google', 'popup')">
                     Continue with Google</button>"""
             await route.fulfill(content_type="text/html", body=body)
 
@@ -289,6 +398,7 @@ async def test_a_sign_in_window_the_website_opens_is_shown_in_the_live_view_and_
     runtime = await playwright.async_playwright().start()
     browser = await runtime.chromium.launch()
     context = await browser.new_context()
+    popup_debug_ready = asyncio.Event()
 
     async def tabs() -> list[Any]:
         listed = []
@@ -306,6 +416,8 @@ async def test_a_sign_in_window_the_website_opens_is_shown_in_the_live_view_and_
             return SimpleNamespace(id="session-1", connect_url="wss://connect.browserbase.test/session-1")
 
         async def debug(self, _session_id: str) -> Any:
+            if len(context.pages) > 1:
+                await popup_debug_ready.wait()
             return SimpleNamespace(debugger_fullscreen_url="https://live.browserbase.com/first-tab", pages=await tabs())
 
         async def update(self, _session_id: str, **_kwargs: str) -> None:
@@ -314,6 +426,13 @@ async def test_a_sign_in_window_the_website_opens_is_shown_in_the_live_view_and_
     class AsyncBrowserbase:
         def __init__(self) -> None:
             self.sessions = Sessions()
+            self.contexts = SimpleNamespace(create=self.create_context)
+
+        async def create_context(self, **_kwargs: Any) -> Any:
+            return SimpleNamespace(id="context-secret")
+
+        async def delete(self, _path: str, **_kwargs: Any) -> None:
+            pass
 
         async def __aexit__(self, *_args: Any) -> None:
             pass
@@ -344,9 +463,12 @@ async def test_a_sign_in_window_the_website_opens_is_shown_in_the_live_view_and_
             await site.get_by_role("button", name="Continue with Google").click()
         google = await opened.value
         await google.wait_for_load_state()
+        assert service.response(recording).live_view_switching is True
+        popup_debug_ready.set()
         first_tab, popup_tab = await tabs()
         assert first_tab.id != popup_tab.id
         await live_view_becomes(popup_tab.debugger_fullscreen_url)
+        assert service.response(recording).live_view_switching is False
 
         await google.get_by_label("Email or phone").fill("person@example.com")
         await google.get_by_label("Password").press_sequentially("google-password")
@@ -362,3 +484,20 @@ async def test_a_sign_in_window_the_website_opens_is_shown_in_the_live_view_and_
         assert service.take_credentials(recording) == {}
     finally:
         await service.close()
+
+
+@pytest.mark.asyncio
+async def test_popup_live_view_switching_expires_after_fifteen_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
+    from datetime import UTC, datetime
+
+    from workflow_use_recording import provider
+    from workflow_use_recording.service import Recording, RecordingOwner, RecordingService
+
+    monkeypatch.setattr(provider, "LIVE_VIEW_SWITCH_TIMEOUT_SECONDS", 0.01)
+    session = provider.PlaywrightRecordingSession(browser=object(), runtime=object(), live_view_url="first")
+    recording = Recording("id", RecordingOwner("org", "user@example.com"), datetime.now(UTC), browser=session)
+    page = object()
+    session.open_tab(page)
+    assert RecordingService.response(recording).live_view_switching is True
+    await asyncio.sleep(0.02)
+    assert RecordingService.response(recording).live_view_switching is False

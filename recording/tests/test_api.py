@@ -19,9 +19,22 @@ class FakeSession:
         self.emit = emit
         self.closed = False
         self.live_view_url = "https://browserbase.example/debug?token=secret"
+        self.context_id = "context-private"
+        self.signed_in = False
+        self.cookie_failure = False
+        self.deleted = False
 
     async def close(self) -> None:
         self.closed = True
+
+    async def google_signed_in(self) -> bool:
+        if self.cookie_failure:
+            raise RuntimeError("cookie read failed")
+        return self.signed_in
+
+    async def delete_context(self) -> None:
+        assert self.closed
+        self.deleted = True
 
 
 class FakeProvider(BrowserProvider):
@@ -88,6 +101,7 @@ def test_create_returns_only_safe_live_view_response() -> None:
         "id": response.json()["id"],
         "status": "recording",
         "liveViewUrl": "https://browserbase.example/debug?token=secret",
+        "liveViewSwitching": False,
         "steps": [
             {
                 "id": response.json()["steps"][0]["id"],
@@ -100,6 +114,7 @@ def test_create_returns_only_safe_live_view_response() -> None:
         "blockedReason": None,
         "downloads": [],
         "organizing": False,
+        "google": None,
     }
     assert "test-key" not in response.text
 
@@ -331,6 +346,119 @@ def test_new_recording_evicts_stopped_capture_when_memory_is_full() -> None:
 
     assert next_recording.status_code == 201
     assert evicted.status_code == 404
+
+
+def test_signed_in_context_is_private_and_claimed_once() -> None:
+    provider = FakeProvider()
+    with client(provider) as http:
+        recording = create_recording(http)
+        url = f"/recordings/{recording['id']}"
+        session = provider.sessions[0]
+        session.signed_in = True
+        assert http.post(f"{url}/google-context", headers=headers()).status_code == 409
+        stopped = http.post(f"{url}/stop", headers=headers())
+        read = http.get(url, headers=headers())
+        foreign = http.post(f"{url}/google-context", headers=headers(email="other@iter7.example"))
+        claimed = http.post(f"{url}/google-context", headers=headers())
+        again = http.post(f"{url}/google-context", headers=headers())
+    assert stopped.json()["google"] == read.json()["google"] == {"signedIn": True}
+    assert "context-private" not in stopped.text + read.text
+    assert foreign.status_code == 404
+    assert claimed.json() == {"contextId": "context-private"}
+    assert again.status_code == 200 and again.json() == claimed.json()
+    assert not session.deleted
+
+
+def test_google_context_confirm_routes_follow_state_table() -> None:
+    provider = FakeProvider()
+    with client(provider) as http:
+        recording = create_recording(http)
+        url = f"/recordings/{recording['id']}/google-context"
+        provider.sessions[0].signed_in = True
+        for suffix in ("/adopted", "/returned"):
+            assert http.post(url + suffix, headers=headers()).status_code == 409
+        assert http.post(url, headers=headers()).status_code == 409
+
+        http.post(f"/recordings/{recording['id']}/stop", headers=headers())
+        assert http.post(url + "/returned", headers=headers()).status_code == 204
+        assert http.post(url + "/adopted", headers=headers()).status_code == 409
+        assert http.post(url, headers=headers()).json() == {"contextId": "context-private"}
+        assert http.post(url, headers=headers()).json() == {"contextId": "context-private"}
+        assert http.post(url + "/adopted", headers=headers()).status_code == 204
+        assert http.post(url + "/adopted", headers=headers()).status_code == 204
+        assert http.post(url + "/returned", headers=headers()).status_code == 409
+        unavailable = http.post(url, headers=headers())
+        assert unavailable.status_code == 409
+        assert unavailable.json()["detail"] == "google_context_unavailable"
+        assert "context-private" not in unavailable.text
+
+        returned = create_recording(http)
+        returned_url = f"/recordings/{returned['id']}/google-context"
+        provider.sessions[1].signed_in = True
+        http.post(f"/recordings/{returned['id']}/stop", headers=headers())
+        assert http.post(returned_url, headers=headers()).status_code == 200
+        assert http.post(returned_url + "/returned", headers=headers()).status_code == 204
+        assert http.post(returned_url + "/returned", headers=headers()).status_code == 204
+        assert http.post(returned_url, headers=headers()).json() == {"contextId": "context-private"}
+
+
+def test_google_context_routes_hide_foreign_and_unknown_recordings() -> None:
+    provider = FakeProvider()
+    with client(provider) as http:
+        recording = create_recording(http)
+        provider.sessions[0].signed_in = True
+        http.post(f"/recordings/{recording['id']}/stop", headers=headers())
+        assert http.post(f"/recordings/{recording['id']}/google-context", headers=headers()).status_code == 200
+        for suffix in ("", "/adopted", "/returned"):
+            for recording_id, request_headers in (
+                (recording["id"], headers(email="foreign@iter7.example")),
+                ("unknown", headers()),
+            ):
+                response = http.post(f"/recordings/{recording_id}/google-context{suffix}", headers=request_headers)
+                assert response.status_code == 404
+
+
+def test_unsigned_context_is_deleted_after_release() -> None:
+    provider = FakeProvider()
+    with client(provider) as http:
+        recording = create_recording(http)
+        url = f"/recordings/{recording['id']}"
+        stopped = http.post(f"{url}/stop", headers=headers())
+        claimed = http.post(f"{url}/google-context", headers=headers())
+    assert stopped.json()["google"] == {"signedIn": False}
+    assert provider.sessions[0].deleted
+    assert claimed.status_code == 409
+
+
+def test_cookie_read_failure_fails_closed_and_deletes_context() -> None:
+    provider = FakeProvider()
+    with client(provider) as http:
+        recording = create_recording(http)
+        provider.sessions[0].cookie_failure = True
+        stopped = http.post(f"/recordings/{recording['id']}/stop", headers=headers())
+    assert stopped.json()["google"] == {"signedIn": False}
+    assert provider.sessions[0].deleted
+
+
+def test_delete_and_eviction_remove_unclaimed_contexts() -> None:
+    provider = FakeProvider()
+    with client(provider) as http:
+        first = create_recording(http)
+        provider.sessions[0].signed_in = True
+        http.post(f"/recordings/{first['id']}/stop", headers=headers())
+        http.delete(f"/recordings/{first['id']}", headers=headers())
+        assert provider.sessions[0].deleted
+
+    provider = FakeProvider()
+    one_slot = TestClient(
+        create_app(provider, RecordingConfig(service_key="test-key", timeout_seconds=60, max_sessions=1))
+    )
+    with one_slot as http:
+        first = create_recording(http)
+        provider.sessions[0].signed_in = True
+        http.post(f"/recordings/{first['id']}/stop", headers=headers())
+        create_recording(http)
+        assert provider.sessions[0].deleted
 
 
 @pytest.mark.asyncio
