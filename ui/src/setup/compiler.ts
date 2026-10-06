@@ -522,14 +522,14 @@ export function compileAgent(draft: SetupDraft, otpSource?: "authenticator" | "e
 /**
  * Compiles an edited agent's steps into its existing stage list: the first agent stage becomes the compiled
  * instructions, other agent stages (stale instructions) are dropped, and every other stage stays where it was.
- * Without an agent stage to replace, or with nothing else to keep, the compiled default applies.
  */
 export function compileEditAgent(draft: SetupDraft, liveStages: unknown[], otpSource?: "authenticator" | "email"): Omit<CompiledAgent, "stages"> & { stages: unknown[] } {
   const compiled = compileAgent(draft, otpSource);
   const isAgent = (stage: unknown): boolean => typeof stage === "object" && stage !== null && (stage as { type?: unknown }).type === "agent";
   const first = liveStages.findIndex(isAgent);
-  if (first === -1 || liveStages.every(isAgent)) return compiled;
+  if (liveStages.every(isAgent)) return compiled;
   const instructions = compiled.stages.filter(isAgent);
+  if (first === -1) return { ...compiled, stages: [...instructions, ...liveStages] };
   return { ...compiled, stages: liveStages.flatMap((stage, index) => index === first ? instructions : isAgent(stage) ? [] : [stage]) };
 }
 

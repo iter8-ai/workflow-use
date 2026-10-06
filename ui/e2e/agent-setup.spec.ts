@@ -2255,6 +2255,59 @@ test("keeps a demonstration whose cancellation failed until a retry succeeds", a
   await expect(setup.getByRole("button", { name: "Test changes" })).toBeEnabled();
 });
 
+test("keeps a late started demonstration visible when cancellation fails during a retry", async ({ page }) => {
+  await page.clock.install();
+  await page.goto(`${baseUrl}/host?scenario=edit-raw-demo-late-start-cancel-fail`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByLabel("Agent instructions", { exact: true }).fill("Open the revised reports");
+  await setup.getByRole("button", { name: "New demonstration" }).click();
+  await page.clock.runFor(45_100);
+  await expect(setup.getByRole("button", { name: "New demonstration" })).toBeEnabled();
+  await setup.getByRole("button", { name: "New demonstration" }).click();
+  await page.clock.runFor(2_000);
+  await expect(setup.getByRole("alert")).toHaveText("The demonstration could not be closed. The demonstration service did not respond. Select Cancel demonstration to try again.");
+  await expect(setup.getByRole("button", { name: "Cancel demonstration" })).toBeEnabled();
+  await expect(setup.getByRole("button", { name: "Test changes" })).toBeDisabled();
+  await expect(setup.getByLabel("Agent instructions", { exact: true })).toHaveValue("Open the revised reports");
+  await setup.getByRole("button", { name: "Cancel demonstration" }).click();
+  await expect(setup.getByRole("button", { name: "New demonstration" })).toBeEnabled();
+  await expect(setup.getByRole("button", { name: "Test changes" })).toBeEnabled();
+});
+
+test("keeps editing locked while a test request overlaps late demonstration cleanup", async ({ page }) => {
+  await page.clock.install();
+  await page.goto(`${baseUrl}/host?scenario=edit-raw-demo-late-start-test`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByLabel("Agent instructions", { exact: true }).fill("Open the revised reports");
+  await setup.getByRole("button", { name: "New demonstration" }).click();
+  await page.clock.runFor(45_100);
+  await setup.getByRole("button", { name: "Test changes" }).click();
+  await page.clock.runFor(1_000);
+  await expect(setup.getByLabel("Agent instructions", { exact: true })).toBeDisabled();
+  await expect(setup.getByRole("button", { name: "Test changes" })).toBeDisabled();
+  await expect(setup.getByRole("button", { name: "Publish changes" })).toBeDisabled();
+  await page.clock.runFor(5_000);
+  await expect(setup.getByText("Test completed")).toBeVisible();
+  await expect(setup.getByLabel("Agent instructions", { exact: true })).toHaveValue("Open the revised reports");
+});
+
+test("preserves non-agent stages when a raw agent has no agent stage", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-raw-no-agent-stages`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByRole("button", { name: "New demonstration" }).click();
+  await setup.getByRole("button", { name: "Finish demonstration" }).click();
+  await expect(setup.locator(".raw-preserved")).toHaveText("Then: Sleep stage · 5 s · Reload stage · Download stage — kept as is");
+  await setup.getByRole("button", { name: "Test changes" }).click();
+  await expect(setup.getByText("Test completed")).toBeVisible();
+  const saved = await page.evaluate(() => window.__savedAgents);
+  expect(saved[0].config.stages.map((stage: { type: string }) => stage.type)).toEqual(["agent", "sleep", "reload", "download"]);
+  await setup.getByLabel("I checked the result").check();
+  await setup.getByRole("button", { name: "Publish changes" }).click();
+  await setup.getByRole("button", { name: "Publish", exact: true }).click();
+  await expect(setup.getByLabel("Step 1 description")).toHaveValue("Download the refreshed statement");
+  expect((await page.evaluate(() => window.__savedAgents))[0].config.stages.slice(1)).toEqual([{ type: "sleep", sleep_ms: 5000 }, { type: "reload" }, { type: "download" }]);
+});
+
 test("ignores a recording status that answers after the demonstration finished", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=edit-raw-demo-late-poll`);
   const setup = page.frameLocator("iframe");
@@ -3298,9 +3351,9 @@ function hostPage(url: string, scenario: string | null): string {
     } else if (request.method === "loadAgent") {
       if (scenario === "edit-missing") { fail("This agent no longer exists. It may have been deleted."); return; }
       if (!window.__loadAvailable) { fail("Loading failed. Try again."); return; }
-      send({ agentId: "agent-1", name: editName, url: publishedDraft?.draft.url ?? "https://portal.example.test/reports", goal: publishedDraft?.draft.goal ?? "Download the monthly report.", steps: publishedDraft?.draft.steps ?? (scenario.startsWith("edit-raw") && scenario !== "edit-raw-empty" ? null : scenario === "edit-raw-empty" ? [] : editSteps), stages: publishedDraft?.config.stages ?? [{ type: "agent", prompt: scenario === "edit-raw-placeholders" ? "Sign in with $username and $otp. Open reports." : "Open reports", step_limit: 16 }, { type: "download" }, { type: "sleep", sleep_ms: 5000 }, { type: "reload" }], ...(scenario === "edit-old-host" ? {} : { credentials: { saved: savedCredentials } }), liveConfigId: "config-3", version: editVersion, internal, schedule: scenario === "edit-schedule" ? "Daily 09:00 UTC" : null, nextRunAt: scenario === "edit-schedule" ? "2026-10-02T09:00:00Z" : null });
+      send({ agentId: "agent-1", name: editName, url: publishedDraft?.draft.url ?? "https://portal.example.test/reports", goal: publishedDraft?.draft.goal ?? "Download the monthly report.", steps: publishedDraft?.draft.steps ?? (scenario.startsWith("edit-raw") && scenario !== "edit-raw-empty" ? null : scenario === "edit-raw-empty" ? [] : editSteps), stages: publishedDraft?.config.stages ?? (scenario === "edit-raw-no-agent-stages" ? [{ type: "sleep", sleep_ms: 5000 }, { type: "reload" }, { type: "download" }] : [{ type: "agent", prompt: scenario === "edit-raw-placeholders" ? "Sign in with $username and $otp. Open reports." : "Open reports", step_limit: 16 }, { type: "download" }, { type: "sleep", sleep_ms: 5000 }, { type: "reload" }]), ...(scenario === "edit-old-host" ? {} : { credentials: { saved: savedCredentials } }), liveConfigId: "config-3", version: editVersion, internal, schedule: scenario === "edit-schedule" ? "Daily 09:00 UTC" : null, nextRunAt: scenario === "edit-schedule" ? "2026-10-02T09:00:00Z" : null });
     } else if (request.method === "renameAgent") { window.__renameRequests.push(request.params.name); if (scenario === "edit-rename-error" && window.__renameRequests.length === 1) fail("Rename failed. Try again."); else { editName = request.params.name; send(null); }
-    } else if (request.method === "saveDraft") { window.__savedAgents.push(request.params); send({ draftId: "draft-1" });
+    } else if (request.method === "saveDraft") { window.__savedAgents.push(request.params); if (scenario === "edit-raw-demo-late-start-test") setTimeout(() => send({ draftId: "draft-1" }), 5_000); else send({ draftId: "draft-1" });
     } else if (request.method === "publishDraft") {
       window.__publishRequests.push(request.params);
       if (scenario === "edit-conflict" && !request.params.overwrite && !publishedConflict) { publishedConflict = true; send({ conflict: { updatedBy: "teammate@example.test", updatedAt: "2026-10-01T10:00:00Z" } }); }
@@ -3314,7 +3367,7 @@ function hostPage(url: string, scenario: string | null): string {
       savedCredentials = request.params.kinds;
       send({ saved: savedCredentials, ...(edit && scenario !== "edit-credentials-legacy-add" ? { changed: true } : {}) });
     } else if (request.method === "connectGoogle") { window.__googleRequests.push(request.params); send({ connected: !scenario.endsWith("cancel") });
-    } else if (request.method === "startRecording") { window.__startUrls.push(request.params.url); demoStarts += 1; if (scenario === "edit-raw-demo-start-fail" && demoStarts === 1) { fail("The browser could not be opened."); return; } if (edit ? recordingExists : recordingActive) { fail("Finish the current demonstration first."); return; } recordingActive = true; recordingExists = true; send({ id: "recording-1", status: "recording", liveViewUrl: "https://live.browserbase.com/session", liveViewSwitching: scenario.endsWith("window-switch"), steps: edit ? [] : steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
+    } else if (request.method === "startRecording") { window.__startUrls.push(request.params.url); demoStarts += 1; if (scenario === "edit-raw-demo-start-fail" && demoStarts === 1) { fail("The browser could not be opened."); return; } if (edit ? recordingExists : recordingActive) { if (scenario === "edit-raw-demo-late-start-cancel-fail") setTimeout(() => fail("Finish the current demonstration first."), 1500); else fail("Finish the current demonstration first."); return; } recordingActive = true; recordingExists = true; const started = { id: "recording-1", status: "recording", liveViewUrl: "https://live.browserbase.com/session", liveViewSwitching: scenario.endsWith("window-switch"), steps: edit ? [] : steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }; if (scenario.startsWith("edit-raw-demo-late-start")) setTimeout(() => send(started), 45_500); else send(started); }
     else if (scenario === "organized" && (request.method === "getRecording" || request.method === "stopRecording")) {
       // Polls: one while recording (download started), then completed; stop starts organizing; the next read has stages.
       window.__organizedReads = (window.__organizedReads ?? 0) + 1;
@@ -3347,7 +3400,7 @@ function hostPage(url: string, scenario: string | null): string {
       if (scenario === "edit-raw-demo-late-poll" && !stopping) setTimeout(() => send(reply), 2500); else send(reply);
     }
     else if (request.method === "getRecording" || request.method === "stopRecording") { if (request.method === "stopRecording") recordingActive = false; send({ id: "recording-1", status: request.method === "getRecording" && recordingActive ? "recording" : "stopped", liveViewUrl: request.method === "getRecording" && recordingActive ? "https://live.browserbase.com/session" : null, liveViewSwitching: scenario.endsWith("window-switch") && window.__liveViewSwitching, steps: edit ? (request.method === "stopRecording" ? redemonstrationSteps : []) : steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
-    else if (request.method === "cancelRecording") { demoCancels += 1; if (scenario === "edit-raw-demo-cancel-fail" && demoCancels === 1) { fail("The demonstration service did not respond."); return; } recordingActive = false; recordingExists = false; send(undefined); }
+    else if (request.method === "cancelRecording") { demoCancels += 1; if ((scenario === "edit-raw-demo-cancel-fail" || scenario === "edit-raw-demo-late-start-cancel-fail") && demoCancels === 1) { fail("The demonstration service did not respond."); return; } recordingActive = false; recordingExists = false; send(undefined); }
     else if (request.method === "saveAgent") { if (window.__savedSchedule || scenario === "rerun-save-rejection" && window.__savedAgents.length > 0) fail("This agent is scheduled. Edit it in agent settings."); else { window.__savedAgents.push(request.params); send({ id: "agent-1" }); } }
     else if (request.method === "testAgent") { testAttempts += 1; window.__testArguments.push(request.params.arguments); exportSentAt = Date.now(); if (scenario === "email-cutoff" && window.__testArguments.length > 1) setTimeout(() => send({ id: "run-" + window.__testArguments.length }), 1000); else send({ id: "run-" + window.__testArguments.length }); }
     else if (request.method === "stopTest") {

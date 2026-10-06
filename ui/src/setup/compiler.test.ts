@@ -766,9 +766,11 @@ test("an edit draft replaces only the agent instructions and keeps the agent's o
     { live: [{ ...legacy, prompt: "Previously compiled" }, { type: "download" }, { type: "sleep", sleep_ms: 5000 }, { type: "reload" }], stages: [agentStage, { type: "download" }, { type: "sleep", sleep_ms: 5000 }, { type: "reload" }] },
     // Stages before the first agent stay first; later legacy agent prompts are not copied.
     { live: [{ type: "reload" }, legacy, { ...legacy, prompt: "Second old prompt" }, { type: "download" }], stages: [{ type: "reload" }, agentStage, { type: "download" }] },
-    // Nothing else to keep, or no agent stage to replace: the compiled default.
+    // Nothing else to keep uses the compiled default.
     { live: [legacy], stages: compiled.stages },
-    { live: [{ type: "download" }], stages: compiled.stages },
+    { live: [{ type: "download" }], stages: [agentStage, { type: "download" }] },
+    { live: [{ type: "sleep", sleep_ms: 5000 }, { type: "reload" }, { type: "download" }], stages: [agentStage, { type: "sleep", sleep_ms: 5000 }, { type: "reload" }, { type: "download" }] },
+    { live: [], stages: compiled.stages },
   ];
   for (const { live, stages } of cases) {
     const config = compileEditAgent(draft, live);

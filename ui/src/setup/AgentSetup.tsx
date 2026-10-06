@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { applyOrganizedSteps, compileAgent, compileEditAgent, credentialKinds, dateRuleChoices, dateRuleLabel, doneWhenOptions, draftChanges, findUnambiguousEmailStep, formatDate, groupSteps, mergeDateSteps, openQuestions, replaceStepsFrom, requiredCredentials, resolveDateRule, type CredentialKind, type DateRule, type DoneWhen, type SetupDraft, type SetupStep } from "./compiler";
 import { browserbaseLiveViewUrl, createHostBridge, HostRequestTimeoutError, type EditAgent as EditAgentData, type HostBridge, type RecordedDownload, type Recording } from "./host";
 import { HelpTip } from "./HelpTip";
@@ -734,6 +734,7 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
   const [renameError, setRenameError] = useState<string | null>(null);
   const modalRef = useRef<HTMLDivElement>(null);
   const recordingRef = useRef<Recording | null>(null);
+  const [lateRecording, setLateRecording] = useState<Recording | null>(null);
   // Set synchronously so a second click, or a poll reply, cannot slip in before the button re-renders disabled.
   const demoActionRef = useRef(false);
   const mountedRef = useRef(true);
@@ -836,6 +837,7 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
   }, [testRun?.id]);
   useEffect(() => { recordingRef.current = recording; }, [recording]);
   useEffect(() => () => { const current = recordingRef.current; if (current?.status === "recording") void bridge.request("cancelRecording", { id: current.id }).catch(() => undefined); }, [bridge]);
+  useEffect(() => () => { if (!mountedRef.current && lateRecording !== null) void bridge.request("cancelRecording", { id: lateRecording.id }).catch(() => undefined); }, [bridge, lateRecording]);
   useEffect(() => {
     if (!dialogOpen) return;
     const trigger = dialogTriggerRef.current;
@@ -872,13 +874,13 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
     (fieldRefs.current[key] ?? changesHeadingRef.current)?.focus();
   }, [draft, stages, stageLimitInputs]);
 
-  function showRecording(next: Recording | null): void {
+  const showRecording = useCallback((next: Recording | null): void => {
     recordingRef.current = next;
     setRecording(next);
-  }
+  }, []);
   // Closes a demonstration on the host without touching the draft: on Cancel, or when it cannot be used. Until the
   // host confirms, the demonstration stays on screen with Cancel demonstration, so a failure can be retried.
-  async function closeDemonstration(target: Recording, problem: string | null): Promise<void> {
+  const closeDemonstration = useCallback(async (target: Recording, problem: string | null): Promise<void> => {
     demoActionRef.current = true; setDemoAction("cancel"); setBusy(true); setError(null); setNotice(null);
     if (problem !== null) setDemoProblem(`${problem} Your instructions are unchanged. Start a new demonstration to try again.`);
     showRecording(target);
@@ -888,7 +890,12 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
       if (problem === null) setNotice("Demonstration canceled. Your instructions are unchanged.");
     } catch (e) { setError(`The demonstration could not be closed. ${errorMessage(e)} Select Cancel demonstration to try again.`); }
     finally { demoActionRef.current = false; setDemoAction(null); setBusy(false); }
-  }
+  }, [bridge, showRecording]);
+  useEffect(() => {
+    if (lateRecording === null || busy || demoAction !== null) return;
+    setLateRecording(null);
+    void closeDemonstration(lateRecording, null);
+  }, [lateRecording, busy, demoAction, closeDemonstration]);
 
   if (agent === null || draft === null) return <main className="agent-setup edit-agent">
     <header className="setup-header edit-header"><h1>Edit web agent</h1></header>
@@ -904,7 +911,7 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
   // Written instructions stay editable as text until a new demonstration replaces them with steps.
   const rawView = raw && !demonstrated;
   // The agent's other stages, which a demonstration keeps around its new instructions.
-  const keptStages = agent.stages.some((stage) => isObject(stage) && stage.type === "agent") ? agent.stages.filter((stage) => !isObject(stage) || stage.type !== "agent") : [];
+  const keptStages = agent.stages.filter((stage) => !isObject(stage) || stage.type !== "agent");
   const changes = raw && demonstrated
     ? [...draftChanges({ ...draft, steps: [] }, live), { key: "demonstration", label: "Instructions", from: "Written agent instructions", to: `New demonstration, ${draft.steps.length} ${draft.steps.length === 1 ? "step" : "steps"}` }]
     : [...draftChanges(draft, live), ...(raw ? rawStageChanges(stages, agent.stages) : [])];
@@ -916,7 +923,7 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
   const succeeded = testRun?.status === "succeeded";
   const recordingActive = recording?.status === "recording";
   // Running, or finished without usable steps and not yet closed on the host.
-  const demonstrating = recording !== null && recording.id !== appliedRecordingId;
+  const demonstrating = lateRecording !== null || recording !== null && recording.id !== appliedRecordingId;
   const readOnly = agent.internal || busy || dialogOpen || demonstrating || testRun?.status === "running";
   const canPublish = !agent.internal && changed && checked && succeeded && !demonstrating;
   const openDateQuestionCount = openQuestions(draft, new Date()).length;
@@ -1034,7 +1041,11 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
         showRecording(null); setAppliedRecordingId(null);
       }
       const started = await bridge.request("startRecording", { url: draft.url }, {
-        onLateResult: (late) => { if (isRecording(late)) void bridge.request("cancelRecording", { id: late.id }).catch(() => undefined); },
+        onLateResult: (late) => {
+          if (!isRecording(late)) return;
+          if (!mountedRef.current) { void bridge.request("cancelRecording", { id: late.id }).catch(() => undefined); return; }
+          setLateRecording(late);
+        },
       });
       if (!mountedRef.current) { void bridge.request("cancelRecording", { id: started.id }).catch(() => undefined); return; }
       showRecording(started);
@@ -1149,10 +1160,10 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
   };
 
   const demonstrationControls = <div className="redemo-controls">
-    {demonstrating ? <div className="edit-actions">
+    {recording !== null && recording.id !== appliedRecordingId ? <div className="edit-actions">
       {recordingActive && <button className="button button-primary" disabled={busy} aria-busy={demoAction === "finish"} onClick={() => void finishDemonstration()}>{demoAction === "finish" ? "Finishing…" : "Finish demonstration"}</button>}
       <button className="button button-quiet" disabled={busy} aria-busy={demoAction === "cancel"} onClick={() => void closeDemonstration(recording, null)}>{demoAction === "cancel" ? "Canceling…" : "Cancel demonstration"}</button>
-    </div> : <div className="edit-actions">
+    </div> : !demonstrating && <div className="edit-actions">
       {!rawView && <label>Replace from step<select aria-label="Replace from step" value={selectedFromStep} disabled={readOnly || draft.steps.length === 0} onChange={(e) => setFromStep(Number(e.target.value))}>{draft.steps.map((_, index) => <option key={index} value={index}>{index + 1}</option>)}</select></label>}
       <button className="button button-quiet" disabled={readOnly} aria-busy={demoAction === "start"} onClick={() => void startDemonstration()}>{demoAction === "start" ? "Opening the browser…" : "New demonstration"}</button>
     </div>}
