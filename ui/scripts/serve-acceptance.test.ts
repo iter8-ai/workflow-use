@@ -1,0 +1,109 @@
+import { strict as assert } from "node:assert";
+import { createServer } from "node:http";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
+import { afterEach, describe, it } from "node:test";
+
+const run = promisify(execFile);
+const launcher = fileURLToPath(new URL("./serve-acceptance.mjs", import.meta.url));
+const cwd = fileURLToPath(new URL("..", import.meta.url));
+const children = new Set<ChildProcess>();
+interface Receipt { url: string; sha: string; trackedDirty: boolean; port: number }
+
+function own(child: ChildProcess) {
+  children.add(child);
+  child.once("exit", () => children.delete(child));
+  return child;
+}
+
+async function start(env: NodeJS.ProcessEnv = {}, args: string[] = []) {
+  const child = own(spawn(process.execPath, [launcher, ...args], {
+    cwd, env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"],
+  }));
+  assert.ok(child.stdout);
+  assert.ok(child.stderr);
+  const receipt = await new Promise<Receipt>((resolve, reject) => {
+    const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("launcher readiness timeout")); }, 15_000);
+    child.once("error", (error) => { clearTimeout(timer); reject(error); });
+    child.once("exit", (code) => { clearTimeout(timer); reject(new Error(`launcher exited before ready: ${code}`)); });
+    let text = "";
+    child.stdout?.on("data", (chunk: Buffer) => {
+      text += chunk.toString();
+      if (!text.includes("\n")) return;
+      clearTimeout(timer);
+      try {
+        const value: unknown = JSON.parse(text.split("\n")[0] ?? "");
+        assert.ok(typeof value === "object" && value !== null);
+        assert.ok("url" in value && typeof value.url === "string");
+        assert.ok("sha" in value && typeof value.sha === "string");
+        assert.ok("trackedDirty" in value && typeof value.trackedDirty === "boolean");
+        assert.ok("port" in value && typeof value.port === "number");
+        resolve({ url: value.url, sha: value.sha, trackedDirty: value.trackedDirty, port: value.port });
+      } catch (error) { child.kill("SIGKILL"); reject(error); }
+    });
+    child.stderr?.resume();
+  });
+  return { child, receipt };
+}
+
+async function stop(child: ChildProcess) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(() => child.kill("SIGKILL"), 5_000);
+    child.once("exit", () => { clearTimeout(timer); resolve(); });
+    child.kill("SIGTERM");
+  });
+}
+
+afterEach(async () => { await Promise.all([...children].map(stop)); });
+
+describe("serve-acceptance public CLI", { timeout: 30_000 }, () => {
+  it("serves the real UI, boundary-fake host, provenance, and audit DOM", async () => {
+    const { receipt } = await start();
+    assert.match(receipt.url, /^http:\/\/127\.0\.0\.1:\d+$/);
+    assert.match(receipt.sha, /^[0-9a-f]{40}$/);
+    assert.equal(receipt.port, Number(new URL(receipt.url).port));
+    const host = await fetch(`${receipt.url}/host?scenario=success`);
+    const html = await host.text();
+    assert.equal(host.status, 200);
+    assert.match(html, /<iframe[^>]+title="Agent setup"/);
+    assert.match(html, /parentOrigin=/);
+    assert.match(html, /id="acceptance-audit"/);
+    const ui = await fetch(`${receipt.url}/?parentOrigin=${encodeURIComponent(receipt.url)}`);
+    assert.equal(ui.status, 200);
+    assert.match(await ui.text(), /src="\/src\//);
+    const provenance = await fetch(`${receipt.url}/__acceptance`);
+    assert.equal(provenance.status, 200);
+    assert.deepEqual(await provenance.json(), { sha: receipt.sha, trackedDirty: receipt.trackedDirty, port: receipt.port, boundary: "fake-fixture-evidence" });
+  });
+
+  it("refuses a supplied SHA mismatch and a colliding private port", async () => {
+    await assert.rejects(() => start({ EXPECTED_SHA: "0".repeat(40) }));
+    const first = await start({}, ["--port", "0"]);
+    const second = own(spawn(process.execPath, [launcher, "--port", String(first.receipt.port)], { cwd, env: process.env, stdio: "ignore" }));
+    const code = await new Promise<number | null>((resolve, reject) => {
+      second.once("error", reject);
+      second.once("exit", resolve);
+    });
+    assert.notEqual(code, 0);
+  });
+
+  it("serves an unknown scenario as a boundary-fake fixture", async () => {
+    const { receipt } = await start();
+    const response = await fetch(`${receipt.url}/host?scenario=unknown-fixture`);
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), /fake-fixture-evidence/);
+  });
+
+  it("releases its port on SIGTERM without changing tracked status", async () => {
+    const before = (await run("git", ["status", "--porcelain", "--untracked-files=no"], { cwd })).stdout;
+    const first = await start();
+    await stop(first.child);
+    const probe = createServer();
+    await new Promise<void>((resolve, reject) => probe.once("error", reject).listen(first.receipt.port, "127.0.0.1", () => resolve()));
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+    const after = (await run("git", ["status", "--porcelain", "--untracked-files=no"], { cwd })).stdout;
+    assert.equal(after, before);
+  });
+});

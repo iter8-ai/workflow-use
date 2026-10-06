@@ -12,6 +12,8 @@
     "type-gen-update": "rm -rf ./src/lib/api/apigen.d.ts && npm run get-openapi && npm run type-gen",
     "postinstall": "test -n \"$NOYARNPOSTINSTALL\" || npm run type-gen",
     "test": "tsx --test src/setup/compiler.test.ts src/setup/TestWorkbench.test.tsx src/setup/RunView.test.tsx",
+    "test:acceptance-server": "tsx --test scripts/serve-acceptance.test.ts",
+    "serve:acceptance": "node scripts/serve-acceptance.mjs",
     "test:e2e": "playwright test"
   },
   "dependencies": {
