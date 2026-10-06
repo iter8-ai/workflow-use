@@ -2,7 +2,7 @@
 
 This public fork adds a demonstration-based setup flow for computer-use agents. Users describe a task, demonstrate a task in a remote browser, edit the captured steps, and test before scheduling.
 
-For structured agents, Review and Edit use the same Instructions editor. Steps are grouped by stage, with controls to insert, remove, and reorder them or add an optional expected outcome.
+For structured agents, Review and Edit use the same Instructions editor. You can rename stages, insert, remove, or reorder steps, and add an optional expected outcome. In Edit, a stage rename appears as one entry in Changes. Its Revert button restores the published stage names while keeping other edits to those steps.
 
 The default `ui/` app is an embedded authoring interface that also lets users inspect an existing agent run without changing it. See [the host contract](docs/agent-setup-host.md) to open a run for inspection. Its host handles authentication, agent storage, test execution, and scheduling through an origin-checked message bridge. The separate `recording/` service captures browser actions. It does not run agents. Compiled configurations select the computer-use engine explicitly.
 
