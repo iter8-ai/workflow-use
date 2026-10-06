@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -18,6 +19,31 @@ class DeferredSession:
 
     async def close(self) -> None:
         self.closed = True
+
+
+class ContextSession(DeferredSession):
+    context_id = "private-context"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.deleted = False
+
+    async def google_signed_in(self) -> bool:
+        return True
+
+    async def delete_context(self) -> None:
+        assert self.closed
+        self.deleted = True
+
+
+class ContextProvider:
+    def __init__(self) -> None:
+        self.sessions: list[ContextSession] = []
+
+    async def create(self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]) -> BrowserSession:
+        session = ContextSession()
+        self.sessions.append(session)
+        return session
 
 
 class DeferredProvider(BrowserProvider):
@@ -190,3 +216,31 @@ async def test_startup_does_not_append_the_configured_url_after_browser_events()
     assert recording.steps[-1].url == "https://example.com/"
     assert len(recording.steps) == 4
     await service.close()
+
+
+@pytest.mark.asyncio
+async def test_sweep_deletes_unclaimed_google_context_after_one_hour() -> None:
+    provider = ContextProvider()
+    service = RecordingService(provider)
+    owner = RecordingOwner("iter7", "owner@iter7.example")
+    recording = await service.create(owner, "https://example.com")
+    await service.stop(recording.id, owner)
+    assert not provider.sessions[0].deleted
+    recording.stopped_at = datetime.now(UTC) - timedelta(minutes=61)
+    await service.cleanup()
+    assert provider.sessions[0].deleted
+
+
+@pytest.mark.asyncio
+async def test_shutdown_deletes_unclaimed_but_not_claimed_contexts() -> None:
+    provider = ContextProvider()
+    service = RecordingService(provider)
+    owner = RecordingOwner("iter7", "owner@iter7.example")
+    unclaimed = await service.create(owner, "https://example.com")
+    claimed = await service.create(owner, "https://example.org")
+    await service.stop(unclaimed.id, owner)
+    await service.stop(claimed.id, owner)
+    assert await service.claim_google_context(claimed.id, owner) == "private-context"
+    await service.close()
+    assert provider.sessions[0].deleted
+    assert not provider.sessions[1].deleted

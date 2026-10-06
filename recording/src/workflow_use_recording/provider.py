@@ -8,7 +8,13 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from .capture import CAPTURE_SCRIPT, install_sign_in_capture, page_event
-from .security import is_google_sign_in, is_public_http_url, resolves_to_public_host, safe_public_url
+from .security import (
+    has_google_session,
+    is_google_sign_in,
+    is_public_http_url,
+    resolves_to_public_host,
+    safe_public_url,
+)
 
 EventSink = Callable[[dict[str, Any]], Awaitable[None]]
 logger = logging.getLogger(__name__)
@@ -18,6 +24,10 @@ class BrowserSession(Protocol):
     live_view_url: str | None
 
     async def close(self) -> None: ...
+
+    async def google_signed_in(self) -> bool: ...
+
+    async def delete_context(self) -> None: ...
 
 
 class BrowserProvider(Protocol):
@@ -34,6 +44,8 @@ class PlaywrightRecordingSession:
         runtime: Any,
         live_view_url: str | None,
         release: Callable[[], Awaitable[None]] | None = None,
+        context_id: str | None = None,
+        delete_context: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         self.browser = browser
         self.runtime = runtime
@@ -43,6 +55,8 @@ class PlaywrightRecordingSession:
         # its own live view. The person demonstrating sees the newest one still open.
         self._opened_tabs: list[tuple[Any, str]] = []
         self._release = release
+        self.context_id = context_id
+        self._delete_context = delete_context
         self._tasks: set[asyncio.Task[None]] = set()
         # Waits on downloads still in progress; nothing to report once the browser is gone.
         self._watchers: set[asyncio.Task[None]] = set()
@@ -68,6 +82,13 @@ class PlaywrightRecordingSession:
         task = asyncio.create_task(coroutine)
         self._watchers.add(task)
         task.add_done_callback(self._watchers.discard)
+
+    async def google_signed_in(self) -> bool:
+        return has_google_session(await self.browser.contexts[0].cookies())
+
+    async def delete_context(self) -> None:
+        if self.context_id is not None and self._delete_context is not None:
+            await self._delete_context(self.context_id)
 
     async def close(self) -> None:
         if self._browser_closed and self._runtime_stopped and (self._release is None or self._released):
@@ -108,6 +129,9 @@ async def _configure_context(context: Any, on_event: EventSink) -> None:
 
 
 async def _install_page_events(session: PlaywrightRecordingSession, page: Any, on_event: EventSink) -> None:
+    if page.is_closed():
+        return
+
     def on_navigation(frame: Any) -> None:
         # Embedded documents load on their own; they are not instructions to navigate the browser.
         # Their demonstrated interactions still arrive through the context's capture binding.
@@ -116,12 +140,18 @@ async def _install_page_events(session: PlaywrightRecordingSession, page: Any, o
         session.track(on_event({"type": "navigation", "url": frame.url}))
 
     def on_download(download: Any) -> None:
+        if is_google_sign_in(page.url):
+            return
         session.watch(_report_download(download, on_event))
 
     page.on("framenavigated", on_navigation)
     # The live view shows no download bar, so the recorder reports each download to the person demonstrating.
     page.on("download", on_download)
-    await install_sign_in_capture(page.context, page, lambda event: session.track(on_event(event)))
+    try:
+        await install_sign_in_capture(page.context, page, lambda event: session.track(on_event(event)))
+    except Exception:
+        if not page.is_closed():
+            raise
 
 
 async def _report_download(download: Any, on_event: EventSink) -> None:
@@ -184,19 +214,23 @@ class BrowserbaseProvider:
         from playwright.async_api import async_playwright
 
         client = AsyncBrowserbase()
-        created = await client.sessions.create(
-            project_id=self.project_id,
-            keep_alive=True,
-            region=self.region,
-            api_timeout=max(self.timeout_seconds, 60),
-            browser_settings={
-                "viewport": {"width": 1280, "height": 720},
-                "record_session": False,
-                "log_session": False,
-            },
-        )
+        context_id: str | None = None
+        created: Any | None = None
         runtime: Any | None = None
         try:
+            context_id = (await client.contexts.create(project_id=self.project_id)).id
+            created = await client.sessions.create(
+                project_id=self.project_id,
+                keep_alive=True,
+                region=self.region,
+                api_timeout=max(self.timeout_seconds, 60),
+                browser_settings={
+                    "viewport": {"width": 1280, "height": 720},
+                    "record_session": False,
+                    "log_session": False,
+                    "context": {"id": context_id, "persist": True},
+                },
+            )
             debug = await client.sessions.debug(created.id)
             runtime = await async_playwright().start()
             browser = await runtime.chromium.connect_over_cdp(created.connect_url)
@@ -208,11 +242,23 @@ class BrowserbaseProvider:
                 await client.sessions.update(created.id, project_id=self.project_id, status="REQUEST_RELEASE")
                 await client.__aexit__(None, None, None)
 
+            async def delete_context(context_id: str) -> None:
+                deletion_client = AsyncBrowserbase()
+                try:
+                    await deletion_client.delete(f"/v1/contexts/{context_id}", cast_to=object, body={})
+                except Exception as error:
+                    if getattr(error, "status_code", None) != 404:
+                        raise
+                finally:
+                    await deletion_client.__aexit__(None, None, None)
+
             session = PlaywrightRecordingSession(
                 browser=browser,
                 runtime=runtime,
                 live_view_url=getattr(debug, "debugger_fullscreen_url", None),
                 release=release,
+                context_id=context_id,
+                delete_context=delete_context,
             )
             context = contexts[0]
             await _configure_context(context, on_event)
@@ -229,9 +275,25 @@ class BrowserbaseProvider:
             return session
         except BaseException:
             if runtime is not None:
-                await runtime.stop()
-            await client.sessions.update(created.id, project_id=self.project_id, status="REQUEST_RELEASE")
-            await client.__aexit__(None, None, None)
+                try:
+                    await runtime.stop()
+                except Exception as error:
+                    logger.warning("recording_runtime_cleanup_failed", extra={"error_type": type(error).__name__})
+            if created is not None:
+                try:
+                    await client.sessions.update(created.id, project_id=self.project_id, status="REQUEST_RELEASE")
+                except Exception as error:
+                    logger.warning("recording_session_cleanup_failed", extra={"error_type": type(error).__name__})
+            if context_id is not None:
+                try:
+                    await client.delete(f"/v1/contexts/{context_id}", cast_to=object, body={})
+                except Exception as error:
+                    if getattr(error, "status_code", None) != 404:
+                        logger.warning("recording_context_cleanup_failed", extra={"error_type": type(error).__name__})
+            try:
+                await client.__aexit__(None, None, None)
+            except Exception as error:
+                logger.warning("recording_client_cleanup_failed", extra={"error_type": type(error).__name__})
             raise
 
 

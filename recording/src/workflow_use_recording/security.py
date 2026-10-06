@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import socket
+import time
+from typing import Any
 from urllib.parse import urlsplit
 
 
@@ -27,11 +29,39 @@ def is_public_http_url(url: str) -> bool:
 
 def is_google_sign_in(url: str) -> bool:
     """Google's own sign-in pages, e.g. the window a site's "Continue with Google" button opens."""
+    if not isinstance(url, str):
+        return False
     try:
         hostname = urlsplit(url).hostname
     except ValueError:
         return False
-    return (hostname or "").rstrip(".").lower() == "accounts.google.com"
+    host = (hostname or "").rstrip(".").lower()
+    parts = host.split(".")
+    return host == "accounts.youtube.com" or (
+        parts[:2] == ["accounts", "google"]
+        and (
+            (len(parts) == 3 and (parts[2] == "com" or len(parts[2]) == 2))
+            or (len(parts) == 4 and len(parts[2]) >= 2 and len(parts[3]) == 2)
+        )
+        and all(part.isascii() and part.isalpha() for part in parts[2:])
+    )
+
+
+def has_google_session(cookies: list[dict[str, Any]]) -> bool:
+    """Copy of FIRE web_agent/adapters/google_session.py GoogleSessionConnections.complete() predicate."""
+    now = time.time()
+    return any(
+        cookie.get("name") in {"SID", "__Secure-1PSID"}
+        and cookie.get("domain") in {"google.com", ".google.com"}
+        and cookie.get("path") == "/"
+        and (cookie.get("name") != "__Secure-1PSID" or cookie.get("secure") is True)
+        and isinstance(cookie.get("value"), str)
+        and bool(cookie["value"])
+        and isinstance(cookie.get("expires"), (int, float))
+        and not isinstance(cookie["expires"], bool)
+        and (cookie["expires"] == -1 or cookie["expires"] > now)
+        for cookie in cookies
+    )
 
 
 def safe_public_url(url: str) -> str | None:

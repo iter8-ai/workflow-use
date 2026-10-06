@@ -113,6 +113,10 @@ class CreateRecordingRequest(BaseModel):
     url: str
 
 
+class RecordingGoogle(BaseModel):
+    signed_in: bool = Field(serialization_alias="signedIn")
+
+
 class RecordingResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -125,6 +129,7 @@ class RecordingResponse(BaseModel):
     downloads: list[RecordedDownload] = Field(default_factory=list)
     # True while the finished steps are being grouped into stages and reworded; poll until it is false.
     organizing: bool = False
+    google: RecordingGoogle | None = None
 
 
 class CapturedCredentials(BaseModel):

@@ -4,16 +4,16 @@ import asyncio
 import logging
 import re
 from collections import OrderedDict
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 from uuid import uuid4
 
-from .models import RecordedDownload, RecordingResponse, SetupStep, StepDate
+from .models import RecordedDownload, RecordingGoogle, RecordingResponse, SetupStep, StepDate
 from .organize import OrganizedStep, StepOrganizer
 from .provider import BrowserProvider, BrowserSession
-from .security import safe_public_url
+from .security import is_google_sign_in, safe_public_url
 
 MAX_STEPS = 200
 MAX_FIELD_LENGTH = 2000
@@ -65,6 +65,10 @@ class Recording:
     close_requested: Literal["stopped", "expired"] | None = None
     closing: bool = False
     creating: bool = True
+    google_signed_in: bool = False
+    stopped_at: datetime | None = None
+    context_id: str | None = field(default=None, repr=False)
+    context_delete: Callable[[], Awaitable[None]] | None = field(default=None, repr=False)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
@@ -92,7 +96,7 @@ class RecordingService:
         if safe_url is None:
             raise InvalidRecordingUrl("The recording URL must be a public HTTP(S) URL.")
         await self.cleanup()
-        self._evict_completed()
+        await self._evict_completed()
         if len(self._recordings) >= self.max_sessions:
             raise RuntimeError("Recording capacity is full. Stop an existing recording first.")
 
@@ -146,6 +150,7 @@ class RecordingService:
         if recording is None:
             return False
         await self._stop(recording, expired=False)
+        await self._delete_context(recording)
         task = self._organizing.pop(recording_id, None)
         if task is not None:
             task.cancel()
@@ -175,6 +180,8 @@ class RecordingService:
                         recording.credentials[kind] = secret
                     else:
                         recording.credentials.pop(kind, None)
+                return
+            if event.get("type") == "navigation" and is_google_sign_in(event.get("url", "")):
                 return
             if event.get("type") == "download":
                 self._record_download(recording, event)
@@ -273,6 +280,8 @@ class RecordingService:
                 # Values nobody collected do not outlive the recording.
                 recording.credentials = {}
             if recording.status != "recording":
+                if recording.stopped_at and now >= recording.stopped_at + timedelta(minutes=60):
+                    await self._delete_context(recording)
                 continue
             requested = recording.close_requested
             if requested is None and now < recording.expires_at:
@@ -291,15 +300,41 @@ class RecordingService:
         for recording in list(self._recordings.values()):
             try:
                 await self._stop(recording, expired=recording.status == "recording")
+                await self._delete_context(recording)
             except Exception:
                 logger.warning("recording_shutdown_close_failed")
 
-    def _evict_completed(self) -> None:
+    async def _evict_completed(self) -> None:
         while len(self._recordings) >= self.max_sessions:
             recording_id, oldest = next(iter(self._recordings.items()))
             if oldest.status == "recording":
                 return
+            await self._delete_context(oldest)
             self._recordings.pop(recording_id)
+
+    async def claim_google_context(self, recording_id: str, owner: RecordingOwner) -> str | None:
+        recording = await self.get(recording_id, owner)
+        if recording is None:
+            return None
+        async with recording.lock:
+            if self._recordings.get(recording_id) is not recording or recording.status == "recording":
+                return ""
+            if not recording.google_signed_in or recording.context_id is None:
+                return ""
+            context_id, recording.context_id = recording.context_id, None
+            recording.context_delete = None
+            return context_id
+
+    async def _delete_context(self, recording: Recording) -> None:
+        async with recording.lock:
+            if recording.context_id is None or recording.context_delete is None:
+                return
+            try:
+                await recording.context_delete()
+            except Exception as error:
+                logger.warning("recording_context_cleanup_failed", extra={"error_type": type(error).__name__})
+            recording.context_id = None
+            recording.context_delete = None
 
     async def _stop(self, recording: Recording, *, expired: bool) -> None:
         async with recording.lock:
@@ -318,6 +353,10 @@ class RecordingService:
                 return
             recording.closing = True
         try:
+            try:
+                signed_in = await browser.google_signed_in()
+            except Exception:
+                signed_in = False
             await browser.close()
         except BaseException:
             async with recording.lock:
@@ -325,11 +364,15 @@ class RecordingService:
             raise
         async with recording.lock:
             recording.browser = None
+            recording.google_signed_in = signed_in
+            recording.stopped_at = datetime.now(UTC)
             recording.status = recording.close_requested or ("expired" if expired else "stopped")
             recording.close_requested = None
             recording.closing = False
             if recording.status == "expired":
                 recording.credentials = {}
+        if not signed_in:
+            await self._delete_context(recording)
 
     async def _attach_browser(self, recording: Recording, browser: BrowserSession) -> bool:
         """Attach a newly created browser only while its recording remains live."""
@@ -343,11 +386,18 @@ class RecordingService:
                 close_detached_browser = True
             else:
                 recording.browser = browser
+                recording.context_id = getattr(browser, "context_id", None)
+                if recording.context_id is not None:
+                    recording.context_delete = browser.delete_context
                 if recording.close_requested is None and datetime.now(UTC) >= recording.expires_at:
                     recording.close_requested = "expired"
                 stop_after_attach = recording.close_requested is not None
         if close_detached_browser:
             await browser.close()
+            try:
+                await browser.delete_context()
+            except Exception as error:
+                logger.warning("recording_context_cleanup_failed", extra={"error_type": type(error).__name__})
             return True
         if not stop_after_attach:
             return False
@@ -368,6 +418,7 @@ class RecordingService:
             blocked_reason=recording.blocked_reason,
             downloads=recording.downloads,
             organizing=recording.organizing,
+            google=None if recording.status == "recording" else RecordingGoogle(signed_in=recording.google_signed_in),
         )
 
 

@@ -122,6 +122,18 @@ def create_app(provider: BrowserProvider, config: RecordingConfig, organizer: St
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording not found.")
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+    @app.post("/recordings/{recording_id}/google-context")
+    async def claim_google_context(recording_id: str, recording_owner: RecordingOwner = Depends(owner)) -> JSONResponse:
+        try:
+            context_id = await service.claim_google_context(recording_id, recording_owner)
+        except Exception:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=SERVICE_UNAVAILABLE) from None
+        if context_id is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording not found.")
+        if not context_id:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="google_context_unavailable")
+        return JSONResponse(content={"contextId": context_id}, headers={"Cache-Control": "no-store"})
+
     return app
 
 

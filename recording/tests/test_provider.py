@@ -17,6 +17,9 @@ class FakePage:
     def on(self, _event: str, _callback: Any) -> None:
         pass
 
+    def is_closed(self) -> bool:
+        return False
+
     async def goto(self, url: str, **_kwargs: Any) -> None:
         self.goto_urls.append(url)
 
@@ -40,6 +43,9 @@ class FakeContext:
 
     async def new_page(self) -> FakePage:
         return self._page
+
+    async def cookies(self) -> list[dict[str, Any]]:
+        return []
 
 
 class FakeBrowser:
@@ -88,7 +94,12 @@ async def test_browserbase_session_disables_provider_recording_and_logs(monkeypa
     class FakeAsyncBrowserbase:
         def __init__(self) -> None:
             self.sessions = FakeSessions()
+            self.contexts = SimpleNamespace(create=self.create_context)
             clients.append(self)
+
+        async def create_context(self, **kwargs: Any) -> Any:
+            assert kwargs == {"project_id": "project-1"}
+            return SimpleNamespace(id="context-secret")
 
         async def __aexit__(self, _type: Any, _value: Any, _traceback: Any) -> None:
             pass
@@ -114,6 +125,7 @@ async def test_browserbase_session_disables_provider_recording_and_logs(monkeypa
                 "viewport": {"width": 1280, "height": 720},
                 "record_session": False,
                 "log_session": False,
+                "context": {"id": "context-secret", "persist": True},
             },
         }
     ]
@@ -122,12 +134,66 @@ async def test_browserbase_session_disables_provider_recording_and_logs(monkeypa
     await session.close()
 
 
+@pytest.mark.asyncio
+async def test_browserbase_session_failure_deletes_the_new_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    deleted: list[tuple[str, dict[str, Any]]] = []
+
+    class FailingClient:
+        def __init__(self) -> None:
+            self.contexts = SimpleNamespace(create=self.create_context)
+            self.sessions = SimpleNamespace(create=self.create_session)
+
+        async def create_context(self, **_kwargs: Any) -> Any:
+            return SimpleNamespace(id="context-private")
+
+        async def create_session(self, **_kwargs: Any) -> Any:
+            raise RuntimeError("provider failure")
+
+        async def delete(self, path: str, **kwargs: Any) -> None:
+            deleted.append((path, kwargs))
+
+        async def __aexit__(self, *_args: Any) -> None:
+            pass
+
+    browserbase = ModuleType("browserbase")
+    browserbase.AsyncBrowserbase = FailingClient  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "browserbase", browserbase)
+    with pytest.raises(RuntimeError, match="provider failure"):
+        await BrowserbaseProvider(project_id="project-1").create("https://example.com", _ignore_event)
+    assert deleted == [("/v1/contexts/context-private", {"cast_to": object, "body": {}})]
+
+
 async def _ignore_event(_event: dict[str, Any]) -> None:
     pass
 
 
 async def _start(runtime: FakeRuntime) -> FakeRuntime:
     return runtime
+
+
+@pytest.mark.asyncio
+async def test_popup_closed_before_listener_attachment_is_ignored() -> None:
+    from workflow_use_recording.provider import PlaywrightRecordingSession, _install_page_events
+
+    class ClosingContext:
+        async def new_cdp_session(self, page: Any) -> Any:
+            page.closed = True
+            raise RuntimeError("Target.attachToTarget: No target with given id found")
+
+    class ClosingPage(FakePage):
+        def __init__(self) -> None:
+            super().__init__()
+            self.closed = False
+            self.context = ClosingContext()
+
+        def is_closed(self) -> bool:
+            return self.closed
+
+    page = ClosingPage()
+    session = PlaywrightRecordingSession(browser=object(), runtime=object(), live_view_url=None)
+    session.track(_install_page_events(session, page, _ignore_event))
+    await asyncio.gather(*session._tasks)
+    assert page.closed
 
 
 @pytest.mark.asyncio
@@ -258,8 +324,12 @@ async def test_browser_startup_records_only_top_level_navigation(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "google_host", ["accounts.google.com", "accounts.google.ee", "accounts.google.co.uk", "accounts.youtube.com"]
+)
 async def test_a_sign_in_window_the_website_opens_is_shown_in_the_live_view_and_not_recorded(
     monkeypatch: pytest.MonkeyPatch,
+    google_host: str,
 ) -> None:
     """Browserbase's live view shows one tab. When a site's "Continue with Google" opens a window, the person
     demonstrating must see that window, then the site again once it closes. Google's sign-in is not a step."""
@@ -272,14 +342,14 @@ async def test_a_sign_in_window_the_website_opens_is_shown_in_the_live_view_and_
         await context_route(context, pattern, handler, **kwargs)
 
         async def serve(route: Any) -> None:
-            if route.request.url.startswith("https://accounts.google.com/"):
+            if route.request.url.startswith(f"https://{google_host}/"):
                 body = """
                     <label>Email or phone <input type="email" autocomplete="username"></label>
                     <label>Password <input type="password" name="Passwd"></label>
                     <button>Next</button>
                 """
             else:
-                body = """<button onclick="window.open('https://accounts.google.com/signin', 'google', 'popup')">
+                body = f"""<button onclick="window.open('https://{google_host}/signin', 'google', 'popup')">
                     Continue with Google</button>"""
             await route.fulfill(content_type="text/html", body=body)
 
@@ -314,6 +384,13 @@ async def test_a_sign_in_window_the_website_opens_is_shown_in_the_live_view_and_
     class AsyncBrowserbase:
         def __init__(self) -> None:
             self.sessions = Sessions()
+            self.contexts = SimpleNamespace(create=self.create_context)
+
+        async def create_context(self, **_kwargs: Any) -> Any:
+            return SimpleNamespace(id="context-secret")
+
+        async def delete(self, _path: str, **_kwargs: Any) -> None:
+            pass
 
         async def __aexit__(self, *_args: Any) -> None:
             pass

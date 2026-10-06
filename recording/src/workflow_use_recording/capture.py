@@ -241,7 +241,7 @@ SIGN_IN_SCRIPT = r"""
     // A page can set a value and dispatch its own input event; only real user input counts.
     if (!event.isTrusted) return;
     // A Google account password is never kept: agents sign in with Google through a connected Google account.
-    if (location.hostname === "accounts.google.com") return;
+    if (/^accounts\.(?:google\.(?:com|[a-z]{2}|[a-z]{2,}\.[a-z]{2})|youtube\.com)\.?$/i.test(location.hostname)) return;
     const node = event.target;
     const kind = credentialKind(node);
     if (!kind || !reusableSignIn(node, kind)) return;
