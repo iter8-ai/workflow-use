@@ -24,12 +24,19 @@ export function undoDateMerge(steps: SetupStep[], id: string): SetupStep[] {
   return [...steps.slice(0, index), ...merged.parts, ...steps.slice(index + 1)];
 }
 
+function withStage(step: SetupStep, stage: SetupStep["stage"]): SetupStep {
+  if (step.stage === stage) return step;
+  const next = { ...step, stage };
+  if (step.uiMerged === true) Object.defineProperty(next, "uiMerged", { configurable: true, value: true, writable: true });
+  return next;
+}
+
 export function moveStep(steps: SetupStep[], index: number, delta: number): SetupStep[] {
   const next = [...steps]; const target = index + delta;
   if (target < 0 || target >= next.length) return next;
   const moved = next[index]!, neighbour = next[target]!;
   // A step moved past the edge of its stage joins the stage it moved into.
-  next[index] = neighbour; next[target] = moved.stage === neighbour.stage ? moved : { ...moved, stage: neighbour.stage };
+  next[index] = neighbour; next[target] = withStage(moved, neighbour.stage);
   return next;
 }
 
@@ -38,7 +45,7 @@ export function renameStageAt(steps: SetupStep[], index: number, name: string): 
   const stage = steps[index]?.stage;
   let end = index;
   while (end < steps.length && steps[end]!.stage === stage) end += 1;
-  return steps.map((step, i) => i >= index && i < end ? { ...step, stage: name } : step);
+  return steps.map((step, i) => i >= index && i < end ? withStage(step, name) : step);
 }
 
 /** Restore the published stage names of the stage holding a step, keeping every other edit to its steps. */
@@ -46,7 +53,7 @@ export function revertStage(steps: SetupStep[], live: SetupStep[], id: string): 
   const group = groupSteps(steps).find((item) => item.steps.some(({ step }) => step.id === id));
   return steps.map((step) => {
     const original = live.find((item) => item.id === step.id);
-    return original && group?.steps.some((item) => item.step.id === step.id) ? { ...step, stage: original.stage } : step;
+    return original && group?.steps.some((item) => item.step.id === step.id) ? withStage(step, original.stage) : step;
   });
 }
 

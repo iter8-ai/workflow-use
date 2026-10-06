@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { draftChanges, type SetupDraft, type SetupStep } from "./compiler";
+import { draftChanges, mergeDateSteps, type SetupDraft, type SetupStep } from "./compiler";
 import { StepEditor, type StepEditorProps } from "./StepEditor";
 import { combineDateSteps, moveStep, openQuestionCount, renameStageAt, revertStage, undoDateMerge } from "./stepList";
 
@@ -93,6 +93,46 @@ test("combines adjacent day, month and year fields into one date step and undoes
   assert.equal(combined[1]!.type, "date");
   assert.deepEqual(undoDateMerge(combined, combined[1]!.id), steps);
   assert.equal(combineDateSteps(steps, ["day", "year"]), steps);
+});
+
+test("keeps an untouched merged date undoable when another step moves and reverts", () => {
+  const parts: SetupStep[] = [
+    { id: "day", type: "input", description: "Enter the day", target: "day", value: "06", stage: "A" },
+    { id: "month", type: "input", description: "Enter the month", target: "month", value: "09", stage: "A" },
+    { id: "year", type: "input", description: "Enter the year", target: "year", value: "2026", stage: "A" },
+  ];
+  const merged = mergeDateSteps(parts)[0]!;
+  const ordinary = { ...download, stage: "B" };
+  const moved = moveStep([merged, ordinary], 1, -1);
+  const reverted = revertStage(moved, [merged, ordinary], ordinary.id);
+  assert.equal(reverted[1], merged);
+  assert.match(editor({ steps: reverted }), />Undo<\/button>/);
+  assert.deepEqual(undoDateMerge(reverted, merged.id), [reverted[0], ...parts]);
+});
+
+test("stage changes preserve a merged date's Undo, recorded parts and private marker", () => {
+  const parts: SetupStep[] = [
+    { id: "day", type: "input", description: "Enter the day", target: "day", value: "06", stage: "A", expectedOutcome: "Date is set" },
+    { id: "month", type: "input", description: "Enter the month", target: "month", value: "09", stage: "A" },
+    { id: "year", type: "input", description: "Enter the year", target: "year", value: "2026", stage: "A" },
+  ];
+  const merged = mergeDateSteps(parts)[0]!;
+  const ordinary = { ...download, stage: "B" };
+  const renamed = renameStageAt([merged, ordinary], 0, "Renamed")[0]!;
+  const restored = revertStage([renamed, ordinary], [merged, ordinary], merged.id)[0]!;
+  const movedDown = moveStep([merged, ordinary], 0, 1)[1]!;
+  const movedUp = moveStep([{ ...ordinary, stage: "A" }, movedDown], 1, -1)[0]!;
+  for (const date of [renamed, restored, movedDown, movedUp]) {
+    assert.equal(date.uiMerged, true);
+    assert.equal(date.expectedOutcome, "Date is set");
+    assert.equal(date.parts, merged.parts);
+    assert.match(editor({ steps: [date] }), />Undo<\/button>/);
+    assert.deepEqual(undoDateMerge([date], date.id), parts);
+    assert.equal(JSON.parse(JSON.stringify(date)).uiMerged, undefined);
+  }
+  assert.equal(renameStageAt([merged], 0, "A")[0], merged);
+  assert.equal(revertStage([merged], [merged], merged.id)[0], merged);
+  assert.equal(moveStep([merged, { ...ordinary, stage: "A" }], 0, 1)[1], merged);
 });
 
 const staged = (steps: SetupStep[]): SetupDraft => ({ name: "Statement", url: "https://portal.example.test", goal: "Download the statement.", steps, inputs: [] });
