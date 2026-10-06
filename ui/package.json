@@ -14,7 +14,7 @@
     "test": "tsx --test src/setup/compiler.test.ts src/setup/TestWorkbench.test.tsx src/setup/RunView.test.tsx",
     "test:local": "npm test && tsx --test src/setup/StepEditor.test.tsx",
     "test:e2e": "playwright test --grep-invert @local",
-    "test:e2e:local": "playwright test"
+    "test:e2e:local": "PLAYWRIGHT_CHANNEL=chrome playwright test"
   },
   "dependencies": {
     "@tailwindcss/vite": "4.1.7",

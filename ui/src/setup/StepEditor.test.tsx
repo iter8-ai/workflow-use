@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import type { SetupStep } from "./compiler";
+import { draftChanges, type SetupDraft, type SetupStep } from "./compiler";
 import { StepEditor, type StepEditorProps } from "./StepEditor";
-import { combineDateSteps, moveStep, openQuestionCount, renameStageAt, undoDateMerge } from "./stepList";
+import { combineDateSteps, moveStep, openQuestionCount, renameStageAt, revertStage, undoDateMerge } from "./stepList";
 
 const openReports: SetupStep = { id: "open-reports", type: "click", description: "Open the reports section", target: "Reports", expectedOutcome: "The reports list is visible" };
 const download: SetupStep = { id: "download", type: "click", description: "Download the statement", target: "Download statement" };
@@ -93,4 +93,49 @@ test("combines adjacent day, month and year fields into one date step and undoes
   assert.equal(combined[1]!.type, "date");
   assert.deepEqual(undoDateMerge(combined, combined[1]!.id), steps);
   assert.equal(combineDateSteps(steps, ["day", "year"]), steps);
+});
+
+const staged = (steps: SetupStep[]): SetupDraft => ({ name: "Statement", url: "https://portal.example.test", goal: "Download the statement.", steps, inputs: [] });
+
+test("tracks a single-step stage rename as one change and reverts it to a clean draft", () => {
+  const live = staged([{ ...openReports, stage: "Open reports" }, { ...download, stage: "Download" }]);
+  assert.deepEqual(draftChanges(live, live), []);
+  const renamed = { ...live, steps: renameStageAt(live.steps, 1, "Download the statement") };
+  assert.deepEqual(draftChanges(renamed, live), [{ key: "step:download:stage", label: "Step 2 stage name", from: "Download", to: "Download the statement" }]);
+  const reverted = { ...renamed, steps: revertStage(renamed.steps, live.steps, "download") };
+  assert.deepEqual(draftChanges(reverted, live), []);
+  assert.deepEqual(reverted.steps, live.steps);
+});
+
+test("reverts a multi-step stage rename as one change and keeps other edits to its steps", () => {
+  const live = staged([{ ...openReports, stage: "Open" }, { ...download, stage: "Get" }, { ...download, id: "d2", stage: "Get" }]);
+  const edited = renameStageAt(live.steps, 1, "Download").map((step) => step.id === "d2" ? { ...step, description: "Save the statement", expectedOutcome: "The file is saved" } : step);
+  assert.deepEqual(draftChanges({ ...live, steps: edited }, live).map(({ key, label }) => [key, label]), [
+    ["step:d2:description", "Step 3 instruction"],
+    ["step:d2:outcome", "Step 3 expected outcome"],
+    ["step:download:stage", "Steps 2–3 stage name"],
+  ]);
+  const reverted = revertStage(edited, live.steps, "download");
+  assert.deepEqual(reverted.map((step) => step.stage), ["Open", "Get", "Get"]);
+  assert.deepEqual(draftChanges({ ...live, steps: reverted }, live).map(({ key }) => key), ["step:d2:description", "step:d2:outcome"]);
+});
+
+test("keeps stage changes apart for same-name neighbouring stages", () => {
+  const live = staged([{ ...openReports, stage: "Sign in" }, { ...download, stage: "Download" }, { ...openReports, id: "o2", stage: "Sign in" }]);
+  const third = renameStageAt(live.steps, 2, "Log in");
+  assert.deepEqual(draftChanges({ ...live, steps: third }, live).map(({ key, from, to }) => [key, from, to]), [["step:o2:stage", "Sign in", "Log in"]]);
+  assert.deepEqual(revertStage(third, live.steps, "o2"), live.steps);
+  const joined = renameStageAt(live.steps, 1, "Sign in");
+  assert.deepEqual(draftChanges({ ...live, steps: joined }, live).map(({ key, label, from, to }) => [key, label, from, to]), [["step:download:stage", "Step 2 stage name", "Download", "Sign in"]]);
+  assert.deepEqual(revertStage(joined, live.steps, "download"), live.steps);
+});
+
+test("keeps reorder, insertion and removal changes next to a stage change", () => {
+  const live = staged([{ ...openReports, stage: "Open" }, { ...download, stage: "Get" }, { ...download, id: "d2", stage: "Get" }]);
+  const moved = moveStep(live.steps, 1, -1);
+  assert.deepEqual(draftChanges({ ...live, steps: moved }, live).map(({ key }) => key), ["steps", "step:download:stage"]);
+  const steps = [...renameStageAt(moved, 2, "Save").filter((step) => step.id !== "open-reports"), { id: "new", type: "agent" as const, description: "Close the dialog" }];
+  assert.deepEqual(draftChanges({ ...live, steps }, live).map(({ key }) => key), ["added:new", "removed:open-reports", "step:download:stage", "step:d2:stage"]);
+  const reverted = revertStage(steps, live.steps, "d2");
+  assert.deepEqual(draftChanges({ ...live, steps: reverted }, live).map(({ key }) => key), ["added:new", "removed:open-reports", "step:download:stage"]);
 });

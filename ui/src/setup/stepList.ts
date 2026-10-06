@@ -1,4 +1,4 @@
-import { mergeDateSteps, openQuestions, type SetupStep } from "./compiler";
+import { groupSteps, mergeDateSteps, openQuestions, type SetupStep } from "./compiler";
 
 /** Open questions block testing: unanswered date rules, and one-time codes when Reiterate handles sign-in. */
 export function openQuestionCount(props: { steps: SetupStep[]; goal: string; credentialsAllowed: boolean; savedCredentials: string[] }): number {
@@ -39,6 +39,15 @@ export function renameStageAt(steps: SetupStep[], index: number, name: string): 
   let end = index;
   while (end < steps.length && steps[end]!.stage === stage) end += 1;
   return steps.map((step, i) => i >= index && i < end ? { ...step, stage: name } : step);
+}
+
+/** Restore the published stage names of the stage holding a step, keeping every other edit to its steps. */
+export function revertStage(steps: SetupStep[], live: SetupStep[], id: string): SetupStep[] {
+  const group = groupSteps(steps).find((item) => item.steps.some(({ step }) => step.id === id));
+  return steps.map((step) => {
+    const original = live.find((item) => item.id === step.id);
+    return original && group?.steps.some((item) => item.step.id === step.id) ? { ...step, stage: original.stage } : step;
+  });
 }
 
 export function credentialLabel(kind: string | null | undefined): string {

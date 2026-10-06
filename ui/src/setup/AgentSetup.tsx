@@ -4,7 +4,7 @@ import { browserbaseLiveViewUrl, createHostBridge, HostRequestTimeoutError, type
 import { HelpTip } from "./HelpTip";
 import { RunScreen, RunView } from "./RunView";
 import { EditIcon, StepEditor } from "./StepEditor";
-import { combineDateSteps, credentialLabel, moveStep, openQuestionCount, renameStageAt, undoDateMerge } from "./stepList";
+import { combineDateSteps, credentialLabel, moveStep, openQuestionCount, renameStageAt, revertStage, undoDateMerge } from "./stepList";
 import { applyTestRunUpdate, failureLabel, safeFileUrl, type WorkbenchRun } from "./testRun";
 import { ActivityLog, TestBrowser } from "./TestWorkbench";
 import "./setup.css";
@@ -1015,6 +1015,12 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
       const [, id, field] = key.split(":");
       const original = live.steps.find((step) => step.id === id);
       if (field === "date") update({ steps: draft.steps.map((step) => step.id === id ? { ...step, date: original?.date } : step) });
+      else if (field === "stage") {
+        const steps = revertStage(draft.steps, live.steps, id!);
+        // The stage-name field belongs to the first step of the restored stage.
+        revertFocusRef.current = `step:${groupSteps(steps).find((group) => group.steps.some(({ step }) => step.id === id))?.steps[0]!.step.id}:stage`;
+        update({ steps });
+      }
       else {
         const property = field === "outcome" ? "expectedOutcome" : field === "email-code" ? "requestsEmailCode" : "description";
         update({ steps: draft.steps.map((step) => step.id === id ? { ...step, [property]: original?.[property] } : step) });

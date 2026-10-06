@@ -79,7 +79,7 @@ export function StepEditor(props: StepEditorProps): JSX.Element {
       {groups.map((group) => {
         const first = group.steps[0]!.index + 1, last = group.steps.at(-1)!.index + 1;
         return <section className="review-stage" key={group.steps[0]!.step.id} aria-label={group.stage ?? "Steps"}>
-          {group.stage !== null && <input className="review-stage-name" aria-label={first === last ? `Stage name for step ${first}` : `Stage name for steps ${first}–${last}`} value={group.stage} maxLength={60} disabled={props.busy} placeholder="Stage name" onChange={(event) => props.onRenameStage(first - 1, event.target.value)} />}
+          {group.stage !== null && <input ref={(field) => { fieldRefs.current[`step:${group.steps[0]!.step.id}:stage`] = field; }} className="review-stage-name" aria-label={first === last ? `Stage name for step ${first}` : `Stage name for steps ${first}–${last}`} value={group.stage} maxLength={60} disabled={props.busy} placeholder="Stage name" onChange={(event) => props.onRenameStage(first - 1, event.target.value)} />}
           <ol start={first}>{group.steps.map(({ step, index }) => <StepEditorRow key={step.id} {...props} fieldRefs={fieldRefs} step={step} index={index} selected={selectedIds.includes(step.id)} onToggleSelected={toggleSelected}
             expectedOutcomeOpen={expectedOutcomeOpen[step.id] === true || Boolean(step.expectedOutcome?.trim())}
             // Keep the field once it is in use, so clearing an outcome does not take the field away mid-edit.

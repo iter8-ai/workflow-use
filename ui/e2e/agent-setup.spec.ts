@@ -204,6 +204,41 @@ test("edits stage names and keeps a moved step in the stage it moves into", asyn
   expect(saved.config.stages[0].prompt).toContain("Open reports:\n1. ");
 });
 
+test("tracks, reverts and publishes a stage-only rename in Edit", { tag: "@local" }, async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-staged`);
+  const setup = page.frameLocator("iframe");
+  const stage = setup.getByLabel("Stage name for step 2");
+  const rail = setup.locator(".edit-changes");
+  const publish = setup.getByRole("button", { name: "Publish changes" });
+  await expect(rail.getByRole("status")).toHaveText("No unpublished changes");
+  await stage.fill("Download the statement");
+  await expect(rail.getByRole("status")).toHaveText("1 unpublished change");
+  await expect(rail.locator(".change-item")).toHaveCount(1);
+  await expect(rail.locator(".change-item")).toContainText("Step 2 stage name");
+  await expect(rail.locator(".change-item")).toContainText("Download → Download the statement");
+  await setup.getByRole("button", { name: "Test changes" }).click();
+  await expect(setup.getByText("Test completed", { exact: true })).toBeVisible();
+  await expect(publish).toHaveAccessibleDescription("Confirm you checked the result.");
+  await setup.getByLabel("I checked the result").check();
+  await expect(publish).toBeEnabled();
+  await rail.getByRole("button", { name: "Revert Step 2 stage name", exact: true }).click();
+  await expect(stage).toHaveValue("Download");
+  await expect(stage).toBeFocused();
+  await expect(rail.getByRole("status")).toHaveText("No unpublished changes");
+  await expect(setup.getByText("Changed since this test", { exact: true })).toBeVisible();
+  await expect(setup.getByLabel("I checked the result")).toHaveCount(0);
+  await expect(publish).toBeDisabled();
+  await expect(publish).toHaveAccessibleDescription("Make a change to publish.");
+  await stage.fill("Get the statement");
+  await setup.getByRole("button", { name: "Test changes" }).click();
+  await expect(setup.getByText("Test completed", { exact: true })).toBeVisible();
+  const saved = await page.evaluate(() => window.__savedAgents.at(-1));
+  expect(saved.draft.steps.map((step: { stage?: string }) => step.stage)).toEqual(["Open reports", "Get the statement"]);
+  await expect(publish).toBeDisabled();
+  await setup.getByLabel("I checked the result").check();
+  await expect(publish).toBeEnabled();
+});
+
 test("merges recorded date fields and asks a goal-driven question", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=date-create`);
   const setup = page.frameLocator("iframe");

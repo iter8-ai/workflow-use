@@ -23,7 +23,7 @@ npm run build
 npm run test:e2e:local
 ```
 
-The browser tests use a controlled host fixture. They do not prove a live Browserbase session or an actual computer-use run.
+`test:e2e:local` runs every browser test, including the `@local` ones, in the installed Google Chrome. CI runs `test:e2e` in Playwright's Chromium and skips `@local`. The browser tests use a controlled host fixture. They do not prove a live Browserbase session or an actual computer-use run.
 
 ## Deployment and current limits
 

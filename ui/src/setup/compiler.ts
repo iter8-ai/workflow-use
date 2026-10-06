@@ -411,6 +411,16 @@ export function draftChanges(draft: SetupDraft, live: SetupDraft): DraftChange[]
       changes.push({ key: `step:${step.id}:date`, label: `Step ${index + 1} date`, from: label(original.date?.rule, original.date), to: label(step.date?.rule, step.date) });
     }
   });
+  // A renamed stage is one change for its whole group, keyed by its first renamed step.
+  for (const group of groupSteps(draft.steps)) {
+    const renamed = group.steps.flatMap(({ step, index }) => {
+      const original = live.steps.find((item) => item.id === step.id);
+      return original !== undefined && (original.stage ?? null) !== (step.stage ?? null) ? [{ id: step.id, index, from: original.stage ?? "" }] : [];
+    });
+    if (renamed.length === 0) continue;
+    const first = renamed[0]!, last = renamed.at(-1)!;
+    changes.push({ key: `step:${first.id}:stage`, label: first === last ? `Step ${first.index + 1} stage name` : `Steps ${first.index + 1}–${last.index + 1} stage name`, from: [...new Set(renamed.map((item) => item.from))].join(", "), to: group.stage ?? "" });
+  }
   return changes;
 }
 
