@@ -34,6 +34,15 @@ class BrowserProvider(Protocol):
     async def create(self, start_url: str, on_event: EventSink) -> BrowserSession: ...
 
 
+class _PendingContextCleanup(Exception):
+    """Startup failed and the service must retry deleting the created context."""
+
+    def __init__(self, context_id: str, delete_context: Callable[[], Awaitable[None]]) -> None:
+        super().__init__("Browserbase context cleanup pending")
+        self.context_id = context_id
+        self.delete_context = delete_context
+
+
 class PlaywrightRecordingSession:
     """Owns an attached Playwright browser and avoids exposing its CDP URL."""
 
@@ -217,6 +226,17 @@ class BrowserbaseProvider:
         context_id: str | None = None
         created: Any | None = None
         runtime: Any | None = None
+
+        async def delete_context(context_id: str) -> None:
+            deletion_client = AsyncBrowserbase()
+            try:
+                await deletion_client.delete(f"/v1/contexts/{context_id}", cast_to=object, body={})
+            except Exception as error:
+                if getattr(error, "status_code", None) != 404:
+                    raise
+            finally:
+                await deletion_client.__aexit__(None, None, None)
+
         try:
             context_id = (await client.contexts.create(project_id=self.project_id)).id
             created = await client.sessions.create(
@@ -242,16 +262,6 @@ class BrowserbaseProvider:
                 await client.sessions.update(created.id, project_id=self.project_id, status="REQUEST_RELEASE")
                 await client.__aexit__(None, None, None)
 
-            async def delete_context(context_id: str) -> None:
-                deletion_client = AsyncBrowserbase()
-                try:
-                    await deletion_client.delete(f"/v1/contexts/{context_id}", cast_to=object, body={})
-                except Exception as error:
-                    if getattr(error, "status_code", None) != 404:
-                        raise
-                finally:
-                    await deletion_client.__aexit__(None, None, None)
-
             session = PlaywrightRecordingSession(
                 browser=browser,
                 runtime=runtime,
@@ -274,6 +284,7 @@ class BrowserbaseProvider:
             await page.goto(start_url, wait_until="domcontentloaded", timeout=self.timeout_seconds * 1000)
             return session
         except BaseException:
+            cleanup_pending = False
             if runtime is not None:
                 try:
                     await runtime.stop()
@@ -289,11 +300,14 @@ class BrowserbaseProvider:
                     await client.delete(f"/v1/contexts/{context_id}", cast_to=object, body={})
                 except Exception as error:
                     if getattr(error, "status_code", None) != 404:
+                        cleanup_pending = True
                         logger.warning("recording_context_cleanup_failed", extra={"error_type": type(error).__name__})
             try:
                 await client.__aexit__(None, None, None)
             except Exception as error:
                 logger.warning("recording_client_cleanup_failed", extra={"error_type": type(error).__name__})
+            if cleanup_pending and context_id is not None:
+                raise _PendingContextCleanup(context_id, lambda: delete_context(context_id)) from None
             raise
 
 

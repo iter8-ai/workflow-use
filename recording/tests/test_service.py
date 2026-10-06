@@ -7,7 +7,12 @@ from typing import Any
 
 import pytest
 
-from workflow_use_recording.provider import BrowserProvider, BrowserSession, PlaywrightRecordingSession
+from workflow_use_recording.provider import (
+    BrowserProvider,
+    BrowserSession,
+    PlaywrightRecordingSession,
+    _PendingContextCleanup,
+)
 from workflow_use_recording.service import RecordingOwner, RecordingService
 
 
@@ -291,6 +296,57 @@ async def test_returned_context_is_deleted_but_adopted_context_is_not() -> None:
     assert await service.delete(adopted.id, owner)
     assert provider.sessions[0].delete_attempts == 1
     assert provider.sessions[1].delete_attempts == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cleanup", ["delete", "evict"])
+@pytest.mark.parametrize("resolution", ["returned", "adopted"])
+async def test_lent_handoff_remains_confirmable_after_recording_removal(cleanup: str, resolution: str) -> None:
+    provider = ContextProvider()
+    service = RecordingService(provider, max_sessions=1)
+    owner = RecordingOwner("iter7", "owner@iter7.example")
+    recording = await service.create(owner, "https://example.com")
+    await service.stop(recording.id, owner)
+    assert await service.claim_google_context(recording.id, owner) == "private-context"
+    if cleanup == "delete":
+        assert await service.delete(recording.id, owner)
+        assert await service.claim_google_context(recording.id, owner) == ""
+    else:
+        await service.create(owner, "https://example.org")
+        assert await service.claim_google_context(recording.id, owner) == "private-context"
+    assert provider.sessions[0].delete_attempts == 0
+    if resolution == "returned":
+        assert await service.return_google_context(recording.id, owner)
+        assert await service.return_google_context(recording.id, owner)
+        assert provider.sessions[0].delete_attempts == 1
+    else:
+        assert await service.adopt_google_context(recording.id, owner)
+        assert await service.adopt_google_context(recording.id, owner)
+        assert provider.sessions[0].delete_attempts == 0
+    assert await service.return_google_context(recording.id, RecordingOwner("other", owner.email)) is None
+
+
+@pytest.mark.asyncio
+async def test_failed_startup_context_cleanup_stays_owned_for_sweep_retry() -> None:
+    attempts = 0
+
+    async def delete_context() -> None:
+        nonlocal attempts
+        attempts += 1
+
+    class Provider:
+        async def create(self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]) -> BrowserSession:
+            raise _PendingContextCleanup("private-context", delete_context)
+
+    service = RecordingService(Provider())
+    owner = RecordingOwner("iter7", "owner@iter7.example")
+    with pytest.raises(_PendingContextCleanup):
+        await service.create(owner, "https://example.com")
+    assert len(service._recordings) == 1
+    recording = next(iter(service._recordings.values()))
+    assert await service.get(recording.id, owner) is None
+    assert attempts == 1
+    assert service._recordings == {}
 
 
 @pytest.mark.asyncio

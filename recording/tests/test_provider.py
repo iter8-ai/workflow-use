@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from workflow_use_recording.provider import BrowserbaseProvider
+from workflow_use_recording.provider import BrowserbaseProvider, _PendingContextCleanup
 
 
 class FakePage:
@@ -161,6 +161,45 @@ async def test_browserbase_session_failure_deletes_the_new_context(monkeypatch: 
     with pytest.raises(RuntimeError, match="provider failure"):
         await BrowserbaseProvider(project_id="project-1").create("https://example.com", _ignore_event)
     assert deleted == [("/v1/contexts/context-private", {"cast_to": object, "body": {}})]
+
+
+@pytest.mark.asyncio
+async def test_failed_startup_cleanup_can_be_retried_without_exposing_context_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deleted: list[str] = []
+
+    class FailingClient:
+        def __init__(self) -> None:
+            self.contexts = SimpleNamespace(create=self.create_context)
+            self.sessions = SimpleNamespace(create=self.create_session)
+
+        async def create_context(self, **_kwargs: Any) -> Any:
+            return SimpleNamespace(id="context-private")
+
+        async def create_session(self, **_kwargs: Any) -> Any:
+            raise RuntimeError("provider failure")
+
+        async def delete(self, path: str, **_kwargs: Any) -> None:
+            deleted.append(path)
+            if len(deleted) == 1:
+                raise RuntimeError("temporary delete failure")
+
+        async def __aexit__(self, *_args: Any) -> None:
+            pass
+
+    browserbase = ModuleType("browserbase")
+    browserbase.AsyncBrowserbase = FailingClient  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "browserbase", browserbase)
+
+    with pytest.raises(_PendingContextCleanup) as caught:
+        await BrowserbaseProvider(project_id="project-1").create("https://example.com", _ignore_event)
+
+    assert caught.value.context_id == "context-private"
+    assert "context-private" not in str(caught.value)
+    assert "context-private" not in repr(caught.value)
+    await caught.value.delete_context()
+    assert deleted == ["/v1/contexts/context-private"] * 2
 
 
 async def _ignore_event(_event: dict[str, Any]) -> None:
