@@ -1,11 +1,8 @@
 # no-mistakes gate for workflow-use. Read only from the trusted default branch (main),
 # so edits apply to later runs.
 commands:
-  # Links ui/ (and extension/) node_modules from the main checkout instead of installing.
   prepare: "scripts/gate-test.sh prepare"
-  # Suites of the touched areas: ui (unit, tsc, fixture Playwright), recording (pytest), workflows.
   test: "scripts/gate-test.sh test"
-  # The CI Lint workflow's checks for the touched areas.
   lint: "scripts/gate-test.sh lint"
 
 test:

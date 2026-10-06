@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
-# Local no-mistakes gate checks for workflow-use. Configured in .no-mistakes.yaml.
-#   scripts/gate-test.sh prepare  link ui/ and extension/ node_modules from the main checkout (no install)
-#   scripts/gate-test.sh test     run the suites of the areas the branch touched (ui, recording, workflows)
-#   scripts/gate-test.sh lint     the lint the CI Lint workflow runs, for the touched areas
-# The base is the merge base with origin/main. Playwright reuses the browsers already in
-# ~/Library/Caches/ms-playwright; the scripts never install browsers.
+# See .no-mistakes.yaml for gate commands and validation instructions.
+# Changed areas are compared with the merge base of HEAD and origin/main.
 set -euo pipefail
 
 root="$(git rev-parse --show-toplevel)"
