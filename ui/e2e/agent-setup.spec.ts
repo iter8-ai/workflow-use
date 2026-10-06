@@ -68,7 +68,7 @@ test("keeps a newly added expected outcome open in Review", async ({ page }) => 
   await expect(disclosure).toHaveCount(0);
 });
 
-test("shows the same Instructions editor in Review and Edit", async ({ page }) => {
+test("shows the same Instructions editor in Review and Edit", { tag: "@local" }, async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=success`);
   const setup = page.frameLocator("iframe");
   await describeAndDemonstrate(setup);
@@ -88,7 +88,7 @@ test("shows the same Instructions editor in Review and Edit", async ({ page }) =
   }
 });
 
-test("opens an expected outcome in Edit without changing the agent and keeps a cleared one open", async ({ page }) => {
+test("opens an expected outcome in Edit without changing the agent and keeps a cleared one open", { tag: "@local" }, async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=edit`);
   const setup = page.frameLocator("iframe");
   const rail = setup.locator(".edit-changes");
@@ -107,7 +107,7 @@ test("opens an expected outcome in Edit without changing the agent and keeps a c
   await expect(rail.getByText("No changes yet.")).toBeVisible();
 });
 
-test("inserts, reorders and removes Review steps with focus kept in the list", async ({ page }) => {
+test("inserts, reorders and removes Review steps with focus kept in the list", { tag: "@local" }, async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=success`);
   const setup = page.frameLocator("iframe");
   await describeAndDemonstrate(setup);
@@ -129,7 +129,7 @@ test("inserts, reorders and removes Review steps with focus kept in the list", a
   expect(saved.draft.steps.map((step: { description: string }) => step.description)).toEqual(["Open the downloaded file", "Download the statement"]);
 });
 
-test("keeps every legacy stage byte for byte under Instructions when other fields change", async ({ page }) => {
+test("keeps every legacy stage byte for byte under Instructions when other fields change", { tag: "@local" }, async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=edit-raw-multi`);
   const setup = page.frameLocator("iframe");
   await expect(setup.getByRole("heading", { name: "Instructions", exact: true })).toBeVisible();
