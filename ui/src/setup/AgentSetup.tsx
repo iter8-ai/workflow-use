@@ -792,11 +792,10 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
     };
     const timer = window.setInterval(poll, 1500);
     return () => { active = false; window.clearInterval(timer); };
-  // closeDemonstration only uses state setters and refs.
+  // closeDemonstration's bridge is a dependency; its other captures are stable setters and refs.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bridge, recording?.id, recording?.status]);
-  // A new demonstration's steps are organized like a new one. They replace the old steps as soon as the
-  // demonstration stops; stages and clearer wording follow when ready, unless those steps were edited meanwhile.
+  // Organization may refine steps only after Finish applied them, preserving edits made since then.
   useEffect(() => {
     if (recording?.status !== "stopped" || recording.organizing !== true || recording.id !== appliedRecordingId) return;
     let active = true;

@@ -6,11 +6,11 @@ The default `ui/` app is an embedded authoring interface that also lets users in
 
 ## Edit an existing agent
 
-Choose **New demonstration** to replace written instructions with editable steps. For an agent that already has steps, choose **Replace from step** first to keep the earlier steps. Starting a demonstration leaves your draft and checked test intact. Editing, testing, and publishing stay unavailable until the demonstration finishes or is canceled. Closing still asks you to confirm leaving.
+Choose **New demonstration** to replace written instructions with editable steps. For an agent that already has steps, choose **Replace from step** first. The selected step and every later step are replaced; earlier steps stay intact. Starting a demonstration leaves your draft and checked test intact. Editing, testing, and publishing stay unavailable until the demonstration finishes or is canceled. Closing still asks you to confirm leaving.
 
 **Finish demonstration** replaces instructions only after the browser stops with usable steps. Canceling, an empty or blocked recording, expiry, or an error leaves your instructions unchanged. Retry a failed Finish or Cancel using the same button. After replacing written instructions, **Revert Instructions** restores the live written instructions and action limits. A replacement invalidates the previous test result.
 
-Test the draft, inspect the result, then explicitly publish it. The demonstration alone does not save, test, or publish; the agent keeps its identity, live configuration, and schedule until publishing. Existing non-agent stages retain their order. Internal agents remain read-only.
+Test the draft, inspect the result, then explicitly publish it. The demonstration alone does not save, test, or publish. Publishing changes the live configuration while keeping the same agent identity and schedule. Existing non-agent stages retain their order. Internal agents remain read-only.
 
 ## Run locally
 
