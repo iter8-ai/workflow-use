@@ -30,6 +30,8 @@ The browser tests use a controlled host fixture. They do not prove a live Browse
 
 For no-mistakes gate validation, see [.no-mistakes.yaml](.no-mistakes.yaml).
 
+For a reusable host fixture for manual browser checks, see [managed acceptance](MANAGED_ACCEPTANCE.md).
+
 ## Deployment and current limits
 
 Build and run the public UI as an unprivileged static service:
