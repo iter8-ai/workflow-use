@@ -292,6 +292,24 @@ test("tracks, reverts and publishes a stage-only rename in Edit", { tag: "@local
   await expect(publish).toBeEnabled();
 });
 
+test("keeps focus on the move button when a moved step starts a different stage", { tag: "@local" }, async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-staged`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByLabel("Stage name for step 1").fill("Find reports");
+  await setup.getByRole("button", { name: "Insert step", exact: true }).click();
+  await setup.getByLabel("Step 3 description").fill("Open the downloaded file");
+  await setup.getByRole("button", { name: "Move step 3 up" }).click();
+  await expect(setup.getByLabel("Step 2 description")).toHaveValue("Open the downloaded file");
+  await expect(setup.getByLabel("Step 3 description")).toHaveValue("Download the statement");
+  await expect(setup.getByLabel("Stage name for steps 2–3")).toHaveValue("Download");
+  await expect(setup.getByRole("button", { name: "Move step 2 up" })).toBeFocused();
+  await setup.getByRole("button", { name: "Move step 1 down" }).click();
+  await expect(setup.getByLabel("Step 1 description")).toHaveValue("Open the downloaded file");
+  await expect(setup.getByLabel("Step 2 description")).toHaveValue("Open the reports section");
+  await expect(setup.getByLabel("Stage name for steps 1–3")).toHaveValue("Download");
+  await expect(setup.getByRole("button", { name: "Move step 2 down" })).toBeFocused();
+});
+
 test("merges recorded date fields and asks a goal-driven question", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=date-create`);
   const setup = page.frameLocator("iframe");

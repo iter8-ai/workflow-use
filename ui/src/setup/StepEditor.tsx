@@ -19,7 +19,7 @@ export type StepEditorProps = {
   onInsert(): void;
   fieldRefs?: FieldRefs;
 };
-type FieldRefs = { current: Record<string, HTMLInputElement | HTMLTextAreaElement | null> };
+type FieldRefs = { current: Record<string, HTMLInputElement | HTMLTextAreaElement | HTMLButtonElement | null> };
 
 export function StepEditor(props: StepEditorProps): JSX.Element {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -27,7 +27,7 @@ export function StepEditor(props: StepEditorProps): JSX.Element {
   const [expectedOutcomeOpen, setExpectedOutcomeOpen] = useState<Record<string, boolean>>({});
   const [moreOptionsOpen, setMoreOptionsOpen] = useState<Record<string, boolean>>({});
   const [otherText, setOtherText] = useState<Record<string, string>>({});
-  // The field to focus once the list has re-rendered: a step's instruction, or its newly opened expected outcome.
+  // The field to focus once the list has re-rendered: a step's instruction, its newly opened expected outcome, or a moved step's move button.
   const focusRef = useRef<string | null>(null);
   const ownFieldRefs = useRef<FieldRefs["current"]>({});
   const fieldRefs = props.fieldRefs ?? ownFieldRefs;
@@ -72,6 +72,14 @@ export function StepEditor(props: StepEditorProps): JSX.Element {
     props.onUndoMergedStep(id);
     focusRef.current = current?.parts?.[0] ? `step:${current.parts[0].id}:description` : null;
   };
+  // A move can remount the row (its stage section is keyed by its first step), so focus follows the moved step:
+  // the same arrow, or the other one once the step reaches the end of the list.
+  const moveStep = (index: number, delta: number): void => {
+    const to = index + delta;
+    const direction = delta < 0 ? (to > 0 ? "up" : "down") : (to < props.steps.length - 1 ? "down" : "up");
+    props.onMoveStep(index, delta);
+    focusRef.current = `step:${props.steps[index]!.id}:${direction}`;
+  };
   return <div className="instructions-editor">
     {questionCount > 0 && <div className="setup-notice question-notice" role="status">{questionCount} question{questionCount === 1 ? "" : "s"} to answer before testing</div>}
     {hasMergeCandidates && <div className="merge-date-actions"><button type="button" className="button button-quiet merge-date-button" disabled={props.busy || !canMerge} onClick={() => { const first = props.steps.find((step) => selectedIds.includes(step.id)); props.onMergeSteps(selected.map((index) => props.steps[index]!.id)); setSelectedIds([]); focusRef.current = first ? `step:${first.id}:description` : null; }}>Combine into one date step</button><span className="field-note">Tick the day, month and year fields, then combine them.</span></div>}
@@ -85,7 +93,7 @@ export function StepEditor(props: StepEditorProps): JSX.Element {
             // Keep the field once it is in use, so clearing an outcome does not take the field away mid-edit.
             onExpectedOutcomeOpen={() => setExpectedOutcomeOpen((current) => current[step.id] ? current : { ...current, [step.id]: true })}
             onAddExpectedOutcome={() => { setExpectedOutcomeOpen((current) => ({ ...current, [step.id]: true })); focusRef.current = `step:${step.id}:outcome`; }}
-            onSetFieldKind={setFieldKind} onRemoveStep={removeStep} onUndoMergedStep={undoMergedStep}
+            onSetFieldKind={setFieldKind} onRemoveStep={removeStep} onUndoMergedStep={undoMergedStep} onMoveStep={moveStep}
             otherOpen={otherOpen[step.id] === true} onOtherOpen={(open) => setOtherOpen((current) => ({ ...current, [step.id]: open }))}
             moreOptionsOpen={moreOptionsOpen[step.id] === true} onMoreOptionsOpen={(open) => setMoreOptionsOpen((current) => ({ ...current, [step.id]: open }))}
             otherText={otherText[step.id] ?? ""} onOtherText={(value) => setOtherText((current) => ({ ...current, [step.id]: value }))} onAnswerOther={answerOther} />)}</ol>
@@ -153,7 +161,7 @@ function StepEditorRow(props: StepEditorProps & { fieldRefs: FieldRefs; step: Se
     {dateQuestion && <div className="question-block"><p id={`step-${props.step.id}-question`}>{dateQuestion.text}</p><div role="radiogroup" aria-labelledby={`step-${props.step.id}-question`}>{visibleDateChoices.map((choice, choiceIndex) => { const checked = JSON.stringify(choice.rule) === JSON.stringify(selectedRule); const consequence = choice.rule.kind === "fixed" ? choice.value : formatDate(resolveDateRule(choice.rule, tomorrow), props.step.date?.format ?? "parts"); return <button type="button" role="radio" key={JSON.stringify(choice.rule)} className="question-choice" aria-checked={checked} tabIndex={checked || (selectedRule === null && choiceIndex === 0) ? 0 : -1} disabled={props.busy} onKeyDown={moveRadio} onClick={() => answer(choice.rule)}><strong>{choice.label}</strong><span>{choice.value}</span>{choice.recommended && <em>Recommended</em>}{checked && <small className="question-consequence">Next run enters {consequence}</small>}{choice.rule.kind === "fixed" && <small className="question-warning">Every run will use this same date.</small>}</button>; })}<button type="button" className="text-button more-options" aria-expanded={props.moreOptionsOpen} disabled={props.busy} onClick={() => props.onMoreOptionsOpen(!props.moreOptionsOpen)}>More options…</button>{props.moreOptionsOpen && <button type="button" role="radio" className="question-choice" aria-checked={props.otherOpen && dateChoices.every((choice) => JSON.stringify(choice.rule) !== JSON.stringify(selectedRule))} tabIndex={props.otherOpen ? 0 : -1} disabled={props.busy} onKeyDown={moveRadio} onClick={() => props.onOtherOpen(true)}><strong>Other…</strong></button>}</div>{props.otherOpen && <input aria-label={`Other answer for step ${props.index + 1}`} placeholder="For example: the last working day of last month" value={props.otherText} disabled={props.busy} onChange={(event) => props.onOtherText(event.target.value)} onBlur={() => props.onAnswerOther(props.step.id, props.otherText)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); props.onAnswerOther(props.step.id, props.otherText); } }} />}</div>}
     {props.step.type === "credential" && props.step.value === "otp" && props.credentialsAllowed && !props.savedCredentials.includes("otp") && <div className="question-block"><p id={`step-${props.step.id}-question`}>Step {props.index + 1} needs a one-time code. How should the agent get it?</p><div role="radiogroup" aria-labelledby={`step-${props.step.id}-question`}><button type="button" role="radio" className="question-choice" aria-checked={!props.otherOpen} tabIndex={props.otherOpen ? -1 : 0} disabled={props.busy} onKeyDown={moveRadio} onClick={props.onRequestOtp}><strong>Authenticator app or email code set up in Reiterate</strong><em>Recommended</em></button><button type="button" role="radio" className="question-choice" aria-checked={props.otherOpen} tabIndex={props.otherOpen ? 0 : -1} disabled={props.busy} onKeyDown={moveRadio} onClick={() => props.onOtherOpen(true)}><strong>Other…</strong></button></div>{props.otherOpen && <><input aria-label={`Other answer for step ${props.index + 1}`} placeholder="For example: a code sent by text message" value={props.otherText} disabled={props.busy} onChange={(event) => props.onOtherText(event.target.value)} /><small>Reiterate does not support this yet. Choose the first option to set up an authenticator app or email code.</small></>}</div>}
     {props.step.type === "date" && props.step.uiMerged === true && props.step.parts !== undefined && <p className="merge-note">Combined from {props.step.parts.length} recorded steps · <button type="button" className="text-button" onClick={() => props.onUndoMergedStep(props.step.id)} disabled={props.busy}>Undo</button></p>}
-  </div><div className="edit-step-controls"><button type="button" className="icon-button" aria-label={`Move step ${props.index + 1} up`} disabled={props.busy || props.index === 0} onClick={() => props.onMoveStep(props.index, -1)}><EditIcon name="up" /></button><button type="button" className="icon-button" aria-label={`Move step ${props.index + 1} down`} disabled={props.busy || props.index === props.steps.length - 1} onClick={() => props.onMoveStep(props.index, 1)}><EditIcon name="down" /></button><button type="button" className="icon-button" aria-label={`Remove step ${props.index + 1}`} disabled={props.busy} onClick={() => props.onRemoveStep(props.step.id)}><EditIcon name="close" /></button></div>{mergeCandidate && <input type="checkbox" aria-label={`Select step ${props.index + 1} for date merge`} checked={props.selected} disabled={props.busy} onChange={() => props.onToggleSelected(props.step.id)} />}</li>;
+  </div><div className="edit-step-controls"><button ref={(button) => { props.fieldRefs.current[`step:${props.step.id}:up`] = button; }} type="button" className="icon-button" aria-label={`Move step ${props.index + 1} up`} disabled={props.busy || props.index === 0} onClick={() => props.onMoveStep(props.index, -1)}><EditIcon name="up" /></button><button ref={(button) => { props.fieldRefs.current[`step:${props.step.id}:down`] = button; }} type="button" className="icon-button" aria-label={`Move step ${props.index + 1} down`} disabled={props.busy || props.index === props.steps.length - 1} onClick={() => props.onMoveStep(props.index, 1)}><EditIcon name="down" /></button><button type="button" className="icon-button" aria-label={`Remove step ${props.index + 1}`} disabled={props.busy} onClick={() => props.onRemoveStep(props.step.id)}><EditIcon name="close" /></button></div>{mergeCandidate && <input type="checkbox" aria-label={`Select step ${props.index + 1} for date merge`} checked={props.selected} disabled={props.busy} onChange={() => props.onToggleSelected(props.step.id)} />}</li>;
 }
 
 export function EditIcon({ name }: { name: "back" | "up" | "down" | "close" }): JSX.Element {
