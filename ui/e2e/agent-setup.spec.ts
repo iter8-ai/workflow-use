@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { expect, test, type FrameLocator, type Page } from "@playwright/test";
+import { expect, test, type FrameLocator, type Locator, type Page } from "@playwright/test";
 
 const baseUrl = process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:4173";
 const clockStart = new Date("2026-10-04T09:00:00Z");
@@ -1115,6 +1115,7 @@ for (const mode of ["create", "edit"]) {
       await expect(result).toContainText("The agent needs a Google sign-in");
       await expect(result).toContainText("Connect the Google account this website uses, then run the test again.");
       await expect(result).not.toContainText("Change sign-in details");
+      await expect(result.getByRole("button", { name: "Set up Google sign-in" })).toHaveCount(0);
       if (mode === "create") await expect(setup.locator(".test-step.failed")).toHaveCount(1);
       if (outcome === "old-host") {
         await expect(result).toContainText("Open Credentials → Connect Google for this agent.");
@@ -1142,6 +1143,110 @@ for (const mode of ["create", "edit"]) {
     });
   }
 }
+
+for (const mode of ["create", "edit"]) {
+  for (const outcome of ["saved", "cancel"]) {
+    test(`${mode} Google failure on a host with the Google sign-in dialog handles ${outcome}`, async ({ page }) => {
+      await page.goto(`${baseUrl}/host?scenario=${mode === "edit" ? "edit-" : ""}google-signin-${outcome}`);
+      const setup = page.frameLocator("iframe");
+      if (mode === "create") await completeToTest(setup);
+      await setup.getByRole("button", { name: mode === "edit" ? "Test changes" : "Run test" }).click();
+      const result = setup.locator(mode === "edit" ? ".edit-result-failed" : ".run-status");
+      await expect(result).toContainText("The agent needs a Google sign-in");
+      // The host's message, once: not repeated as what the agent said.
+      await expect(result.getByText("Set up the Google sign-in with an authenticator key, then run the test again.")).toHaveCount(1);
+      await expect(result).not.toContainText("Connect the Google account this website uses");
+      await expect(result.getByRole("button", { name: "Connect Google" })).toHaveCount(0);
+      const setUp = result.getByRole("button", { name: "Set up Google sign-in" });
+      await expect(setUp).toHaveClass(/button-primary/);
+      if (outcome === "saved") {
+        await googleShots(page, `test-result-${mode}`, result);
+      }
+      await setUp.click();
+      await expect.poll(() => page.evaluate(() => window.__googleSignInRequests)).toEqual([{ method: "setUpGoogleSignIn", params: { reason: "test" } }]);
+      expect(await page.evaluate(() => window.__googleRequests)).toEqual([]);
+      if (outcome === "saved") {
+        if (mode === "create") {
+          await expect(setup.getByText("Changes require a new test.")).toBeVisible();
+          await expect(result).toContainText("Not tested yet");
+        } else {
+          await expect(setup.getByText("Changed since this test")).toBeVisible();
+          await expect(result).toHaveCount(0);
+        }
+      } else {
+        await expect(result).toContainText("Google sign-in needed");
+        await expect(setup.getByText(mode === "edit" ? "Changed since this test" : "Changes require a new test.")).toHaveCount(0);
+      }
+    });
+  }
+}
+
+const googleSignInPanelBody = "You signed in with Google during the demonstration. Google asks for a verification code every time the agent signs in, so the agent needs your Google password and an authenticator key. It takes about two minutes.";
+const googleSignInSkipNote = "Test runs will stop at Google's verification until the Google sign-in is set up.";
+
+test("offers the Google sign-in setup in Review after a demonstration that signed in with Google", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=google-demo-missing`);
+  const setup = page.frameLocator("iframe");
+  await describeAndDemonstrate(setup);
+  const panel = setup.getByRole("region", { name: "Finish the Google sign-in setup" });
+  await expect(panel).toContainText(googleSignInPanelBody);
+  await expect(panel.getByRole("button", { name: "Skip for now" })).toBeVisible();
+  // The offer sits at the top of Review, above the steps.
+  const panelBox = await panel.boundingBox();
+  const stepBox = await setup.getByLabel("Step 1 description").boundingBox();
+  expect(panelBox!.y).toBeLessThan(stepBox!.y);
+  await googleShots(page, "panel", panel);
+  await panel.getByRole("button", { name: "Set up Google sign-in" }).click();
+  await expect(panel).toHaveCount(0);
+  await expect(setup.getByText(googleSignInSkipNote)).toHaveCount(0);
+  expect(await page.evaluate(() => window.__googleSignInRequests)).toEqual([
+    { method: "getGoogleSignIn", params: {} },
+    { method: "setUpGoogleSignIn", params: { reason: "demonstration" } },
+  ]);
+  await setup.getByRole("button", { name: "Continue to test" }).click();
+  await expect(setup.getByRole("button", { name: "Run test" })).toBeVisible();
+});
+
+for (const [scenario, action] of [["google-demo-missing", "Skip for now"], ["google-demo-needs", "Set up Google sign-in"]]) {
+  test(`${scenario === "google-demo-needs" ? "cancelling" : "skipping"} the Google sign-in setup leaves the skip note and keeps setup moving`, async ({ page }) => {
+    await page.goto(`${baseUrl}/host?scenario=${scenario}`);
+    const setup = page.frameLocator("iframe");
+    await describeAndDemonstrate(setup);
+    await setup.getByRole("button", { name: action }).click();
+    const note = setup.getByRole("status").filter({ hasText: googleSignInSkipNote });
+    await expect(note).toHaveText(googleSignInSkipNote);
+    await expect(note).toBeFocused();
+    await expect(setup.getByRole("region", { name: "Finish the Google sign-in setup" })).toHaveCount(0);
+    if (scenario === "google-demo-missing") await googleShots(page, "skip-note", note);
+    await setup.getByRole("button", { name: "Continue to test" }).click();
+    await expect(setup.getByRole("button", { name: "Run test" })).toBeVisible();
+  });
+}
+
+for (const [scenario, requests] of [["google-demo-ready", [{ method: "getGoogleSignIn", params: {} }]], ["google-demo-signedout", []], ["google-demo-nocap", []]] as const) {
+  test(`shows no Google sign-in offer for ${scenario}`, async ({ page }) => {
+    await page.goto(`${baseUrl}/host?scenario=${scenario}`);
+    const setup = page.frameLocator("iframe");
+    await describeAndDemonstrate(setup);
+    await expect(setup.getByLabel("Step 1 description")).toBeVisible();
+    await expect.poll(() => page.evaluate(() => window.__googleSignInRequests)).toEqual(requests);
+    await expect(setup.getByText("Finish the Google sign-in setup")).toHaveCount(0);
+    await expect(setup.getByText(googleSignInSkipNote)).toHaveCount(0);
+  });
+}
+
+test("edit re-demonstration that signed in with Google offers the Google sign-in setup", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-google-demo-missing`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByRole("button", { name: "Re-demonstrate" }).click();
+  await setup.getByRole("button", { name: "Finish re-demonstration" }).click();
+  const panel = setup.getByRole("region", { name: "Finish the Google sign-in setup" });
+  await expect(panel).toContainText(googleSignInPanelBody);
+  await googleShots(page, "panel-edit", panel);
+  await panel.getByRole("button", { name: "Skip for now" }).click();
+  await expect(setup.getByRole("status").filter({ hasText: googleSignInSkipNote })).toBeFocused();
+  expect(await page.evaluate(() => window.__googleSignInRequests)).toEqual([{ method: "getGoogleSignIn", params: {} }]);
+});
 
 for (const mode of ["create", "edit"]) {
   test(`${mode} shows the opening-window overlay without removing the browser`, async ({ page }) => {
@@ -2733,6 +2838,20 @@ test("shows credential host errors inline and keeps internal agents read-only", 
   expect(await page.evaluate(() => window.__credentialRequests)).toEqual([]);
 });
 
+/** Review screenshots of the Google sign-in states, taken only when GOOGLE_SIGNIN_SHOTS names a directory. */
+async function googleShots(page: Page, name: string, subject?: Locator): Promise<void> {
+  const dir = process.env.GOOGLE_SIGNIN_SHOTS;
+  if (!dir) return;
+  for (const [width, height] of [[1440, 900], [1280, 640]]) {
+    await page.setViewportSize({ width, height });
+    // The setup page is an iframe; let it lay out at the new size before capturing.
+    await page.waitForTimeout(300);
+    await subject?.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: `${dir}/${name}-${width}x${height}.png` });
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+}
+
 async function describeAndDemonstrate(setup: FrameLocator): Promise<void> {
   await setup.getByLabel("Agent name").fill("Download monthly statement");
   await setup.getByLabel("Website address").fill("https://portal.example.test/reports");
@@ -3079,6 +3198,11 @@ function hostPage(url: string, scenario: string | null): string {
   window.__savedAgents = [];
   window.__credentialRequests = [];
   window.__googleRequests = [];
+  window.__googleSignInRequests = [];
+  // Hosts with the Google sign-in dialog; "google-demo-*" demonstrations end signed in to Google unless "signedout".
+  const googleSignInHost = /google-(demo|signin)-/.test(scenario) && !scenario.endsWith("nocap");
+  const googleDemo = scenario.includes("google-demo-") && !scenario.endsWith("signedout");
+  let googleSignInStatus = scenario.endsWith("-ready") ? "ready" : scenario.endsWith("-needs") ? "needs_authenticator" : "missing";
   window.__liveViewSwitching = true;
   window.__startUrls = [];
   window.__renameRequests = [];
@@ -3242,7 +3366,7 @@ function hostPage(url: string, scenario: string | null): string {
         return;
       }
       if (scenario === "delayed-ready") setTimeout(() => send({ schedule: true }), 300);
-      else send({ schedule: true, mode: watch ? "run" : edit ? "edit" : "create", credentials: !["sign-in-unsupported", "edit-credentials-unsupported"].includes(scenario), google: !scenario.endsWith("old-host"), emailRoutes: !legacy, chooseSchedule: !legacy && scenario !== "no-text" });
+      else send({ schedule: true, mode: watch ? "run" : edit ? "edit" : "create", credentials: !["sign-in-unsupported", "edit-credentials-unsupported"].includes(scenario), google: !scenario.endsWith("old-host"), ...(googleSignInHost ? { googleSignIn: true } : {}), emailRoutes: !legacy, chooseSchedule: !legacy && scenario !== "no-text" });
     } else if (request.method === "loadRun") {
       if (scenario === "run-missing") { fail("This run no longer exists. It may have been deleted."); return; }
       const finished = { status: "succeeded", files: [{ name: "statement-run-7.pdf", url: "https://files.example.test/statement-run-7.pdf" }], screens: [{ image: portalScreen("Monthly statements (run-7)") }], confirmation: "Download started: statement-run-7.pdf", activity: { revision: 6, browser: "closed", snapshot: null, items: [{ sequence: 1, kind: "lifecycle", status: "completed", text: "Browser opened" }, { sequence: 2, kind: "lifecycle", status: "completed", text: "Browser closed" }] } };
@@ -3266,6 +3390,13 @@ function hostPage(url: string, scenario: string | null): string {
       savedCredentials = request.params.kinds;
       send({ saved: savedCredentials, ...(edit && scenario !== "edit-credentials-legacy-add" ? { changed: true } : {}) });
     } else if (request.method === "connectGoogle") { window.__googleRequests.push(request.params); send({ connected: !scenario.endsWith("cancel") });
+    } else if (request.method === "getGoogleSignIn") { window.__googleSignInRequests.push({ method: request.method, params: request.params }); send({ status: googleSignInStatus, email: googleSignInStatus === "missing" ? null : "ops@example.test" });
+    } else if (request.method === "setUpGoogleSignIn") {
+      window.__googleSignInRequests.push({ method: request.method, params: request.params });
+      // "cancel" and "needs" scenarios close the dialog without saving.
+      const saved = !scenario.endsWith("cancel") && !scenario.endsWith("-needs");
+      if (saved) googleSignInStatus = "ready";
+      send({ status: googleSignInStatus, email: googleSignInStatus === "missing" ? null : "ops@example.test", changed: saved });
     } else if (request.method === "startRecording") { window.__startUrls.push(request.params.url); if (edit ? recordingExists : recordingActive) { fail("Finish the current demonstration first."); return; } recordingActive = true; recordingExists = true; send({ id: "recording-1", status: "recording", liveViewUrl: "https://live.browserbase.com/session", liveViewSwitching: scenario.endsWith("window-switch"), steps: edit ? [] : steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
     else if (scenario === "organized" && (request.method === "getRecording" || request.method === "stopRecording")) {
       // Polls: one while recording (download started), then completed; stop starts organizing; the next read has stages.
@@ -3286,7 +3417,7 @@ function hostPage(url: string, scenario: string | null): string {
         steps: stopped && !organizing ? recorded.map((step, index) => ({ ...step, stage: organized[index][0], description: organized[index][1] })) : recorded,
         downloads: [{ id: "file", name: "statement-2026-09.csv", state: downloadState }], organizing, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null });
     }
-    else if (request.method === "getRecording" || request.method === "stopRecording") { if (request.method === "stopRecording") recordingActive = false; send({ id: "recording-1", status: request.method === "getRecording" && recordingActive ? "recording" : "stopped", liveViewUrl: request.method === "getRecording" && recordingActive ? "https://live.browserbase.com/session" : null, liveViewSwitching: scenario.endsWith("window-switch") && window.__liveViewSwitching, steps: edit ? (request.method === "stopRecording" ? redemonstrationSteps : []) : steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
+    else if (request.method === "getRecording" || request.method === "stopRecording") { if (request.method === "stopRecording") recordingActive = false; send({ id: "recording-1", status: request.method === "getRecording" && recordingActive ? "recording" : "stopped", liveViewUrl: request.method === "getRecording" && recordingActive ? "https://live.browserbase.com/session" : null, liveViewSwitching: scenario.endsWith("window-switch") && window.__liveViewSwitching, steps: edit ? (request.method === "stopRecording" ? redemonstrationSteps : []) : steps, ...(scenario.includes("google-demo-") ? { google: { signedIn: googleDemo } } : {}), expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
     else if (request.method === "cancelRecording") { recordingActive = false; recordingExists = false; send(undefined); }
     else if (request.method === "saveAgent") { if (window.__savedSchedule || scenario === "rerun-save-rejection" && window.__savedAgents.length > 0) fail("This agent is scheduled. Edit it in agent settings."); else { window.__savedAgents.push(request.params); send({ id: "agent-1" }); } }
     else if (request.method === "testAgent") { testAttempts += 1; window.__testArguments.push(request.params.arguments); exportSentAt = Date.now(); if (scenario === "email-cutoff" && window.__testArguments.length > 1) setTimeout(() => send({ id: "run-" + window.__testArguments.length }), 1000); else send({ id: "run-" + window.__testArguments.length }); }
@@ -3311,6 +3442,7 @@ function hostPage(url: string, scenario: string | null): string {
       }
       if (activityScenario.startsWith("activity-")) { const frame = activityFrame(request.params.runId); if (frame === null) fail("The connection to Reiterate was lost."); else send(frame); return; }
       if (scenario === "edit-fail-evidence") send({ status: "failed", failure: { kind: "website", message: "The download button was missing." }, stoppedAtStep: 2, confirmation: "The reports list opened, but no file was downloaded.", screens: [{ ...screen, thought: "Earlier screen" }, screen] });
+      else if (googleSignInHost) send({ status: "failed", failure: { kind: "google", message: "Set up the Google sign-in with an authenticator key, then run the test again." }, stoppedAtStep: 2, screens: [screen] });
       else if (scenario.includes("google-")) send({ status: "failed", failure: { kind: "google", message: "Google sign-in requires an account, but no Google credentials are available." }, stoppedAtStep: 2, screens: [screen] });
       else if (scenario.startsWith("edit-failure-label-")) {
         const kind = scenario.slice("edit-failure-label-".length);

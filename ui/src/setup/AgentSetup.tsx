@@ -1,5 +1,7 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { Fragment, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { applyOrganizedSteps, compileAgent, credentialKinds, dateRuleChoices, dateRuleLabel, doneWhenOptions, draftChanges, findUnambiguousEmailStep, formatDate, groupSteps, mergeDateSteps, openQuestions, replaceStepsFrom, requiredCredentials, resolveDateRule, StepValidationError, usableTarget, type CredentialKind, type DateRule, type DoneWhen, type SetupDraft, type SetupStep } from "./compiler";
+import { GoogleSignInPrompt } from "./GoogleSignInPrompt";
+import { useGoogleSignInPrompt } from "./googleSignIn";
 import { browserbaseLiveViewUrl, createHostBridge, HostRequestTimeoutError, type EditAgent as EditAgentData, type HostBridge, type RecordedDownload, type Recording } from "./host";
 import { HelpTip } from "./HelpTip";
 import { RunScreen, RunView } from "./RunView";
@@ -19,7 +21,7 @@ type RunState = WorkbenchRun & {
 const interactiveRequestTimeoutMs = 10 * 60_000;
 const signInNote = "If the website needs a sign-in, sign in during the demonstration. Reiterate saves the username and password you type there, encrypted, for this agent's runs. They never appear in the steps or the agent's instructions.";
 const demonstrateSignInNote = "Sign in here if the site asks. Reiterate saves the username and password encrypted for this agent's runs; they never appear in the steps. Entering an email code here is a manual demonstration; an automatic Test run verifies retrieval.";
-// Google's default second step is a number to tap in the Gmail app. An authenticator code is the step users can repeat later, e.g. for Connect Google.
+// Google's default second step is a number to tap in the Gmail app. Agents answer with an authenticator code instead.
 const googleAuthenticatorSetupUrl = "https://myaccount.google.com/two-step-verification/authenticator";
 
 const screens: Array<{ id: Screen; label: string }> = [
@@ -57,6 +59,8 @@ export default function AgentSetup() {
   const [chooseScheduleAllowed, setChooseScheduleAllowed] = useState(false);
   const [credentialsAllowed, setCredentialsAllowed] = useState(false);
   const [googleAllowed, setGoogleAllowed] = useState(false);
+  const [googleSignInAllowed, setGoogleSignInAllowed] = useState(false);
+  const googleSignIn = useGoogleSignInPrompt(bridge, googleSignInAllowed);
   const [savedCredentials, setSavedCredentials] = useState<CredentialKind[]>([]);
   const [otpSource, setOtpSource] = useState<"authenticator" | "email" | undefined>();
   const [mode, setMode] = useState<"create" | "edit" | "run" | null>(null);
@@ -173,6 +177,7 @@ export default function AgentSetup() {
       setChooseScheduleAllowed(result.chooseSchedule === true);
       setCredentialsAllowed(result.credentials === true);
       setGoogleAllowed(result.google === true);
+      setGoogleSignInAllowed(result.googleSignIn === true);
       setMode(result.mode ?? "create");
       setConnecting(false);
     }).catch((requestError: Error) => {
@@ -359,6 +364,7 @@ export default function AgentSetup() {
       const next = await bridge.request("stopRecording", { id: recording.id });
       setRecording(next);
       changeSteps(mergeDateSteps(next.steps));
+      await googleSignIn.afterDemonstration(next);
     } catch (requestError) {
       setError(errorMessage(requestError));
     } finally {
@@ -458,7 +464,7 @@ export default function AgentSetup() {
     if (bridge === undefined || bridge === null || agentId === null) return;
     setError(null); setBusy(true);
     try {
-      if ((await bridge.request("connectGoogle", { agentId }, { timeoutMs: interactiveRequestTimeoutMs })).connected) invalidateTest();
+      if (googleSignInAllowed ? await googleSignIn.setUp("test") : (await bridge.request("connectGoogle", { agentId }, { timeoutMs: interactiveRequestTimeoutMs })).connected) invalidateTest();
     } catch (requestError) { setError(errorMessage(requestError)); }
     finally { setBusy(false); }
   }
@@ -690,7 +696,7 @@ export default function AgentSetup() {
     return <main className="setup-unavailable"><h1>Open agent setup from Reiterate</h1><p>This page needs the Reiterate host to securely create and test an agent.</p></main>;
   }
 
-  if (mode === "edit") return <EditScreen bridge={bridge} credentialsAllowed={credentialsAllowed} googleAllowed={googleAllowed} />;
+  if (mode === "edit") return <EditScreen bridge={bridge} credentialsAllowed={credentialsAllowed} googleAllowed={googleAllowed} googleSignInAllowed={googleSignInAllowed} />;
   if (mode === "run") return <RunScreen bridge={bridge} />;
   // The host decides the mode; until it answers, a run page does not flash the setup steps.
   if (mode === null && new URLSearchParams(window.location.search).get("mode") === "run") {
@@ -715,9 +721,9 @@ export default function AgentSetup() {
           {stepError !== null && stepErrorIndex >= 0 && <div className="setup-error" role="alert"><span id="setup-step-error">Step {stepErrorIndex + 1}: {stepError.message}</span><button type="button" className="button button-quiet" onClick={() => { setScreen("review"); setStepFocus(stepError.stepId); }}>Go to step</button></div>}
           {notice !== null && <p className="setup-notice" role="status">{notice}</p>}
           {screen === "describe" && <Describe name={name} url={url} goal={goal} busy={busy || connecting} onName={(value) => setDraftField(setName, value)} onUrl={(value) => setDraftField(setUrl, value)} onGoal={(value) => setDraftField(setGoal, value)} onContinue={() => void startRecording()} />}
-          {screen === "demonstrate" && <Demonstrate recording={recording} steps={steps} liveViewUrl={liveViewUrl} busy={busy} onStop={() => void stopRecording()} onReview={continueToReview} onReset={() => void reset()} />}
-          {screen === "review" && <Review steps={steps} goal={goal} organizing={recording?.organizing === true} busy={busy} credentialsAllowed={credentialsAllowed} savedCredentials={savedCredentials} fieldRefs={stepFieldRefs} stepError={stepError !== null && stepErrorIndex >= 0 ? { stepId: stepError.stepId, messageId: "setup-step-error" } : undefined} onRequestOtp={() => void requestReviewOtp()} onUpdateStep={updateStep} onRemoveStep={removeStep} onMergeSteps={(ids) => { changeSteps((current) => combineDateSteps(current, ids)); invalidateTest(); }} onUndoMergedStep={(id) => { changeSteps((current) => undoDateMerge(current, id)); invalidateTest(); }} onMoveStep={(index, delta) => { changeSteps((current) => moveStep(current, index, delta)); invalidateTest(); }} onBack={() => setScreen("demonstrate")} onContinue={continueToTest} onInsert={() => { const id = `inserted-${Date.now()}`; changeSteps((current) => [...current, { id, type: "agent", description: "" }]); invalidateTest(); }} />}
-          {screen === "test" && <Test steps={steps} url={url} scheduleRecovery={scheduleRecovery} emailRoutesAllowed={emailRoutesAllowed} textAllowed={chooseScheduleAllowed} googleAllowed={googleAllowed} doneWhen={doneWhen} emailStatus={emailStatus} emailFrom={emailFrom} emailFiles={emailFiles} canContinue={canContinue} onDoneWhen={chooseDoneWhen} onChooseEmail={() => void chooseEmailDoneWhen()} onAllowEmail={() => void allowEmailSender()} onChangeCredentials={() => void changeCredentials()} onConnectGoogle={() => void connectGoogle()} run={testRun} busy={busy} onRun={() => void runTest()} onStop={() => void stopTest()} onSchedule={() => void schedule()} onBack={() => setScreen("review")} onEditStep={editTestStep} />}
+          {screen === "demonstrate" && <Demonstrate googleSignInAllowed={googleSignInAllowed} recording={recording} steps={steps} liveViewUrl={liveViewUrl} busy={busy} onStop={() => void stopRecording()} onReview={continueToReview} onReset={() => void reset()} />}
+          {screen === "review" && <Review notice={<GoogleSignInPrompt prompt={googleSignIn.prompt} />} steps={steps} goal={goal} organizing={recording?.organizing === true} busy={busy} credentialsAllowed={credentialsAllowed} savedCredentials={savedCredentials} fieldRefs={stepFieldRefs} stepError={stepError !== null && stepErrorIndex >= 0 ? { stepId: stepError.stepId, messageId: "setup-step-error" } : undefined} onRequestOtp={() => void requestReviewOtp()} onUpdateStep={updateStep} onRemoveStep={removeStep} onMergeSteps={(ids) => { changeSteps((current) => combineDateSteps(current, ids)); invalidateTest(); }} onUndoMergedStep={(id) => { changeSteps((current) => undoDateMerge(current, id)); invalidateTest(); }} onMoveStep={(index, delta) => { changeSteps((current) => moveStep(current, index, delta)); invalidateTest(); }} onBack={() => setScreen("demonstrate")} onContinue={continueToTest} onInsert={() => { const id = `inserted-${Date.now()}`; changeSteps((current) => [...current, { id, type: "agent", description: "" }]); invalidateTest(); }} />}
+          {screen === "test" && <Test steps={steps} url={url} scheduleRecovery={scheduleRecovery} emailRoutesAllowed={emailRoutesAllowed} textAllowed={chooseScheduleAllowed} googleAllowed={googleAllowed} googleSignInAllowed={googleSignInAllowed} doneWhen={doneWhen} emailStatus={emailStatus} emailFrom={emailFrom} emailFiles={emailFiles} canContinue={canContinue} onDoneWhen={chooseDoneWhen} onChooseEmail={() => void chooseEmailDoneWhen()} onAllowEmail={() => void allowEmailSender()} onChangeCredentials={() => void changeCredentials()} onConnectGoogle={() => void connectGoogle()} run={testRun} busy={busy} onRun={() => void runTest()} onStop={() => void stopTest()} onSchedule={() => void schedule()} onBack={() => setScreen("review")} onEditStep={editTestStep} />}
           {screen === "schedule" && !scheduleSaved && <div className="setup-panel"><div className="stage-title"><h2>Schedule</h2><p>Your test passed. Scheduled runs repeat the tested steps.</p></div><p>Finish setup to run manually, or choose a daily schedule.</p>{scheduleAllowed && <><label className="result-check"><input type="checkbox" aria-label="Schedule daily" checked={cron !== ""} disabled={busy || scheduleRecovery} onChange={(event) => setCron(event.target.checked ? localTimeToUtcCron(dailyTime) : "")} />Schedule daily</label>{cron !== "" && <label>Time of day<input type="time" aria-label="Time of day" value={dailyTime} disabled={busy || scheduleRecovery} onChange={(event) => { setDailyTime(event.target.value); if (event.target.value) setCron(localTimeToUtcCron(event.target.value)); }} /><span className="field-note">Your local time. The schedule is stored in UTC.</span></label>}</>}<div className="setup-actions"><button className="button button-quiet" type="button" onClick={() => setScreen("test")} disabled={busy || scheduleRecovery}>Back to test</button><button className="button button-primary" type="button" onClick={() => void saveInlineSchedule()} disabled={!canContinue || busy || (cron !== "" && dailyTime === "")}>{cron.trim() ? "Schedule agent" : "Finish setup"}</button></div></div>}
           {scheduleSaved && <div className="setup-panel"><div className="stage-title"><h2>Your agent is ready</h2><p>{cron.trim() ? "The schedule is saved. It will repeat the tested workflow." : "Run this agent manually whenever you need it."}</p></div><div className="setup-actions"><button className="button button-primary" type="button" onClick={() => void close()} disabled={busy}>Open agent</button></div></div>}
         </section>
@@ -727,7 +733,8 @@ export default function AgentSetup() {
   );
 }
 
-function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: HostBridge; credentialsAllowed: boolean; googleAllowed: boolean }): JSX.Element {
+function EditScreen({ bridge, credentialsAllowed, googleAllowed, googleSignInAllowed }: { bridge: HostBridge; credentialsAllowed: boolean; googleAllowed: boolean; googleSignInAllowed: boolean }): JSX.Element {
+  const googleSignIn = useGoogleSignInPrompt(bridge, googleSignInAllowed);
   const [agent, setAgent] = useState<EditAgentData | null>(null);
   const [draft, setDraft] = useState<SetupDraft | null>(null);
   const [stages, setStages] = useState<unknown[]>([]);
@@ -919,7 +926,7 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
   const connectGoogle = async (): Promise<void> => {
     setBusy(true); setError(null);
     try {
-      if ((await bridge.request("connectGoogle", { agentId: agent.agentId }, { timeoutMs: interactiveRequestTimeoutMs })).connected) {
+      if (googleSignInAllowed ? await googleSignIn.setUp("test") : (await bridge.request("connectGoogle", { agentId: agent.agentId }, { timeoutMs: interactiveRequestTimeoutMs })).connected) {
         setCredentialsChanged(true); resetTest();
       }
     } catch (e) { setError(errorMessage(e)); }
@@ -1006,7 +1013,7 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
   const stopRecording = async (): Promise<void> => {
     if (recording === null) return;
     setBusy(true);
-    try { const stopped = await bridge.request("stopRecording", { id: recording.id }); setRecording(stopped); if (stopped.steps.length > 0) update({ steps: replaceStepsFrom(draft.steps, selectedFromStep, mergeDateSteps(draft.steps.some((step) => step.stage != null) ? stopped.steps.map((step) => ({ ...step, stage: step.stage ?? "" })) : stopped.steps)) }); }
+    try { const stopped = await bridge.request("stopRecording", { id: recording.id }); setRecording(stopped); if (stopped.steps.length > 0) update({ steps: replaceStepsFrom(draft.steps, selectedFromStep, mergeDateSteps(draft.steps.some((step) => step.stage != null) ? stopped.steps.map((step) => ({ ...step, stage: step.stage ?? "" })) : stopped.steps)) }); await googleSignIn.afterDemonstration(stopped); }
     catch (e) { setError(errorMessage(e)); }
     finally { setBusy(false); }
   };
@@ -1082,7 +1089,8 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
       <b>{succeeded ? "Test completed" : testRun.failure?.kind === "stopped" ? "Test stopped" : "Test failed"}</b>
       {!succeeded && <>
         <b>{failureLabel(testRun.failure?.kind)}</b>
-        {testRun.failure?.kind === "google" && <><h3>The agent needs a Google sign-in</h3><p>Connect the Google account this website uses, then run the test again.</p>{googleAllowed ? <button className="button button-quiet" disabled={busy} onClick={() => void connectGoogle()}>Connect Google</button> : <p>Open Credentials → Connect Google for this agent.</p>}</>}
+        {testRun.failure?.kind === "google" && <><h3>The agent needs a Google sign-in</h3>{googleSignInAllowed ? <><p>{testRun.failure.message || "Set up the Google sign-in with an authenticator key, then run the test again."}</p><button className="button button-primary" disabled={busy} onClick={() => void connectGoogle()}>Set up Google sign-in</button></>
+          : <><p>Connect the Google account this website uses, then run the test again.</p>{googleAllowed ? <button className="button button-quiet" disabled={busy} onClick={() => void connectGoogle()}>Connect Google</button> : <p>Open Credentials → Connect Google for this agent.</p>}</>}</>}
         {(testRun.failure?.message || testRun.error) && testRun.failure?.kind !== "google" && <p>{testRun.failure?.message || testRun.error}</p>}
       </>}
       {testRun.stoppedAtStep != null && <p>Stopped at step {testRun.stoppedAtStep}{draft.steps[testRun.stoppedAtStep - 1]?.description ? `: ${draft.steps[testRun.stoppedAtStep - 1]!.description}` : ""}</p>}
@@ -1146,6 +1154,7 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
             </div>
             <p>Replaces step {selectedFromStep + 1} and every later step with a new demonstration.</p>
           </div>
+          <GoogleSignInPrompt prompt={googleSignIn.prompt} />
           {recording?.blockedReason && <p className="edit-result edit-result-failed" role="alert">Cannot continue: {recording.blockedReason}</p>}
           {recording?.status === "expired" && <p className="edit-result edit-result-failed" role="alert">Demonstration expired. Re-demonstrate again.</p>}
           {recordingActive && <div className="browser-frame edit-recording">{browserbaseLiveViewUrl(recording.liveViewUrl) ? <iframe title="Virtual browser" src={browserbaseLiveViewUrl(recording.liveViewUrl)!} allow="clipboard-read; clipboard-write" /> : <p>Opening the virtual browser.</p>}{recording.liveViewSwitching && <div className="browser-switching" role="status">Opening the new window…</div>}</div>}
@@ -1291,7 +1300,7 @@ function Describe(props: { name: string; url: string; goal: string; busy: boolea
   return <div className="setup-panel setup-panel-compact"><div className="stage-title"><h2>Describe the job</h2><p>Start with the website and the result you want. You will demonstrate the task next.</p></div><p className="credential-warning">{signInNote}</p><label>Agent name<input aria-label="Agent name" value={props.name} onChange={(event) => props.onName(event.target.value)} autoComplete="off" /></label><label>Website address<input aria-label="Website address" value={props.url} onChange={(event) => props.onUrl(event.target.value)} placeholder="https://example.com" inputMode="url" autoComplete="off" /></label><label>What should the agent do?<textarea aria-label="What should the agent do?" value={props.goal} onChange={(event) => props.onGoal(event.target.value)} placeholder="For example: download the monthly statement for the selected month." /><span className="field-note">Say what the result is and for which period, e.g. "Download last month's bank statement as CSV". Reiterate uses this to suggest answers in the review.</span></label><div className="setup-actions"><button className="button button-primary" type="button" onClick={props.onContinue} disabled={props.busy}>Continue to demonstration</button></div></div>;
 }
 
-function Demonstrate(props: { recording: Recording | null; steps: SetupStep[]; liveViewUrl: string | null; busy: boolean; onStop(): void; onReview(): void; onReset(): void }): JSX.Element {
+function Demonstrate(props: { googleSignInAllowed: boolean; recording: Recording | null; steps: SetupStep[]; liveViewUrl: string | null; busy: boolean; onStop(): void; onReview(): void; onReset(): void }): JSX.Element {
   const stepsRef = useRef<HTMLDivElement>(null);
   const reviewRef = useRef<HTMLButtonElement>(null);
   const isRecording = props.recording?.status === "recording";
@@ -1358,7 +1367,9 @@ function Demonstrate(props: { recording: Recording | null; steps: SetupStep[]; l
             {count === 0 ? <p>Actions will appear here while you demonstrate.</p> : <ol>{props.steps.map((step) => <li key={step.id} className={step.type === "download" ? "captured-download" : undefined}>{step.description}</li>)}</ol>}
           </div>
           <p className="captured-steps-note"><svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14"><rect x="5" y="11" width="14" height="9" rx="2" fill="none" stroke="currentColor" strokeWidth="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg><span>{demonstrateSignInNote}</span></p>
-          <p className="captured-steps-note google-verify-note"><span>Signing in with Google? <a href={googleAuthenticatorSetupUrl} target="_blank" rel="noopener noreferrer">Add an authenticator app to your Google Account</a> first. When Google asks you to confirm on your phone or tap a number in the Gmail app, choose More ways to verify (or Try another way) and enter the code from your authenticator app.</span></p>
+          {props.googleSignInAllowed
+            ? <p className="captured-steps-note google-verify-note"><span>Signing in with Google? After the demonstration we'll help you save a Google sign-in with an <a href={googleAuthenticatorSetupUrl} target="_blank" rel="noopener noreferrer">authenticator key</a>, so the agent can pass Google's verification.</span></p>
+            : <p className="captured-steps-note google-verify-note"><span>Signing in with Google? <a href={googleAuthenticatorSetupUrl} target="_blank" rel="noopener noreferrer">Add an authenticator app to your Google Account</a> first. When Google asks you to confirm on your phone or tap a number in the Gmail app, choose More ways to verify (or Try another way) and enter the code from your authenticator app.</span></p>}
         </aside>
       </div>
     </div>
@@ -1513,13 +1524,13 @@ function StepEditorRow(props: StepEditorProps & { step: SetupStep; index: number
   return <div className={`edit-step${invalid ? " step-invalid" : ""}`}><div>{content}{mergeNote}</div><div className="edit-step-controls"><button className="icon-button" aria-label={`Move step ${props.index + 1} up`} disabled={props.busy || props.index === 0} onClick={() => props.onMoveStep?.(props.index, -1)}><EditIcon name="up" /></button><button className="icon-button" aria-label={`Move step ${props.index + 1} down`} disabled={props.busy || props.index === props.steps.length - 1} onClick={() => props.onMoveStep?.(props.index, 1)}><EditIcon name="down" /></button><button className="icon-button" aria-label={`Remove step ${props.index + 1}`} disabled={props.busy} onClick={() => props.onRemoveStep(props.step.id)}><EditIcon name="close" /></button></div>{mergeCandidate && <input type="checkbox" aria-label={`Select step ${props.index + 1} for date merge`} checked={props.selected} disabled={props.busy} onChange={() => props.onToggleSelected(props.step.id)} />}</div>;
 }
 
-function Review(props: { steps: SetupStep[]; goal: string; organizing: boolean; busy: boolean; credentialsAllowed: boolean; savedCredentials: CredentialKind[]; fieldRefs: StepEditorProps["fieldRefs"]; stepError: StepEditorProps["stepError"]; onRequestOtp(): void; onUpdateStep(id: string, updates: Partial<SetupStep>): void; onRemoveStep(id: string): void; onMergeSteps(ids: string[]): void; onUndoMergedStep(id: string): void; onMoveStep(index: number, delta: number): void; onBack(): void; onContinue(): void; onInsert(): void }): JSX.Element {
+function Review(props: { notice: ReactNode; steps: SetupStep[]; goal: string; organizing: boolean; busy: boolean; credentialsAllowed: boolean; savedCredentials: CredentialKind[]; fieldRefs: StepEditorProps["fieldRefs"]; stepError: StepEditorProps["stepError"]; onRequestOtp(): void; onUpdateStep(id: string, updates: Partial<SetupStep>): void; onRemoveStep(id: string): void; onMergeSteps(ids: string[]): void; onUndoMergedStep(id: string): void; onMoveStep(index: number, delta: number): void; onBack(): void; onContinue(): void; onInsert(): void }): JSX.Element {
   const renameStage = (index: number, name: string): void => { const group = groupSteps(props.steps)[groupSteps(props.steps).findIndex((item) => item.steps.some(({ index: itemIndex }) => itemIndex === index))]; group?.steps.forEach(({ step }) => props.onUpdateStep(step.id, { stage: name })); };
-  return <div className="setup-panel review-panel"><div className="stage-title"><h2>Review and complete the setup</h2><p>Make each instruction clear. Typed text and choices are repeated on every run; sign-in fields use details you save in Reiterate.</p></div>{props.organizing && <p className="setup-notice organizing-notice" role="status"><span className="edit-spinner" aria-hidden="true" />Grouping your steps into stages and making them easier to read. You can edit while this finishes.</p>}<StepEditor variant="review" {...props} onRenameStage={renameStage} onInsert={props.onInsert} /></div>;
+  return <div className="setup-panel review-panel"><div className="stage-title"><h2>Review and complete the setup</h2><p>Make each instruction clear. Typed text and choices are repeated on every run; sign-in fields use details you save in Reiterate.</p></div>{props.notice}{props.organizing && <p className="setup-notice organizing-notice" role="status"><span className="edit-spinner" aria-hidden="true" />Grouping your steps into stages and making them easier to read. You can edit while this finishes.</p>}<StepEditor variant="review" {...props} onRenameStage={renameStage} onInsert={props.onInsert} /></div>;
 }
 
 function Test(props: {
-  steps: SetupStep[]; url: string; scheduleRecovery: boolean; emailRoutesAllowed: boolean; textAllowed: boolean; googleAllowed: boolean; doneWhen: DoneWhen;
+  steps: SetupStep[]; url: string; scheduleRecovery: boolean; emailRoutesAllowed: boolean; textAllowed: boolean; googleAllowed: boolean; googleSignInAllowed: boolean; doneWhen: DoneWhen;
   onDoneWhen(value: DoneWhen): void; onChooseEmail(): void; onAllowEmail(): void; onChangeCredentials(): void; onConnectGoogle(): void; run: RunState | null; busy: boolean; emailStatus: "waiting" | "routed" | "rejected" | "no_documents" | "timeout" | null; emailFrom: string | null; emailFiles: Array<{ name: string; url: string }>; canContinue: boolean;
   onRun(): void; onStop(): void; onSchedule(): void; onBack(): void; onEditStep(id: string, description: string): void;
 }): JSX.Element {
@@ -1570,7 +1581,7 @@ function Test(props: {
     : criterionNotMet ? failureMessage!.slice("Success criterion not met: ".length)
     : kind === "steps" ? "The steps before it worked. Rewrite the highlighted step below, then run the test again."
     : kind === "signin" ? "Check the saved sign-in details, then run the test again."
-    : kind === "google" ? "Connect the Google account this website uses, then run the test again."
+    : kind === "google" ? (props.googleSignInAllowed && props.run?.failure?.message) || "Connect the Google account this website uses, then run the test again."
     : kind === "result" ? "Choose how Reiterate knows the run worked under Done when."
     : passed && props.doneWhen.kind === "described" && props.run?.confirmation ? `Agent saw: ${props.run.confirmation}`
     : props.run?.status === "succeeded" && !emailRun && files.length === 0 ? "Reiterate doesn’t keep a file from this run, so workflows can’t use its output."
@@ -1607,7 +1618,7 @@ function Test(props: {
     <div className="workbench-grid">
       <TestBrowser run={props.run} url={props.url} passed={passed} serviceFailure={serviceFailure} screenIndex={screenIndex} onSelectScreen={setScreenIndex} />
       <aside className="test-rail" aria-label="Test steps"><header><h3>{props.run ? "Test result" : "Your steps"}</h3><span>{props.run ? `${completedSteps ? props.steps.length : userStopped && stopped !== null ? stopped + 1 : failedStep ? stopped! + 1 : 0} of ${props.steps.length} reached` : `${props.steps.length} steps`}</span></header>
-        <div className={`run-status ${failed && !userStopped ? "bad" : passed ? "good" : ""}`} role={failed && !userStopped ? "alert" : "status"}><small>{userStopped ? "Test stopped" : serviceFailure ? "Reiterate problem · not your steps" : kind === "steps" ? "Step needs clearer wording" : kind === "signin" ? "Sign-in problem" : kind === "google" ? "Google sign-in needed" : kind === "result" ? "No file came back" : kind === "check" ? "Done-when check not met" : emailProblem ? props.emailStatus === "rejected" ? "Email not accepted" : "Email not received" : passed ? "Test passed" : running ? "Test running" : emailRun ? "Waiting for email" : failed ? "Test failed" : "Not tested yet"}</small><strong>{statusText}</strong><p>{props.run ? statusDetail : "Run the test to watch the agent work through these steps in a fresh browser."}</p>{!serviceFailure && !userStopped && props.run?.failure?.message && kind !== "result" && kind !== "check" && <blockquote><b>The agent said</b>{props.run.failure.message}</blockquote>}{emailRun && props.emailStatus === "rejected" && props.emailFrom && <button type="button" className="button button-primary" onClick={props.onAllowEmail} disabled={locked}>Accept emails from {props.emailFrom}</button>}{kind === "signin" && <button type="button" className="button button-quiet" onClick={props.onChangeCredentials} disabled={locked}>Change sign-in details</button>}{kind === "google" && (props.googleAllowed ? <button type="button" className="button button-quiet" onClick={props.onConnectGoogle} disabled={locked}>Connect Google</button> : <p>Open Credentials → Connect Google for this agent.</p>)}</div>
+        <div className={`run-status ${failed && !userStopped ? "bad" : passed ? "good" : ""}`} role={failed && !userStopped ? "alert" : "status"}><small>{userStopped ? "Test stopped" : serviceFailure ? "Reiterate problem · not your steps" : kind === "steps" ? "Step needs clearer wording" : kind === "signin" ? "Sign-in problem" : kind === "google" ? "Google sign-in needed" : kind === "result" ? "No file came back" : kind === "check" ? "Done-when check not met" : emailProblem ? props.emailStatus === "rejected" ? "Email not accepted" : "Email not received" : passed ? "Test passed" : running ? "Test running" : emailRun ? "Waiting for email" : failed ? "Test failed" : "Not tested yet"}</small><strong>{statusText}</strong><p>{props.run ? statusDetail : "Run the test to watch the agent work through these steps in a fresh browser."}</p>{!serviceFailure && !userStopped && props.run?.failure?.message && kind !== "result" && kind !== "check" && !(kind === "google" && props.googleSignInAllowed) && <blockquote><b>The agent said</b>{props.run.failure.message}</blockquote>}{emailRun && props.emailStatus === "rejected" && props.emailFrom && <button type="button" className="button button-primary" onClick={props.onAllowEmail} disabled={locked}>Accept emails from {props.emailFrom}</button>}{kind === "signin" && <button type="button" className="button button-quiet" onClick={props.onChangeCredentials} disabled={locked}>Change sign-in details</button>}{kind === "google" && (props.googleSignInAllowed ? <button type="button" className="button button-primary" onClick={props.onConnectGoogle} disabled={locked}>Set up Google sign-in</button> : props.googleAllowed ? <button type="button" className="button button-quiet" onClick={props.onConnectGoogle} disabled={locked}>Connect Google</button> : <p>Open Credentials → Connect Google for this agent.</p>)}</div>
         <div className="rail-tabs" role="tablist" aria-label="Test details" onKeyDown={moveTab}>
           <button type="button" role="tab" id="test-tab-activity" aria-controls="test-panel-activity" aria-selected={railTab === "activity"} tabIndex={railTab === "activity" ? 0 : -1} onClick={() => setRailTab("activity")}>Activity</button>
           <button type="button" role="tab" id="test-tab-steps" aria-controls="test-panel-steps" aria-selected={railTab === "steps"} tabIndex={railTab === "steps" ? 0 : -1} onClick={() => setRailTab("steps")}>Steps <span>{props.steps.length}</span></button>
