@@ -869,3 +869,71 @@ test("compares completion meaning when deciding what changed", () => {
   ]);
   assert.deepEqual(draftChanges({ ...drafts.text, doneWhen: { kind: "text", value: "Export sent" } }, drafts.text), []);
 });
+
+test("reads a saved criterion only in the exact shape and limits it compiles from, keeping any other value raw and unchanged", () => {
+  const drafts = draftsByCompletion();
+  const stages = compileAgent(drafts.file).stages;
+  const malformed: Array<[string, unknown]> = [
+    ["blank exact text", { kind: "text", value: "   " }],
+    ["exact text over 200 characters", { kind: "text", value: "x".repeat(201) }],
+    ["blank described criterion", { kind: "described", value: "" }],
+    ["described criterion over 300 characters", { kind: "described", value: "x".repeat(301) }],
+    ["empty clicked target", { kind: "clicked", value: "" }],
+    ["clicked target over 20000 characters", { kind: "clicked", value: "x".repeat(20001) }],
+    ["an address that is not an email address", { kind: "email", address: "reports", channelId: "route-1" }],
+    ["an address without a domain", { kind: "email", address: "reports@reiterate", channelId: "route-1" }],
+    ["a channel id with a space", { kind: "email", address: routedAddress, channelId: "route 1" }],
+    ["a channel id over 100 characters", { kind: "email", address: routedAddress, channelId: "r".repeat(101) }],
+    ["a channel id that is not text", { kind: "email", address: routedAddress, channelId: 1 }],
+    ["a file criterion with an unknown key", { kind: "file", extension: "pdf" }],
+    ["a text criterion with an unknown key", { kind: "text", value: "Export sent", caseSensitive: true }],
+    ["an email criterion with an unknown key", { kind: "email", address: routedAddress, channelId: "route-1", recipient: "me@example.test" }],
+  ];
+  for (const [label, doneWhen] of malformed) {
+    const setup = { ...drafts.file, doneWhen };
+    const reopened = reopenDraft(saved(drafts.file, stages, setup));
+    assert.deepEqual([reopened.kind, reopened.kind === "raw" ? reopened.reason : null], ["raw", "unknown-completion"], label);
+    assert.equal(reopened.draft.doneWhen, undefined, label);
+    // Raw saves send the stored criterion back exactly as it was saved.
+    assert.equal(JSON.stringify(authoredSetup(reopened, { ...reopened.draft, goal: "Changed goal" }).doneWhen), JSON.stringify(doneWhen), label);
+  }
+  // The limits are the ones compiling enforces, so every criterion a Draft can compile with still reopens structured.
+  for (const [label, draft] of [
+    ["200 characters of exact text inside whitespace", { ...drafts.text, doneWhen: { kind: "text", value: ` ${"x".repeat(200)} ` } }],
+    ["300 characters of described criterion", { ...drafts.described, doneWhen: { kind: "described", value: "x".repeat(300) } }],
+    ["a 100-character channel id", { ...drafts.email, doneWhen: { kind: "email", address: routedAddress, channelId: `route-${"1".repeat(94)}` } }],
+  ] as Array<[string, SetupDraft]>) {
+    assert.equal(reopenDraft(saved(draft)).kind, "structured", label);
+  }
+});
+
+test("a malformed saved criterion keeps raw editing with a warning even when the agent has no steps", () => {
+  const draft = { ...draftsByCompletion().email, steps: [] };
+  const doneWhen = { kind: "email", address: "reports", channelId: "route-1" };
+  const reopened = reopenDraft({ ...saved(draftsByCompletion().email, undefined, { ...draft, doneWhen }), steps: [] });
+  assert.deepEqual([reopened.kind, reopened.kind === "raw" ? reopened.reason : null], ["raw", "unknown-completion"]);
+  assert.equal(reopened.draft.doneWhen, undefined);
+  assert.deepEqual(authoredSetup(reopened, reopened.draft).doneWhen, doneWhen);
+});
+
+test("a raw Draft keeps a readable saved criterion so its email arrival check still applies", () => {
+  const drafts = draftsByCompletion();
+  const email = drafts.email;
+  const prompt = (compileAgent(email).stages[0] as { prompt: string }).prompt;
+  for (const [label, host] of [
+    ["no demonstrated steps", { ...saved(email), steps: [] }],
+    ["no projected steps", { ...saved(email), steps: null }],
+    ["stages that contradict the criterion", saved(email, [{ type: "agent", prompt, step_limit: 64 }, { type: "download" }])],
+  ] as Array<[string, ReturnType<typeof saved>]>) {
+    const reopened = reopenDraft(host);
+    assert.equal(reopened.kind, "raw", label);
+    assert.deepEqual(reopened.draft.doneWhen, email.doneWhen, label);
+    assert.deepEqual(reopened.draft.steps, [], label);
+    assert.deepEqual(draftChanges(reopened.draft, reopenDraft(host).draft), [], label);
+    // The stored setup, not the raw Draft, is what a raw save sends back.
+    assert.deepEqual(authoredSetup(reopened, reopened.draft).steps, host.steps === null || host.steps.length === 0 ? JSON.parse(JSON.stringify(email.steps)) : host.steps, label);
+    assert.deepEqual(authoredSetup(reopened, reopened.draft).doneWhen, email.doneWhen, label);
+  }
+  const textMismatch = reopenDraft(saved(drafts.text, [{ type: "agent", prompt, step_limit: 64 }, { type: "download" }]));
+  assert.deepEqual(textMismatch.draft.doneWhen, drafts.text.doneWhen);
+});

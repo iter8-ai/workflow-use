@@ -2779,6 +2779,7 @@ for (const { scenario, cause } of [
       { type: "download" }, { type: "sleep", sleep_ms: 5000 }, { type: "reload" },
     ]);
     expect(saved.draft.steps.map((step: { id: string }) => step.id)).toEqual(["open-reports", "download"]);
+    expect(saved.config.prompt).toBe("");
     if (scenario === "edit-mismatch") expect(saved.draft.doneWhen).toEqual({ kind: "text", value: "Export sent" });
     else expect(saved.draft).not.toHaveProperty("doneWhen");
     await setup.getByLabel("I checked the result").check();
@@ -2829,6 +2830,101 @@ test("edit: engine success alone never passes an email check, and the wait ends 
   await expect(setup.getByRole("button", { name: "Publish changes" })).toBeDisabled();
   await expect(setup.getByRole("button", { name: "Run test again" })).toBeEnabled();
 });
+
+for (const scenario of ["edit-malformed-blank-text", "edit-malformed-long-text", "edit-malformed-address", "edit-malformed-channel", "edit-malformed-extra-key"]) {
+  test(`edit: a saved criterion the host cannot read stays raw, with a warning, and is saved back unchanged (${scenario})`, async ({ page }) => {
+    await page.goto(`${baseUrl}/host?scenario=${scenario}`);
+    const setup = page.frameLocator("iframe");
+    await expect(setup.getByText("Steps can’t be edited for this agent")).toBeVisible();
+    await expect(setup.getByText("Reiterate doesn’t know how this agent checks that it’s done", { exact: false })).toBeVisible();
+    await expect(setup.getByLabel("Step 1 description")).toHaveCount(0);
+    await setup.getByRole("textbox", { name: "Agent instructions" }).fill("Open reports and download the statement");
+    await setup.getByRole("button", { name: "Test changes" }).click();
+    await expect(setup.getByText("Test completed")).toBeVisible();
+    const saved = await page.evaluate(() => window.__savedAgents.at(-1));
+    const loaded = await page.evaluate(() => window.__loadedSetup);
+    expect(JSON.stringify(saved.draft.doneWhen)).toBe(JSON.stringify(loaded.doneWhen));
+    expect(saved.draft.steps).toEqual(loaded.steps);
+    // Raw editing sends an empty top-level prompt; the host keeps the live one.
+    expect(saved.config.prompt).toBe("");
+    expect(saved.config.stages).toEqual([
+      { type: "agent", prompt: "Open reports and download the statement", step_limit: 16 },
+      { type: "download" }, { type: "sleep", sleep_ms: 5000 }, { type: "reload" },
+    ]);
+  });
+}
+
+for (const { scenario, warning } of [
+  { scenario: "edit-email-no-steps", warning: false },
+  { scenario: "edit-email-mismatch", warning: true },
+]) {
+  test(`edit: raw editing keeps a saved email check, which passes only on routed arrival after the current test start (${scenario})`, async ({ page }) => {
+    await page.goto(`${baseUrl}/host?scenario=${scenario}`);
+    const setup = page.frameLocator("iframe");
+    await expect(setup.getByRole("textbox", { name: "Agent instructions" })).toBeVisible();
+    await expect(setup.getByText("Steps can’t be edited for this agent")).toHaveCount(warning ? 1 : 0);
+    await expect(setup.getByText("Done when", { exact: true })).toHaveCount(0);
+    await setup.getByRole("textbox", { name: "Agent instructions" }).fill("Open reports and email the export to reports+agent@reiterate.com");
+    await setup.getByRole("button", { name: "Test changes" }).click();
+    await expect(setup.getByText("The export arrived from portal@example.test")).toBeVisible();
+    await expect(setup.getByText("Test completed")).toHaveCount(0);
+    await expect(setup.getByLabel("I checked the result")).toHaveCount(0);
+    await expect(setup.getByRole("button", { name: "Publish changes" })).toBeDisabled();
+    const firstSaved = await page.evaluate(() => window.__savedAgents.at(-1));
+    const loaded = await page.evaluate(() => window.__loadedSetup);
+    expect(firstSaved.draft.doneWhen).toEqual({ kind: "email", address: "reports+agent@reiterate.com", channelId: "route-1" });
+    expect(firstSaved.draft.steps).toEqual(loaded.steps);
+    expect(firstSaved.config.prompt).toBe("");
+    expect(firstSaved.config.stages.slice(1)).toEqual(scenario === "edit-email-mismatch" ? [{ type: "download" }] : []);
+    await setup.getByRole("button", { name: "Accept emails from portal@example.test" }).click();
+    await expect.poll(() => page.evaluate(() => window.__allowedSenders)).toEqual([{ channelId: "route-1", sender: "portal@example.test" }]);
+    await expect.poll(() => page.evaluate(() => window.__testArguments)).toHaveLength(2);
+    await expect(setup.getByText("Test completed")).toBeVisible();
+    await expect(setup.getByRole("link", { name: "statement.pdf" })).toHaveAttribute("href", "https://files.example.test/statement.pdf");
+    const { arrivals, starts } = await page.evaluate(() => ({ arrivals: window.__emailArrivals, starts: window.__testStarts }));
+    expect(arrivals.every((arrival: { channelId: string }) => arrival.channelId === "route-1")).toBe(true);
+    const routed = arrivals.at(-1);
+    expect(Date.parse(routed.since)).toBeGreaterThanOrEqual(starts[0]);
+    expect(Date.parse(routed.since)).toBeLessThanOrEqual(starts[1]);
+    await setup.getByLabel("I checked the result").check();
+    await expect(setup.getByRole("button", { name: "Publish changes" })).toBeEnabled();
+  });
+
+  test(`edit: raw editing never passes a saved email check on engine success alone (${scenario})`, async ({ page }) => {
+    await page.goto(`${baseUrl}/host?scenario=${scenario}-waiting`);
+    const setup = page.frameLocator("iframe");
+    await setup.getByRole("textbox", { name: "Agent instructions" }).fill("Open reports and send the export to reports+agent@reiterate.com");
+    await page.clock.install();
+    await setup.getByRole("button", { name: "Test changes" }).click();
+    await expect(setup.getByText("Waiting for the export email", { exact: true })).toBeVisible();
+    await expect(setup.getByLabel("I checked the result")).toHaveCount(0);
+    await expect(setup.getByRole("button", { name: "Publish changes" })).toBeDisabled();
+    await page.clock.fastForward(180_000);
+    await expect(setup.getByRole("alert").filter({ hasText: "didn’t arrive" })).toBeVisible();
+    await expect(setup.getByRole("button", { name: "Publish changes" })).toBeDisabled();
+  });
+
+  test(`edit: an arrival reply for an earlier test does not pass the current one (${scenario})`, async ({ page }) => {
+    await page.goto(`${baseUrl}/host?scenario=${scenario}-stale`);
+    const setup = page.frameLocator("iframe");
+    const instructions = setup.getByRole("textbox", { name: "Agent instructions" });
+    await instructions.fill("Open reports and send the export to reports+agent@reiterate.com");
+    await setup.getByRole("button", { name: "Test changes" }).click();
+    await expect.poll(() => page.evaluate(() => typeof window.__heldArrival)).toBe("function");
+    await instructions.fill("Open reports, then send the export to reports+agent@reiterate.com");
+    await setup.getByRole("button", { name: "Test changes" }).click();
+    await expect.poll(() => page.evaluate(() => window.__testStarts.length)).toBe(2);
+    await expect(setup.getByText("Waiting for the export email", { exact: true })).toBeVisible();
+    await page.evaluate(() => window.__heldArrival());
+    // The page keeps polling for the current test after the stale reply; polls are five seconds apart.
+    await expect.poll(() => page.evaluate(() => window.__emailArrivals.length), { timeout: 12_000 }).toBeGreaterThan(2);
+    await expect(setup.getByText("Waiting for the export email", { exact: true })).toBeVisible();
+    await expect(setup.getByText("Test completed")).toHaveCount(0);
+    await expect(setup.getByRole("button", { name: "Publish changes" })).toBeDisabled();
+    const { arrivals, starts } = await page.evaluate(() => ({ arrivals: window.__emailArrivals, starts: window.__testStarts }));
+    expect(Date.parse(arrivals.at(-1).since)).toBeGreaterThanOrEqual(starts[0]);
+  });
+}
 
 function hostPage(url: string): string {
   const encodedOrigin = encodeURIComponent(url);
@@ -2946,7 +3042,18 @@ function hostPage(url: string): string {
   window.__loadAvailable = scenario !== "edit-load-error";
   const edit = scenario.startsWith("edit");
   const staged = scenario === "edit-staged";
-  const editEmail = scenario === "edit-email" || scenario === "edit-email-waiting";
+  const editEmail = scenario.startsWith("edit-email");
+  // Saved email criteria that raw editing keeps: an agent without steps, and stages that contradict the criterion.
+  const emailNoSteps = scenario.startsWith("edit-email-no-steps");
+  const emailMismatch = scenario.startsWith("edit-email-mismatch");
+  // Saved criteria the host's schema cannot read; the page must keep them raw and send them back unchanged.
+  const malformedDoneWhen = {
+    "edit-malformed-blank-text": { kind: "text", value: "   " },
+    "edit-malformed-long-text": { kind: "text", value: "x".repeat(201) },
+    "edit-malformed-address": { kind: "email", address: "reports", channelId: "route-1" },
+    "edit-malformed-channel": { kind: "email", address: "reports+agent@reiterate.com", channelId: "route 1" },
+    "edit-malformed-extra-key": { kind: "file", extension: "pdf" },
+  }[scenario];
   const routeAddress = "reports+agent@reiterate.com";
   const editSteps = editEmail ? [
     { id: "open-reports", type: "click", description: "Open the reports section", target: "Reports" },
@@ -2961,11 +3068,11 @@ function hostPage(url: string): string {
   const redemonstrationSteps = [{ id: "download-refreshed", type: "click", description: "Download the refreshed statement", target: "Download statement" }];
   const internal = scenario === "edit-internal";
   // A current host returns the stored authored setup. Older hosts and agents saved without one have none.
-  const editDoneWhen = editEmail ? { kind: "email", address: routeAddress, channelId: "route-1" }
-    : scenario === "edit-text" || scenario === "edit-mismatch" ? { kind: "text", value: "Export sent" } : { kind: "file" };
+  const editDoneWhen = malformedDoneWhen ?? (editEmail ? { kind: "email", address: routeAddress, channelId: "route-1" }
+    : scenario === "edit-text" || scenario === "edit-mismatch" ? { kind: "text", value: "Export sent" } : { kind: "file" });
   const editSetup = scenario === "edit-no-setup" || scenario.startsWith("edit-raw") ? undefined
-    : { name: "Monthly report agent", url: "https://portal.example.test/reports", goal: "Download the monthly report.", steps: editSteps, inputs: [], doneWhen: editDoneWhen };
-  const editStages = editEmail ? [{ type: "agent", prompt: "Open reports and send the export to " + routeAddress, step_limit: 16 }]
+    : { name: "Monthly report agent", url: "https://portal.example.test/reports", goal: "Download the monthly report.", steps: emailNoSteps ? [] : editSteps, inputs: [], doneWhen: editDoneWhen };
+  const editStages = editEmail ? [{ type: "agent", prompt: "Open reports and send the export to " + routeAddress, step_limit: 16 }, ...(emailMismatch ? [{ type: "download" }] : [])]
     : scenario === "edit-text" ? [{ type: "agent", prompt: "Open reports", step_limit: 16 }, { type: "expect_text", text: "Export sent" }]
     : [{ type: "agent", prompt: scenario === "edit-raw-placeholders" ? "Sign in with $username and $otp. Open reports." : "Open reports", step_limit: 16 }, { type: "download" }, { type: "sleep", sleep_ms: 5000 }, { type: "reload" }];
   let savedCredentials = ["edit-credentials-empty", "edit-raw-no-signin", "edit-credentials-legacy-add"].includes(scenario) ? [] : ["username", "password"];
@@ -3020,7 +3127,8 @@ function hostPage(url: string): string {
     } else if (request.method === "loadAgent") {
       if (scenario === "edit-missing") { fail("This agent no longer exists. It may have been deleted."); return; }
       if (!window.__loadAvailable) { fail("Loading failed. Try again."); return; }
-      send({ agentId: "agent-1", name: editName, url: publishedDraft?.draft.url ?? "https://portal.example.test/reports", goal: publishedDraft?.draft.goal ?? "Download the monthly report.", steps: publishedDraft?.draft.steps ?? (scenario.startsWith("edit-raw") && scenario !== "edit-raw-empty" ? null : scenario === "edit-raw-empty" ? [] : editSteps), stages: publishedDraft?.config.stages ?? editStages, ...(publishedDraft || editSetup ? { setup: publishedDraft?.draft ?? editSetup } : {}), ...(scenario === "edit-old-host" ? {} : { credentials: { saved: savedCredentials } }), liveConfigId: "config-3", version: editVersion, internal, schedule: scenario === "edit-schedule" ? "Daily 09:00 UTC" : null, nextRunAt: scenario === "edit-schedule" ? "2026-10-02T09:00:00Z" : null });
+      window.__loadedSetup = publishedDraft?.draft ?? editSetup;
+      send({ agentId: "agent-1", name: editName, url: publishedDraft?.draft.url ?? "https://portal.example.test/reports", goal: publishedDraft?.draft.goal ?? "Download the monthly report.", steps: publishedDraft?.draft.steps ?? (scenario.startsWith("edit-raw") && scenario !== "edit-raw-empty" ? null : scenario === "edit-raw-empty" || emailNoSteps ? [] : editSteps), stages: publishedDraft?.config.stages ?? editStages, ...(publishedDraft || editSetup ? { setup: publishedDraft?.draft ?? editSetup } : {}), ...(scenario === "edit-old-host" ? {} : { credentials: { saved: savedCredentials } }), liveConfigId: "config-3", version: editVersion, internal, schedule: scenario === "edit-schedule" ? "Daily 09:00 UTC" : null, nextRunAt: scenario === "edit-schedule" ? "2026-10-02T09:00:00Z" : null });
     } else if (request.method === "renameAgent") { window.__renameRequests.push(request.params.name); if (scenario === "edit-rename-error" && window.__renameRequests.length === 1) fail("Rename failed. Try again."); else { editName = request.params.name; send(null); }
     } else if (request.method === "saveDraft") { window.__savedAgents.push(request.params); send({ draftId: "draft-1" });
     } else if (request.method === "publishDraft") {
@@ -3100,7 +3208,12 @@ function hostPage(url: string): string {
       window.__emailArrivals.push(request.params);
       if (scenario === "email-no-documents") send({ status: "no_documents", from: "portal@example.test" });
       else if (scenario === "email-cutoff") send(Date.parse(request.params.since) <= exportSentAt ? { status: "routed", files: [{ name: "statement.pdf", url: "https://files.example.test/statement.pdf" }] } : { status: "waiting" });
-      else if (scenario === "email-waiting" || scenario === "edit-email-waiting") send({ status: "waiting" });
+      else if (scenario === "email-waiting" || editEmail && scenario.endsWith("-waiting")) send({ status: "waiting" });
+      // The first test's arrival reply is held until the page has moved on to a newer test, which never routes.
+      else if (editEmail && scenario.endsWith("-stale")) {
+        if (window.__testStarts.length === 1) window.__heldArrival = () => send({ status: "routed", from: "portal@example.test", files: [{ name: "statement.pdf", url: "https://files.example.test/statement.pdf" }] });
+        else send({ status: "waiting" });
+      }
       else if (window.__allowedSenders.length === 0) send({ status: "rejected", from: "portal@example.test" });
       else send({ status: "routed", from: "portal@example.test", files: [{ name: "statement.pdf", url: "https://files.example.test/statement.pdf" }] });
     } else if (request.method === "allowEmailSender") { window.__allowedSenders.push(request.params); send(undefined); }

@@ -448,7 +448,8 @@ export type AuthoredSetup = Record<string, unknown> & { name: string; url: strin
 /**
  * How a reopened agent can be edited. Structured editing recompiles the steps, so it needs a readable saved criterion
  * that the saved stages agree with. Otherwise the stages stay as saved, only raw editing is offered, and the stored
- * setup, including whatever criterion it holds, is saved back unchanged.
+ * setup, including whatever criterion it holds, is saved back unchanged. A raw Draft still carries a readable saved
+ * criterion, so its test keeps checking what the criterion requires beyond the stages, such as an email arrival.
  */
 export type ReopenedDraft =
   | { kind: "structured"; draft: SetupDraft; setup: AuthoredSetup }
@@ -458,12 +459,13 @@ export function reopenDraft(agent: SavedAgent): ReopenedDraft {
   const stored = isRecord(agent.setup) ? agent.setup : null;
   const steps = Array.isArray(agent.steps) ? agent.steps : [];
   const setup: AuthoredSetup = { inputs: [], ...stored, name: agent.name, url: agent.url, goal: agent.goal, steps: Array.isArray(stored?.steps) ? stored.steps : steps };
-  const raw = (reason: "no-steps" | "unknown-completion" | "inconsistent-completion"): ReopenedDraft => ({
-    kind: "raw", reason, draft: { name: agent.name, url: agent.url, goal: agent.goal, steps: [], inputs: [] }, setup,
-  });
-  if (steps.length === 0) return raw("no-steps");
   // Missing metadata says nothing about why it is missing, so it is never read as a download criterion.
-  const doneWhen = readDoneWhen(stored?.doneWhen);
+  const doneWhen = readSavedDoneWhen(stored?.doneWhen);
+  const raw = (reason: "no-steps" | "unknown-completion" | "inconsistent-completion"): ReopenedDraft => ({
+    kind: "raw", reason, draft: { name: agent.name, url: agent.url, goal: agent.goal, steps: [], inputs: [], ...(doneWhen === null ? {} : { doneWhen }) }, setup,
+  });
+  if (doneWhen === null && stored?.doneWhen !== undefined) return raw("unknown-completion");
+  if (steps.length === 0) return raw("no-steps");
   if (doneWhen === null) return raw("unknown-completion");
   if (!completionMatchesStages(doneWhen, agent.stages)) return raw("inconsistent-completion");
   return { kind: "structured", draft: { name: agent.name, url: agent.url, goal: agent.goal, steps: mergeDateSteps(steps), inputs: [], doneWhen }, setup };
@@ -617,6 +619,26 @@ function readDoneWhen(value: unknown): DoneWhen | null {
     case "clicked": return text("value") ? value as DoneWhen : null;
     case "email": return text("address") && text("channelId") && candidate.address !== "" && candidate.channelId !== "" ? value as DoneWhen : null;
     default: return null;
+  }
+}
+
+const channelIdPattern = /^[a-zA-Z0-9-]{1,100}$/;
+
+/**
+ * A saved criterion with exactly the keys and limits a Draft compiles with, as hosts validate it, or null. Anything
+ * else, such as blank or overlong text, a malformed route or an unknown key, is not a criterion this page wrote.
+ */
+function readSavedDoneWhen(value: unknown): DoneWhen | null {
+  const doneWhen = readDoneWhen(value);
+  if (doneWhen === null) return null;
+  const keys = Object.keys(doneWhen).sort().join();
+  const length = (text: string, maximum: number): boolean => text.length >= 1 && text.length <= maximum;
+  switch (doneWhen.kind) {
+    case "file": return keys === "kind" ? doneWhen : null;
+    case "text": return keys === "kind,value" && length(doneWhen.value.trim(), 200) ? doneWhen : null;
+    case "described": return keys === "kind,value" && length(doneWhen.value.trim(), 300) ? doneWhen : null;
+    case "clicked": return keys === "kind,value" && length(doneWhen.value, 20000) ? doneWhen : null;
+    case "email": return keys === "address,channelId,kind" && emailValuePattern.test(doneWhen.address) && channelIdPattern.test(doneWhen.channelId) ? doneWhen : null;
   }
 }
 
