@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { applyOrganizedSteps, compileAgent, dateRuleChoices, dateRuleLabel, doneWhenOptions, draftChanges, findUnambiguousEmailStep, groupSteps, mergeDateSteps, openQuestions, replaceStepsFrom, requiredCredentials, resolveDateRule, type SetupDraft, type SetupStep } from "./compiler";
+import { applyOrganizedSteps, authoredSetup, compileAgent, dateRuleChoices, dateRuleLabel, doneWhenOptions, draftChanges, findUnambiguousEmailStep, groupSteps, mergeDateSteps, openQuestions, reopenDraft, replaceStepsFrom, requiredCredentials, resolveDateRule, sameCompletion, type DoneWhen, type SetupDraft, type SetupStep } from "./compiler";
 
 const baseDraft = (): SetupDraft => ({
   name: "Download monthly statement",
   url: "https://portal.example.test/reports",
   goal: "Download the monthly statement.",
   inputs: [],
+  doneWhen: { kind: "file" },
   steps: [
     {
       id: "open-reports",
@@ -43,6 +44,7 @@ test("compiles recorder steps with serialized null optional fields", () => {
     url: "https://github.com/example/setup-check",
     goal: "Download the sample CSV.",
     inputs: [],
+    doneWhen: { kind: "file" },
     steps: [{
       id: "navigate-1",
       type: "navigation",
@@ -735,4 +737,135 @@ test("validates date values, formats, relative ranges, and described answers", (
     draft.steps = [{ ...baseDate, ...change }];
     assert.throws(() => compileAgent(draft), message);
   }
+});
+
+const routedAddress = "reports+agent@reiterate.com";
+
+/** One authored Draft per existing completion kind, each with steps that compile under its criterion. */
+function draftsByCompletion(): Record<DoneWhen["kind"], SetupDraft> {
+  const emailSteps: SetupStep[] = [
+    { id: "recipient", type: "input", description: "Enter the export recipient", target: "Send export to", value: routedAddress },
+    { id: "send", type: "click", description: "Send the export by email", target: "Send export" },
+  ];
+  return {
+    file: { ...baseDraft(), doneWhen: { kind: "file" } },
+    text: { ...baseDraft(), doneWhen: { kind: "text", value: " Export sent " } },
+    described: { ...baseDraft(), doneWhen: { kind: "described", value: "The export {month} is listed as sent" } },
+    email: { ...baseDraft(), steps: emailSteps, doneWhen: { kind: "email", address: routedAddress, channelId: "route-1" } },
+    clicked: { ...baseDraft(), doneWhen: { kind: "clicked", value: "Download statement" } },
+  };
+}
+
+/** What a host returns for a saved Draft: its projected fields, executable stages and the stored setup, over JSON. */
+function saved(draft: SetupDraft, stages: unknown[] = compileAgent(draft).stages, ...stored: [setup?: unknown]) {
+  // An explicit undefined setup is an older host that sends none; omitting the argument stores the Draft itself.
+  const setup = stored.length === 0 ? draft : stored[0];
+  return JSON.parse(JSON.stringify({ name: draft.name, url: draft.url, goal: draft.goal, steps: draft.steps, stages, ...(setup === undefined ? {} : { setup }) })) as {
+    name: string; url: string; goal: string; steps: SetupStep[] | null; stages: unknown[]; setup?: unknown;
+  };
+}
+
+test("refuses to compile a Draft without a completion criterion instead of defaulting to a download", () => {
+  const draft: SetupDraft = { ...baseDraft(), doneWhen: undefined };
+  assert.throws(() => compileAgent(draft), /completion check/);
+  for (const malformed of [{ kind: "files" }, { kind: "text" }, { kind: "email", address: routedAddress }, "file", null]) {
+    assert.throws(() => compileAgent({ ...baseDraft(), doneWhen: malformed as unknown as DoneWhen }), /completion check/, JSON.stringify(malformed));
+  }
+});
+
+test("reopens every completion kind as the same Draft and recompiles it without a change in meaning", () => {
+  for (const [kind, draft] of Object.entries(draftsByCompletion())) {
+    const compiled = compileAgent(draft);
+    const reopened = reopenDraft(saved(draft));
+    assert.equal(reopened.kind, "structured", kind);
+    assert.deepEqual(reopened.draft.doneWhen, draft.doneWhen, kind);
+    assert.deepEqual(compileAgent(reopened.draft), compiled, kind);
+    assert.deepEqual(draftChanges(reopened.draft, reopenDraft(saved(draft)).draft), [], kind);
+    assert.deepEqual(authoredSetup(reopened, reopened.draft).doneWhen, draft.doneWhen, kind);
+  }
+});
+
+test("keeps the saved criterion through an unrelated structured edit", () => {
+  for (const [kind, draft] of Object.entries(draftsByCompletion())) {
+    const reopened = reopenDraft(saved(draft));
+    assert.equal(reopened.kind, "structured", kind);
+    const edited = { ...reopened.draft, goal: "Download the latest statement.", steps: reopened.draft.steps.map((step, index) => index === 1 ? { ...step, description: `${step.description} again` } : step) };
+    assert.deepEqual(compileAgent(edited).stages.slice(1), compileAgent(draft).stages.slice(1), kind);
+    assert.deepEqual(authoredSetup(reopened, edited).doneWhen, draft.doneWhen, kind);
+    assert.deepEqual(draftChanges(edited, reopened.draft).map((change) => change.key), ["goal", "step:download-statement:description"].filter((key) => kind !== "email" || key === "goal").concat(kind === "email" ? ["step:send:description"] : []), kind);
+  }
+});
+
+test("keeps raw editing and the stored setup when the saved completion intent is missing or malformed", () => {
+  const draft = draftsByCompletion().text;
+  const stages = compileAgent(draft).stages;
+  const { doneWhen: _omitted, ...withoutCompletion } = draft;
+  void _omitted;
+  for (const [label, setup] of [
+    ["an older host sends no setup", undefined],
+    ["the host stored no setup", null],
+    ["the setup has no completion", withoutCompletion],
+    ["an unknown kind", { ...draft, doneWhen: { kind: "files" } }],
+    ["a text check without text", { ...draft, doneWhen: { kind: "text" } }],
+    ["an email check without a route", { ...draft, doneWhen: { kind: "email", address: routedAddress } }],
+    ["a completion that is not an object", { ...draft, doneWhen: "text" }],
+  ] as const) {
+    const reopened = reopenDraft(saved(draft, stages, setup));
+    assert.deepEqual([reopened.kind, reopened.kind === "raw" ? reopened.reason : null], ["raw", "unknown-completion"], label);
+    assert.equal(reopened.draft.doneWhen, undefined, label);
+    assert.deepEqual(reopened.draft.steps, [], label);
+    const kept = authoredSetup(reopened, { ...reopened.draft, goal: "Changed goal" });
+    assert.equal(kept.goal, "Changed goal", label);
+    assert.deepEqual(kept.steps, JSON.parse(JSON.stringify(draft.steps)), label);
+    if (setup !== null && setup !== undefined) assert.deepEqual(kept.doneWhen, (setup as { doneWhen?: unknown }).doneWhen, label);
+    else assert.equal("doneWhen" in kept, false, label);
+  }
+});
+
+test("treats a saved criterion that its executable stages contradict as inconsistent, not as a new criterion", () => {
+  const drafts = draftsByCompletion();
+  const agent = (prompt: string) => ({ type: "agent", prompt, step_limit: 64 });
+  const promptOf = (draft: SetupDraft) => (compileAgent(draft).stages[0] as { prompt: string }).prompt;
+  for (const [label, draft, stages] of [
+    ["file without a download", drafts.file, [agent(promptOf(drafts.file))]],
+    ["file with an exact-text check", drafts.file, [agent(promptOf(drafts.file)), { type: "expect_text", text: "Export sent" }]],
+    ["text with a download", drafts.text, [agent(promptOf(drafts.text)), { type: "download" }]],
+    ["text with different text", drafts.text, [agent(promptOf(drafts.text)), { type: "expect_text", text: "Export queued" }]],
+    ["described without its criterion in the prompt", drafts.described, [agent(promptOf(drafts.file))]],
+    ["email with a download", drafts.email, [agent(promptOf(drafts.email)), { type: "download" }]],
+    ["email whose route is not in the instructions", drafts.email, [agent(promptOf(drafts.file))]],
+    ["clicked with a download", drafts.clicked, [agent(promptOf(drafts.clicked)), { type: "download" }]],
+  ] as const) {
+    const reopened = reopenDraft(saved(draft, [...stages]));
+    assert.deepEqual([reopened.kind, reopened.kind === "raw" ? reopened.reason : null], ["raw", "inconsistent-completion"], label);
+    assert.deepEqual(authoredSetup(reopened, reopened.draft).doneWhen, draft.doneWhen, label);
+  }
+  // Extra host stages after the completion stage do not change what completion means.
+  const withHostStages = reopenDraft(saved(drafts.file, [...compileAgent(drafts.file).stages, { type: "sleep", sleep_ms: 5000 }, { type: "reload" }]));
+  assert.equal(withHostStages.kind, "structured");
+});
+
+test("keeps an agent without demonstrated steps on raw editing with its stored setup", () => {
+  for (const steps of [null, []]) {
+    const host = { ...saved(draftsByCompletion().file), steps };
+    const reopened = reopenDraft(host);
+    assert.deepEqual([reopened.kind, reopened.kind === "raw" ? reopened.reason : null], ["raw", "no-steps"]);
+    assert.deepEqual(authoredSetup(reopened, reopened.draft).doneWhen, { kind: "file" });
+  }
+  const older = reopenDraft({ ...saved(draftsByCompletion().file, undefined, undefined), steps: null });
+  assert.deepEqual(authoredSetup(older, older.draft), { name: "Download monthly statement", url: "https://portal.example.test/reports", goal: "Download the monthly statement.", steps: [], inputs: [] });
+});
+
+test("compares completion meaning when deciding what changed", () => {
+  const drafts = draftsByCompletion();
+  assert.equal(sameCompletion({ kind: "text", value: "Export sent" }, { kind: "text", value: " Export sent " }), true);
+  assert.equal(sameCompletion({ kind: "text", value: "Export sent" }, { kind: "described", value: "Export sent" }), false);
+  assert.equal(sameCompletion({ kind: "email", address: routedAddress, channelId: "route-1" }, { kind: "email", address: routedAddress, channelId: "route-2" }), false);
+  assert.equal(sameCompletion({ kind: "clicked", value: "Export" }, { kind: "clicked", value: "Export " }), false);
+  assert.equal(sameCompletion(undefined, { kind: "file" }), false);
+  assert.equal(sameCompletion(undefined, undefined), true);
+  assert.deepEqual(draftChanges({ ...drafts.file, doneWhen: { kind: "text", value: "Export sent" } }, drafts.file).map(({ key, label, from, to }) => ({ key, label, from, to })), [
+    { key: "doneWhen", label: "Completion check", from: "A file is downloaded", to: "“Export sent” appears on the page" },
+  ]);
+  assert.deepEqual(draftChanges({ ...drafts.text, doneWhen: { kind: "text", value: "Export sent" } }, drafts.text), []);
 });

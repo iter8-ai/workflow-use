@@ -1,4 +1,4 @@
-import type { CredentialKind, SetupDraft, SetupStep } from "./compiler";
+import type { AuthoredSetup, CredentialKind, SetupDraft, SetupStep } from "./compiler";
 
 export type RecordedDownload = { id: string; name: string; state: "started" | "completed" | "failed" };
 
@@ -62,6 +62,11 @@ export type EditAgent = {
   schedule: string | null;
   nextRunAt: string | null;
   credentials?: { saved: CredentialKind[]; otpSource?: "authenticator" | "email" };
+  /**
+   * The authored setup stored with the live version, as saved, including its completion criterion (`doneWhen`).
+   * Older hosts omit it; the compiler then offers only raw editing rather than guess the criterion.
+   */
+  setup?: unknown;
 };
 
 type RequestMap = {
@@ -76,7 +81,7 @@ type RequestMap = {
   saveAgent: { params: { draft: SetupDraft; config: unknown; agentId?: string }; result: { id: string } };
   loadAgent: { params: Record<string, never>; result: EditAgent };
   renameAgent: { params: { name: string }; result: null };
-  saveDraft: { params: { draft: SetupDraft; config: unknown }; result: { draftId: string } };
+  saveDraft: { params: { draft: AuthoredSetup; config: unknown }; result: { draftId: string } };
   testAgent: { params: { agentId: string; arguments: Record<string, never> }; result: { id: string } };
   getTestRun: { params: { agentId: string; runId: string }; result: TestRun };
   stopTest: { params: { agentId: string; runId: string }; result: null };

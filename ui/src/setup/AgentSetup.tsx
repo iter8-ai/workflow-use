@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { applyOrganizedSteps, compileAgent, credentialKinds, dateRuleChoices, dateRuleLabel, doneWhenOptions, draftChanges, findUnambiguousEmailStep, formatDate, groupSteps, mergeDateSteps, openQuestions, replaceStepsFrom, requiredCredentials, resolveDateRule, type CredentialKind, type DateRule, type DoneWhen, type SetupDraft, type SetupStep } from "./compiler";
+import { applyOrganizedSteps, authoredSetup, compileAgent, credentialKinds, dateRuleChoices, dateRuleLabel, doneWhenOptions, draftChanges, findUnambiguousEmailStep, formatDate, groupSteps, mergeDateSteps, openQuestions, reopenDraft, replaceStepsFrom, requiredCredentials, resolveDateRule, sameCompletion, type CredentialKind, type DateRule, type DoneWhen, type ReopenedDraft, type SetupDraft, type SetupStep } from "./compiler";
 import { browserbaseLiveViewUrl, createHostBridge, HostRequestTimeoutError, type EditAgent as EditAgentData, type HostBridge, type RecordedDownload, type Recording } from "./host";
 import { HelpTip } from "./HelpTip";
 import { applyTestRunUpdate, type WorkbenchRun } from "./testRun";
@@ -7,6 +7,10 @@ import { ActivityLog, TestBrowser } from "./TestWorkbench";
 import "./setup.css";
 
 type Screen = "describe" | "demonstrate" | "review" | "test" | "schedule";
+
+type EmailStatus = "waiting" | "routed" | "rejected" | "no_documents" | "timeout";
+/** The routed-email check of one test run; a result for another run is stale. */
+type EmailCheck = { runId: string; status: EmailStatus; from: string | null; files: Array<{ name: string; url: string }> };
 
 type RunState = WorkbenchRun & {
   files: Array<{ name: string; url: string }>;
@@ -531,11 +535,7 @@ export default function AgentSetup() {
   }
 
   function chooseDoneWhen(value: DoneWhen): void {
-    const unchanged = value.kind === "file" && doneWhen.kind === "file"
-      || (value.kind === "text" || value.kind === "described") && value.kind === doneWhen.kind && value.value.trim() === doneWhen.value.trim()
-      || value.kind === "clicked" && doneWhen.kind === "clicked" && value.value === doneWhen.value
-      || value.kind === "email" && doneWhen.kind === "email" && value.address === doneWhen.address && value.channelId === doneWhen.channelId;
-    if (unchanged) return;
+    if (sameCompletion(value, doneWhen)) return;
     setDoneWhen(value);
     invalidateTest();
   }
@@ -680,11 +680,15 @@ export default function AgentSetup() {
 
 function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: HostBridge; credentialsAllowed: boolean; googleAllowed: boolean }): JSX.Element {
   const [agent, setAgent] = useState<EditAgentData | null>(null);
+  // How the loaded version can be edited; its draft is the baseline that changes are compared with.
+  const [reopened, setReopened] = useState<ReopenedDraft | null>(null);
   const [draft, setDraft] = useState<SetupDraft | null>(null);
   const [stages, setStages] = useState<unknown[]>([]);
   const [stageLimitInputs, setStageLimitInputs] = useState<Record<number, string>>({});
   const [stageLimitErrors, setStageLimitErrors] = useState<Record<number, boolean>>({});
   const [testRun, setTestRun] = useState<WorkbenchRun | null>(null);
+  const [testStart, setTestStart] = useState<{ runId: string; since: string } | null>(null);
+  const [emailCheck, setEmailCheck] = useState<EmailCheck | null>(null);
   // The last test stays on screen after an edit invalidates it, so the page does not jump while typing.
   const [lastRun, setLastRun] = useState<WorkbenchRun | null>(null);
   const shownRun = testRun ?? lastRun;
@@ -722,13 +726,15 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
     setBusy(true); setError(null);
     try {
       const loaded = await bridge.request("loadAgent", {});
+      const next = reopenDraft(loaded);
       setAgent(loaded);
       setRenameError(null); setRenameSaved(false);
-      setDraft({ name: loaded.name, url: loaded.url, goal: loaded.goal, steps: mergeDateSteps(loaded.steps ?? []), inputs: [] });
+      setReopened(next);
+      setDraft(next.draft);
       setStages(loaded.stages);
       setStageLimitInputs({}); setStageLimitErrors({});
       setCredentialsChanged(false); setCredentialError(null);
-      setTestRun(null); setLastRun(null); setChecked(false); setConflict(null); setPublishOpen(false);
+      setTestRun(null); setLastRun(null); setTestStart(null); setEmailCheck(null); setChecked(false); setConflict(null); setPublishOpen(false);
     } catch (requestError) { setError(errorMessage(requestError)); }
     finally { setBusy(false); }
   };
@@ -764,6 +770,32 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
     poll(); const timer = window.setInterval(poll, 2000);
     return () => { active = false; window.clearInterval(timer); };
   }, [agent, bridge, testRun?.id, testRun?.status]);
+  // As on create: after the engine succeeds, only email routed after this test's own start passes, polled every
+  // five seconds for at most three minutes. A newer test, an edit or leaving ends the wait.
+  const emailChannelId = draft?.doneWhen?.kind === "email" ? draft.doneWhen.channelId : null;
+  useEffect(() => {
+    if (testRun?.status !== "succeeded" || emailChannelId === null || testStart?.runId !== testRun.id) return;
+    const runId = testRun.id;
+    const since = testStart.since;
+    let active = true;
+    let timeout: number | undefined;
+    const deadline = Date.now() + 180_000;
+    const settle = (check: Omit<EmailCheck, "runId">): void => setEmailCheck({ runId, ...check });
+    const deadlineTimer = window.setTimeout(() => { active = false; window.clearTimeout(timeout); settle({ status: "timeout", from: null, files: [] }); }, 180_000);
+    const poll = (): void => {
+      if (!active) return;
+      if (Date.now() >= deadline) { settle({ status: "timeout", from: null, files: [] }); return; }
+      void bridge.request("getEmailArrival", { channelId: emailChannelId, since }).then((result) => {
+        if (!active || Date.now() >= deadline) return;
+        settle({ status: result.status, from: result.from ?? null, files: result.files ?? [] });
+        if (result.status === "waiting") timeout = window.setTimeout(poll, 5_000);
+        else window.clearTimeout(deadlineTimer);
+      }).catch(() => { if (active) timeout = window.setTimeout(poll, 5_000); });
+    };
+    settle({ status: "waiting", from: null, files: [] });
+    poll();
+    return () => { active = false; window.clearTimeout(timeout); window.clearTimeout(deadlineTimer); };
+  }, [bridge, emailChannelId, testRun?.id, testRun?.status, testStart]);
   useEffect(() => { if (testRun !== null) setLastRun(testRun); }, [testRun]);
   // Test & publish moves in and out of the workbench; when that drops focus on the page, put it back on the card.
   useLayoutEffect(() => {
@@ -818,7 +850,7 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
     (fieldRefs.current[key] ?? changesHeadingRef.current)?.focus();
   }, [draft, stages, stageLimitInputs]);
 
-  if (agent === null || draft === null) return <main className="agent-setup edit-agent">
+  if (agent === null || draft === null || reopened === null) return <main className="agent-setup edit-agent">
     <header className="setup-header edit-header"><h1>Edit web agent</h1></header>
     <section className="edit-layout">
       {error ? <div className="edit-card" role="alert"><p>{error}</p><div className="edit-actions">
@@ -827,15 +859,24 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
       </div></div> : <p className="edit-status" role="status"><span className="edit-spinner" aria-hidden="true" />Loading agent…</p>}
     </section>
   </main>;
-  const live: SetupDraft = { name: agent.name, url: agent.url, goal: agent.goal, steps: mergeDateSteps(agent.steps ?? []), inputs: [] };
-  const raw = agent.steps === null || agent.steps.length === 0;
+  const live = reopened.draft;
+  const raw = reopened.kind === "raw";
   const changes = [...draftChanges(draft, live), ...(raw ? rawStageChanges(stages, agent.stages) : [])];
   const totalChanges = changes.length + Number(credentialsChanged);
   const changed = totalChanges > 0;
   const changeCount = `${totalChanges} unpublished ${totalChanges === 1 ? "change" : "changes"}`;
   const lastScreen = testRun?.screens?.at(-1);
   const nextRunTime = agent.nextRunAt ? formatNextRun(agent.nextRunAt) : null;
-  const succeeded = testRun?.status === "succeeded";
+  const emailCompletion = draft.doneWhen?.kind === "email" ? draft.doneWhen : null;
+  // An email criterion passes only once its own test's export is routed; until then the engine's success is pending.
+  const emailResult = (run: WorkbenchRun | null): EmailCheck | null => emailCompletion === null || run?.status !== "succeeded" ? null
+    : emailCheck?.runId === run.id ? emailCheck : { runId: run.id, status: "waiting", from: null, files: [] };
+  const passed = (run: WorkbenchRun | null): boolean => run?.status === "succeeded" && (emailResult(run)?.status ?? "routed") === "routed";
+  const testEmail = emailResult(testRun);
+  const emailProblem = testEmail !== null && testEmail.status !== "routed" && testEmail.status !== "waiting";
+  // An email criterion's evidence is the routed export, not what the browser downloaded.
+  const resultFiles = testEmail?.files ?? testRun?.files ?? [];
+  const succeeded = passed(testRun);
   const recordingActive = recording?.status === "recording";
   const readOnly = agent.internal || busy || dialogOpen || recordingActive || testRun?.status === "running";
   const canPublish = !agent.internal && changed && checked && succeeded && !recordingActive;
@@ -913,11 +954,19 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
     setRecording((current) => current?.organizing === true ? { ...current, organizing: false } : current);
     try {
       const config = raw ? { url: draft.url, prompt: "", options: { version: 1, engine: "computer" }, stages, parameters: {} } : compileAgent(draft, agent.credentials?.otpSource);
-      await bridge.request("saveDraft", { draft, config });
+      await bridge.request("saveDraft", { draft: authoredSetup(reopened, draft), config });
+      const startedAt = new Date().toISOString();
       const started = await bridge.request("testAgent", { agentId: agent.agentId, arguments: {} });
-      setTestRun({ id: started.id, status: "running" }); setChecked(false);
+      setTestRun({ id: started.id, status: "running" }); setTestStart({ runId: started.id, since: startedAt }); setChecked(false);
     } catch (e) { setError(errorMessage(e)); }
     finally { setBusy(false); setOperation(null); }
+  };
+  const allowEmailSender = async (): Promise<void> => {
+    if (emailCompletion === null || testEmail?.status !== "rejected" || testEmail.from === null) return;
+    setBusy(true); setError(null);
+    try { await bridge.request("allowEmailSender", { channelId: emailCompletion.channelId, sender: testEmail.from }); await test(); }
+    catch (e) { setError(errorMessage(e)); }
+    finally { setBusy(false); }
   };
   const stopTest = async (): Promise<void> => {
     if (testRun?.status !== "running" || testRun.stopping) return;
@@ -978,6 +1027,7 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
       resetTest(); return;
     }
     if (key === "url" || key === "goal") update({ [key]: live[key] });
+    else if (key === "doneWhen") update({ doneWhen: live.doneWhen });
     else if (key === "steps") {
       const ordered = live.steps.flatMap((step) => draft.steps.filter((item) => item.id === step.id));
       let index = 0;
@@ -1026,7 +1076,14 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
   // While a test is on screen its action sits under the activity, beside the browser, so it never falls below the workbench.
   const publishCard = <section className="edit-card edit-publish"><h2 ref={publishHeadingRef} tabIndex={-1}>Test &amp; publish</h2><p>Scheduled runs continue using the live version until you publish.</p>
     {testRun?.status === "running" && <div className="edit-status" role="status"><span className="edit-spinner" aria-hidden="true" />{testRun.stopping ? "Stopping the test…" : "Test is running."}</div>}
-    {testRun && testRun.status !== "running" && <div className={`edit-result edit-result-${succeeded ? "succeeded" : testRun.failure?.kind === "stopped" ? "stopped" : "failed"}`} role={succeeded || testRun.failure?.kind === "stopped" ? "status" : "alert"}>
+    {testEmail?.status === "waiting" && <><div className="edit-status" role="status"><span className="edit-spinner" aria-hidden="true" />Waiting for the export email</div><p>The agent finished. Waiting for the export at {emailCompletion?.address}.</p></>}
+    {testEmail !== null && emailProblem && <div className="edit-result edit-result-failed" role="alert">
+      <b>{testEmail.status === "rejected" ? "Email not accepted" : "Email not received"}</b>
+      <p>{testEmail.status === "rejected" ? `The export arrived from ${testEmail.from ?? "an external sender"}` : testEmail.status === "no_documents" ? "The email arrived without a file" : "The export email didn’t arrive"}</p>
+      <p>{testEmail.status === "rejected" ? `New Reiterate addresses only accept email from you. Allow ${testEmail.from ?? "this sender"}, then run the test again.` : testEmail.status === "no_documents" ? "Check the export settings and run the test again." : "The email didn’t arrive within three minutes. Check the export settings and run the test again."}</p>
+      {testEmail.status === "rejected" && testEmail.from && <button className="button button-quiet" disabled={busy} onClick={() => void allowEmailSender()}>Accept emails from {testEmail.from}</button>}
+    </div>}
+    {testRun && testRun.status !== "running" && (testEmail === null || testEmail.status === "routed") && <div className={`edit-result edit-result-${succeeded ? "succeeded" : testRun.failure?.kind === "stopped" ? "stopped" : "failed"}`} role={succeeded || testRun.failure?.kind === "stopped" ? "status" : "alert"}>
       <b>{succeeded ? "Test completed" : testRun.failure?.kind === "stopped" ? "Test stopped" : "Test failed"}</b>
       {!succeeded && <>
         <b>{editFailureLabel(testRun.failure?.kind)}</b>
@@ -1035,13 +1092,13 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
       </>}
       {testRun.stoppedAtStep != null && <p>Stopped at step {testRun.stoppedAtStep}{draft.steps[testRun.stoppedAtStep - 1]?.description ? `: ${draft.steps[testRun.stoppedAtStep - 1]!.description}` : ""}</p>}
       {testRun.confirmation && <p>{testRun.confirmation}</p>}
-      {testRun.files && testRun.files.length > 0 && <ul className="edit-files">{testRun.files.map((file) => <li key={file.url}><a href={file.url} target="_blank" rel="noreferrer">{file.name}</a></li>)}</ul>}
+      {resultFiles.length > 0 && <ul className="edit-files">{resultFiles.map((file) => <li key={file.url}><a href={file.url} target="_blank" rel="noreferrer">{file.name}</a></li>)}</ul>}
       {lastScreen && <button className="edit-screen-thumbnail" aria-label="Enlarge final screen" onClick={(e) => { dialogTriggerRef.current = e.currentTarget; setScreenOpen(true); }}><img src={lastScreen.image} alt="Final screen" /></button>}
-      {!testRun.failure?.message && !testRun.error && !testRun.confirmation && !testRun.files?.length && !lastScreen && <p>{succeeded ? "The test finished successfully. No result details were returned." : "The test stopped. No result details were returned. Try again."}</p>}
+      {!testRun.failure?.message && !testRun.error && !testRun.confirmation && !resultFiles.length && !lastScreen && <p>{succeeded ? "The test finished successfully. No result details were returned." : "The test stopped. No result details were returned. Try again."}</p>}
     </div>}
     <div className="edit-actions">
       {testRun?.status === "running" && <button className="button button-quiet" disabled={testRun.stopping || busy} aria-busy={testRun.stopping === true} onClick={() => void stopTest()}>{testRun.stopping ? "Stopping…" : "Stop test"}</button>}
-      <button className={`button ${succeeded ? "button-quiet" : "button-primary"}`} aria-describedby={openQuestionCount > 0 ? "edit-question-reason" : undefined} aria-busy={operation === "test"} disabled={busy || agent.internal || testRun?.status === "running" || recordingActive || openQuestionCount > 0} onClick={() => void test()}>{operation === "test" ? "Starting test…" : testRun?.status === "failed" ? "Run test again" : succeeded ? "Test again" : "Test changes"}</button>
+      <button className={`button ${succeeded ? "button-quiet" : "button-primary"}`} aria-describedby={openQuestionCount > 0 ? "edit-question-reason" : undefined} aria-busy={operation === "test"} disabled={busy || agent.internal || testRun?.status === "running" || recordingActive || openQuestionCount > 0} onClick={() => void test()}>{operation === "test" ? "Starting test…" : testRun?.status === "failed" || emailProblem ? "Run test again" : succeeded ? "Test again" : "Test changes"}</button>
       {succeeded && <label className="result-check"><input aria-label="I checked the result" type="checkbox" checked={checked} disabled={readOnly} onChange={(e) => setChecked(e.target.checked)} /> I checked the result</label>}
       <button className={`button ${succeeded ? "button-primary" : "button-quiet"}`} aria-describedby="edit-publish-help" aria-busy={operation === "publish"} disabled={!canPublish || busy} onClick={(e) => { dialogTriggerRef.current = e.currentTarget; setPublishOpen(true); }}>{operation === "publish" ? "Publishing…" : "Publish changes"}</button>
     </div>
@@ -1075,11 +1132,12 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
       {error && <div className="edit-result edit-result-failed" role="alert">{error}</div>}
       {notice && <p className="edit-result edit-result-succeeded" role="status">{notice}</p>}
       {shownRun && <section className="edit-test" ref={testViewRef} aria-label="Test run"><div className="workbench-grid">
-        <TestBrowser run={shownRun} url={draft.url} passed={shownRun.status === "succeeded"} serviceFailure={shownRun.failure?.kind === "service"} screenIndex={screenIndex} onSelectScreen={setScreenIndex} />
-        <div className="edit-test-side"><aside className="test-rail" aria-label="Test activity"><header><h3>Agent activity</h3><span>{testRun === null ? "Changed since this test" : shownRun.status === "running" ? "Running" : succeeded ? "Passed" : "Stopped"}</span></header><ActivityLog run={shownRun} /></aside>{publishCard}</div>
+        <TestBrowser run={shownRun} url={draft.url} passed={passed(shownRun)} serviceFailure={shownRun.failure?.kind === "service"} screenIndex={screenIndex} onSelectScreen={setScreenIndex} />
+        <div className="edit-test-side"><aside className="test-rail" aria-label="Test activity"><header><h3>Agent activity</h3><span>{testRun === null ? "Changed since this test" : shownRun.status === "running" ? "Running" : succeeded ? "Passed" : testEmail?.status === "waiting" ? "Waiting for email" : "Stopped"}</span></header><ActivityLog run={shownRun} /></aside>{publishCard}</div>
       </div></section>}
       <div className="edit-grid"><div className="edit-main">
         {raw ? <section className="edit-card edit-instructions"><h2>Instructions</h2>
+          {reopened.kind === "raw" && reopened.reason !== "no-steps" && <p className="edit-notice"><b>Steps can’t be edited for this agent</b><br />{reopened.reason === "unknown-completion" ? "Reiterate doesn’t know how this agent checks that it’s done" : "Its saved completion check doesn’t match how it runs"}, so changing its steps could change what counts as done. Edit its instructions below; everything else stays as saved.</p>}
           {stages.map((stage, index) => { const item = isObject(stage) ? stage : null; return item?.type === "agent" ? <div className="raw-stage" key={index}>
             <label>Agent instructions<textarea ref={(field) => { fieldRefs.current[`stage:${index}:prompt`] = field; }} aria-label="Agent instructions" value={String(item.prompt ?? "")} disabled={readOnly} onChange={(e) => updateStage(index, { prompt: e.target.value })} /></label>
           </div> : null; })}

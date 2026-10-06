@@ -330,6 +330,7 @@ export type SetupDraft = {
   goal: string;
   steps: SetupStep[];
   inputs: SetupInput[];
+  /** Saved explicitly by every new setup. Absent only on Drafts whose criterion was lost; those never compile. */
   doneWhen?: DoneWhen;
 };
 
@@ -383,10 +384,34 @@ export function requiredCredentials(steps: SetupStep[]): CredentialKind[] {
 
 export type DraftChange = { key: string; label: string; from: string; to: string };
 
+/** Whether two criteria check the same thing. Exact and described text ignore surrounding whitespace, as compiled. */
+export function sameCompletion(a: DoneWhen | undefined, b: DoneWhen | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  switch (a.kind) {
+    case "file": return b.kind === "file";
+    case "text":
+    case "described": return b.kind === a.kind && a.value.trim() === b.value.trim();
+    case "clicked": return b.kind === "clicked" && a.value === b.value;
+    case "email": return b.kind === "email" && a.address === b.address && a.channelId === b.channelId;
+  }
+}
+
+function completionLabel(doneWhen: DoneWhen | undefined): string {
+  switch (doneWhen?.kind) {
+    case undefined: return "Unknown";
+    case "file": return "A file is downloaded";
+    case "text": return `“${doneWhen.value.trim()}” appears on the page`;
+    case "described": return `${doneWhen.value.trim()} (checked by the agent)`;
+    case "email": return `The export arrives at ${doneWhen.address}`;
+    case "clicked": return `The agent clicks “${doneWhen.value}”`;
+  }
+}
+
 export function draftChanges(draft: SetupDraft, live: SetupDraft): DraftChange[] {
   const changes: DraftChange[] = [];
   if (draft.url !== live.url) changes.push({ key: "url", label: "Website address", from: live.url, to: draft.url });
   if (draft.goal !== live.goal) changes.push({ key: "goal", label: "Goal", from: live.goal, to: draft.goal });
+  if (!sameCompletion(draft.doneWhen, live.doneWhen)) changes.push({ key: "doneWhen", label: "Completion check", from: completionLabel(live.doneWhen), to: completionLabel(draft.doneWhen) });
   const added = draft.steps.filter((step) => !live.steps.some((original) => original.id === step.id));
   const removed = live.steps.filter((step) => !draft.steps.some((current) => current.id === step.id));
   for (const step of added) changes.push({ key: `added:${step.id}`, label: "Step added", from: "", to: step.description });
@@ -412,6 +437,60 @@ export function draftChanges(draft: SetupDraft, live: SetupDraft): DraftChange[]
     }
   });
   return changes;
+}
+
+/** A saved agent as the host returns it for editing: its projected Draft fields, executable stages and stored setup. */
+export type SavedAgent = { name: string; url: string; goal: string; steps: SetupStep[] | null; stages: unknown[]; setup?: unknown };
+
+/** The authored setup a host stores with a version: the Draft's fields and anything else saved with them. */
+export type AuthoredSetup = Record<string, unknown> & { name: string; url: string; goal: string; steps: unknown[] };
+
+/**
+ * How a reopened agent can be edited. Structured editing recompiles the steps, so it needs a readable saved criterion
+ * that the saved stages agree with. Otherwise the stages stay as saved, only raw editing is offered, and the stored
+ * setup, including whatever criterion it holds, is saved back unchanged.
+ */
+export type ReopenedDraft =
+  | { kind: "structured"; draft: SetupDraft; setup: AuthoredSetup }
+  | { kind: "raw"; reason: "no-steps" | "unknown-completion" | "inconsistent-completion"; draft: SetupDraft; setup: AuthoredSetup };
+
+export function reopenDraft(agent: SavedAgent): ReopenedDraft {
+  const stored = isRecord(agent.setup) ? agent.setup : null;
+  const steps = Array.isArray(agent.steps) ? agent.steps : [];
+  const setup: AuthoredSetup = { inputs: [], ...stored, name: agent.name, url: agent.url, goal: agent.goal, steps: Array.isArray(stored?.steps) ? stored.steps : steps };
+  const raw = (reason: "no-steps" | "unknown-completion" | "inconsistent-completion"): ReopenedDraft => ({
+    kind: "raw", reason, draft: { name: agent.name, url: agent.url, goal: agent.goal, steps: [], inputs: [] }, setup,
+  });
+  if (steps.length === 0) return raw("no-steps");
+  // Missing metadata says nothing about why it is missing, so it is never read as a download criterion.
+  const doneWhen = readDoneWhen(stored?.doneWhen);
+  if (doneWhen === null) return raw("unknown-completion");
+  if (!completionMatchesStages(doneWhen, agent.stages)) return raw("inconsistent-completion");
+  return { kind: "structured", draft: { name: agent.name, url: agent.url, goal: agent.goal, steps: mergeDateSteps(steps), inputs: [], doneWhen }, setup };
+}
+
+/** The setup to save with an edited Draft. Raw editing changes only the name, address and goal of the stored setup. */
+export function authoredSetup(reopened: ReopenedDraft, draft: SetupDraft): AuthoredSetup {
+  return reopened.kind === "structured"
+    ? { ...reopened.setup, ...draft }
+    : { ...reopened.setup, name: draft.name, url: draft.url, goal: draft.goal };
+}
+
+/** Whether saved stages execute the saved criterion. Checks only what the criterion compiles to; infers nothing. */
+function completionMatchesStages(doneWhen: DoneWhen, stages: unknown[]): boolean {
+  const records = stages.filter(isRecord);
+  const checks = records.filter((stage) => stage.type === "download" || stage.type === "expect_text")
+    .map((stage) => stage.type === "expect_text" ? { type: stage.type, text: stage.text } : { type: stage.type });
+  if (JSON.stringify(checks) !== JSON.stringify(completionStages(doneWhen))) return false;
+  const prompts = records.filter((stage) => stage.type === "agent").map((stage) => typeof stage.prompt === "string" ? stage.prompt : "");
+  if (doneWhen.kind === "described") return prompts.some((prompt) => prompt.includes(describedCriterionLine(doneWhen.value)));
+  // The export only reaches the route when the agent types its address.
+  if (doneWhen.kind === "email") return prompts.some((prompt) => prompt.includes(doneWhen.address));
+  return true;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function replaceStepsFrom(steps: SetupStep[], index: number, replacement: SetupStep[]): SetupStep[] {
@@ -481,7 +560,7 @@ const maximumUrlLength = 2_048;
 const maximumSteps = 200;
 
 export function compileAgent(draft: SetupDraft, otpSource?: "authenticator" | "email"): CompiledAgent {
-  validateDraft(draft, otpSource);
+  const doneWhen = validateDraft(draft, otpSource);
 
   const task = `Complete ${escapeLiteral(draft.name)}: ${escapeLiteral(draft.goal)}`;
   // Stage titles are headings only; step numbers stay global because the agent reports the step it stopped at.
@@ -497,8 +576,8 @@ export function compileAgent(draft: SetupDraft, otpSource?: "authenticator" | "e
     task,
     "Demonstrated intent:",
     instructions,
-    ...(draft.doneWhen?.kind === "described" ? [
-      `Success criterion (written by the user): ${escapeLiteral(draft.doneWhen.value.trim())}`,
+    ...(doneWhen.kind === "described" ? [
+      describedCriterionLine(doneWhen.value),
       'Return status completed only when this criterion is visibly met on the current screen, and put the on-screen evidence you relied on in confirmation (short, factual). If you finished the steps but the criterion is not met, return status failed with reason starting exactly "Success criterion not met: " followed by what you saw instead, and step null.',
     ] : []),
   ].join("\n\n");
@@ -509,15 +588,41 @@ export function compileAgent(draft: SetupDraft, otpSource?: "authenticator" | "e
     options: { version: 1, engine: "computer" },
     stages: [
       { type: "agent", prompt, step_limit: 64 },
-      ...(draft.doneWhen?.kind === "text"
-        ? [{ type: "expect_text" as const, text: draft.doneWhen.value.trim() }]
-        : draft.doneWhen === undefined || draft.doneWhen.kind === "file" ? [{ type: "download" as const }] : []),
+      ...completionStages(doneWhen),
     ],
     parameters: {},
   };
 }
 
-function validateDraft(draft: SetupDraft, otpSource?: "authenticator" | "email"): void {
+/** The stages after the agent stage that check completion; the other criteria are checked by the agent or the host. */
+function completionStages(doneWhen: DoneWhen): Array<DownloadStage | ExpectTextStage> {
+  if (doneWhen.kind === "file") return [{ type: "download" }];
+  if (doneWhen.kind === "text") return [{ type: "expect_text", text: doneWhen.value.trim() }];
+  return [];
+}
+
+function describedCriterionLine(value: string): string {
+  return `Success criterion (written by the user): ${escapeLiteral(value.trim())}`;
+}
+
+/** A saved criterion of one of the five kinds with its required values, or null. Never guesses a missing one. */
+function readDoneWhen(value: unknown): DoneWhen | null {
+  if (typeof value !== "object" || value === null) return null;
+  const candidate = value as Record<string, unknown>;
+  const text = (key: string): boolean => typeof candidate[key] === "string";
+  switch (candidate.kind) {
+    case "file": return value as DoneWhen;
+    case "text":
+    case "described":
+    case "clicked": return text("value") ? value as DoneWhen : null;
+    case "email": return text("address") && text("channelId") && candidate.address !== "" && candidate.channelId !== "" ? value as DoneWhen : null;
+    default: return null;
+  }
+}
+
+function validateDraft(draft: SetupDraft, otpSource?: "authenticator" | "email"): DoneWhen {
+  const doneWhen = readDoneWhen(draft.doneWhen);
+  if (doneWhen === null) throw new Error("This agent has no readable completion check, so it cannot be saved from its steps.");
   requireText(draft.name, "Agent name");
   requireMaximumLength(draft.name, maximumNameLength, "Agent name");
   requireText(draft.goal, "Agent goal");
@@ -578,6 +683,7 @@ function validateDraft(draft: SetupDraft, otpSource?: "authenticator" | "email")
       throw new Error("Reusable inputs are not supported in this release.");
     }
   }
+  return doneWhen;
 }
 
 /** Candidate checks ordered by the strength of evidence in the finished run. */
