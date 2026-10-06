@@ -60,7 +60,7 @@ export default function AgentSetup() {
   const [credentialsAllowed, setCredentialsAllowed] = useState(false);
   const [googleAllowed, setGoogleAllowed] = useState(false);
   const [googleSignInAllowed, setGoogleSignInAllowed] = useState(false);
-  const googleSignIn = useGoogleSignInPrompt(bridge, googleSignInAllowed);
+  const googleSignIn = useGoogleSignInPrompt(bridge, googleSignInAllowed, recording, { onChanged: invalidateTest, heading: () => contentRef.current?.querySelector<HTMLElement>(".stage-title h2") });
   const [savedCredentials, setSavedCredentials] = useState<CredentialKind[]>([]);
   const [otpSource, setOtpSource] = useState<"authenticator" | "email" | undefined>();
   const [mode, setMode] = useState<"create" | "edit" | "run" | null>(null);
@@ -335,6 +335,7 @@ export default function AgentSetup() {
       setError("Add an agent name and goal before starting the demonstration.");
       return;
     }
+    googleSignIn.reset();
     setBusy(true);
     try {
       const next = await bridge.request("startRecording", { url: startUrl }, {
@@ -364,7 +365,6 @@ export default function AgentSetup() {
       const next = await bridge.request("stopRecording", { id: recording.id });
       setRecording(next);
       changeSteps(mergeDateSteps(next.steps));
-      await googleSignIn.afterDemonstration(next);
     } catch (requestError) {
       setError(errorMessage(requestError));
     } finally {
@@ -633,6 +633,7 @@ export default function AgentSetup() {
     if (bridge === undefined || bridge === null) return;
     setBusy(true);
     setError(null);
+    googleSignIn.reset();
     try {
       if (recording !== null) await bridge.request("cancelRecording", { id: recording.id });
       setScreen("describe");
@@ -734,7 +735,6 @@ export default function AgentSetup() {
 }
 
 function EditScreen({ bridge, credentialsAllowed, googleAllowed, googleSignInAllowed }: { bridge: HostBridge; credentialsAllowed: boolean; googleAllowed: boolean; googleSignInAllowed: boolean }): JSX.Element {
-  const googleSignIn = useGoogleSignInPrompt(bridge, googleSignInAllowed);
   const [agent, setAgent] = useState<EditAgentData | null>(null);
   const [draft, setDraft] = useState<SetupDraft | null>(null);
   const [stages, setStages] = useState<unknown[]>([]);
@@ -772,6 +772,8 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed, googleSignInAll
   const [screenOpen, setScreenOpen] = useState(false);
   const revertFocusRef = useRef<string | null>(null);
   const changesHeadingRef = useRef<HTMLHeadingElement>(null);
+  const stepsHeadingRef = useRef<HTMLHeadingElement>(null);
+  const googleSignIn = useGoogleSignInPrompt(bridge, googleSignInAllowed, recording, { onChanged: () => { setCredentialsChanged(true); resetTest(); }, heading: () => stepsHeadingRef.current });
   const fieldRefs = useRef<Record<string, HTMLInputElement | HTMLTextAreaElement | null>>({});
   const dialogOpen = publishOpen || conflict !== null || confirmClose || screenOpen;
 
@@ -1002,7 +1004,7 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed, googleSignInAll
     finally { setBusy(false); setOperation(null); }
   };
   const startRecording = async (): Promise<void> => {
-    setBusy(true); setError(null); setNotice(null); setTestRun(null); setChecked(false);
+    setBusy(true); setError(null); setNotice(null); setTestRun(null); setChecked(false); googleSignIn.reset();
     try {
       if (recording !== null) await bridge.request("cancelRecording", { id: recording.id });
       setRecording(await bridge.request("startRecording", { url: draft.url }));
@@ -1013,7 +1015,7 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed, googleSignInAll
   const stopRecording = async (): Promise<void> => {
     if (recording === null) return;
     setBusy(true);
-    try { const stopped = await bridge.request("stopRecording", { id: recording.id }); setRecording(stopped); if (stopped.steps.length > 0) update({ steps: replaceStepsFrom(draft.steps, selectedFromStep, mergeDateSteps(draft.steps.some((step) => step.stage != null) ? stopped.steps.map((step) => ({ ...step, stage: step.stage ?? "" })) : stopped.steps)) }); await googleSignIn.afterDemonstration(stopped); }
+    try { const stopped = await bridge.request("stopRecording", { id: recording.id }); setRecording(stopped); if (stopped.steps.length > 0) update({ steps: replaceStepsFrom(draft.steps, selectedFromStep, mergeDateSteps(draft.steps.some((step) => step.stage != null) ? stopped.steps.map((step) => ({ ...step, stage: step.stage ?? "" })) : stopped.steps)) }); }
     catch (e) { setError(errorMessage(e)); }
     finally { setBusy(false); }
   };
@@ -1145,7 +1147,7 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed, googleSignInAll
             <label>Agent instructions<textarea ref={(field) => { fieldRefs.current[`stage:${index}:prompt`] = field; }} aria-label="Agent instructions" value={String(item.prompt ?? "")} disabled={readOnly} onChange={(e) => updateStage(index, { prompt: e.target.value })} /></label>
           </div> : null; })}
           {stages.some((stage) => !isObject(stage) || stage.type !== "agent") && <p className="raw-preserved">Then: {stages.filter((stage) => !isObject(stage) || stage.type !== "agent").map((stage) => preservedStageLabel(isObject(stage) ? stage : null)).join(" · ")} — kept as is</p>}
-        </section> : <section className="edit-card edit-instructions"><h2>Steps</h2><p className="field-note expected-outcome-help"><HelpTip label="Expected outcome">The agent checks this before moving on. Leave empty unless a step is easy to get wrong.</HelpTip></p>
+        </section> : <section className="edit-card edit-instructions"><h2 ref={stepsHeadingRef} tabIndex={-1}>Steps</h2><p className="field-note expected-outcome-help"><HelpTip label="Expected outcome">The agent checks this before moving on. Leave empty unless a step is easy to get wrong.</HelpTip></p>
           <StepEditor variant="edit" steps={draft.steps} goal={draft.goal} busy={readOnly} credentialsAllowed={credentialsAllowed} savedCredentials={agent.credentials?.saved ?? []} fieldRefs={fieldRefs} stepError={stepError !== null && stepErrorIndex >= 0 ? { stepId: stepError.stepId, messageId: "edit-step-error" } : undefined} onRequestOtp={() => void requestEditOtp()} onUpdateStep={(id, updates) => update({ steps: draft.steps.map((step) => step.id === id ? updateStepFields(step, updates) : step) })} onRemoveStep={(id) => update({ steps: draft.steps.filter((step) => step.id !== id) })} onMergeSteps={(ids) => update({ steps: combineDateSteps(draft.steps, ids) })} onUndoMergedStep={(id) => update({ steps: undoDateMerge(draft.steps, id) })} onMoveStep={(index, delta) => update({ steps: moveStep(draft.steps, index, delta) })} onRenameStage={(index, name) => update({ steps: renameStageAt(draft.steps, index, name) })} onInsert={insertStep} />
           <div className="redemo-controls">
             <div className="edit-actions"><label>Re-demonstrate from step<select aria-label="Re-demonstrate from step" value={selectedFromStep} disabled={readOnly || draft.steps.length === 0} onChange={(e) => setFromStep(Number(e.target.value))}>{draft.steps.map((_, index) => <option key={index} value={index}>{index + 1}</option>)}</select></label>

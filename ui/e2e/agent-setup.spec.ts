@@ -1248,6 +1248,154 @@ test("edit re-demonstration that signed in with Google offers the Google sign-in
   expect(await page.evaluate(() => window.__googleSignInRequests)).toEqual([{ method: "getGoogleSignIn", params: {} }]);
 });
 
+test("saving the Google sign-in from the Review offer after a test requires a new test", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=google-demo-missing`);
+  const setup = page.frameLocator("iframe");
+  await describeAndDemonstrate(setup);
+  const panel = setup.getByRole("region", { name: "Finish the Google sign-in setup" });
+  await expect(panel).toBeVisible();
+  await setup.getByRole("button", { name: "Continue to test" }).click();
+  await setup.getByRole("button", { name: "Run test" }).click();
+  const result = setup.locator(".run-status");
+  await expect(result).toContainText("Google sign-in needed");
+  await setup.getByRole("button", { name: "Back to review" }).click();
+  await panel.getByRole("button", { name: "Set up Google sign-in" }).click();
+  await expect(panel).toHaveCount(0);
+  // The offer is gone; focus moves to the Review heading instead of falling back to the page.
+  await expect(setup.getByRole("heading", { name: "Review and complete the setup" })).toBeFocused();
+  await expect(setup.getByText("Changes require a new test.")).toBeVisible();
+  await setup.getByRole("button", { name: "Continue to test" }).click();
+  await expect(result).toContainText("Not tested yet");
+});
+
+test("Google sign-in offer appears when the demonstration's stop is seen by polling", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=google-demo-polled`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByLabel("Agent name").fill("Download monthly statement");
+  await setup.getByLabel("Website address").fill("https://portal.example.test/reports");
+  await setup.getByLabel("What should the agent do?").fill("Download the monthly statement.");
+  await setup.getByRole("button", { name: "Continue to demonstration" }).click();
+  // No Finish: the next read reports the demonstration stopped.
+  await setup.getByRole("button", { name: "Continue to review" }).click();
+  await expect(setup.getByRole("region", { name: "Finish the Google sign-in setup" })).toBeVisible();
+  await setup.getByRole("button", { name: "Skip for now" }).click();
+  await expect(setup.getByRole("status").filter({ hasText: googleSignInSkipNote })).toBeVisible();
+  // Organizing reads and returning to Review don't ask again after Skip.
+  await setup.getByRole("button", { name: "Back to demonstration" }).click();
+  await setup.getByRole("button", { name: "Continue to review" }).click();
+  await expect(setup.getByRole("status").filter({ hasText: googleSignInSkipNote })).toBeVisible();
+  expect(await page.evaluate(() => window.__googleSignInRequests)).toEqual([{ method: "getGoogleSignIn", params: {} }]);
+});
+
+test("edit Google sign-in offer appears when the re-demonstration's stop is seen by polling", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-google-demo-polled`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByRole("button", { name: "Re-demonstrate" }).click();
+  await expect(setup.getByRole("region", { name: "Finish the Google sign-in setup" })).toBeVisible();
+  await expect(setup.getByRole("button", { name: "Finish re-demonstration" })).toHaveCount(0);
+  expect(await page.evaluate(() => window.__googleSignInRequests)).toEqual([{ method: "getGoogleSignIn", params: {} }]);
+});
+
+test("Review opens without a Google sign-in offer when the host can't report the Google sign-in", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=google-demo-error`);
+  const setup = page.frameLocator("iframe");
+  await describeAndDemonstrate(setup);
+  await expect(setup.getByLabel("Step 1 description")).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.__googleSignInRequests)).toEqual([{ method: "getGoogleSignIn", params: {} }]);
+  await expect(setup.getByText("Finish the Google sign-in setup")).toHaveCount(0);
+  await expect(setup.getByText(googleSignInSkipNote)).toHaveCount(0);
+  await expect(setup.getByRole("alert")).toHaveCount(0);
+  await setup.getByRole("button", { name: "Continue to test" }).click();
+  await expect(setup.getByRole("button", { name: "Run test" })).toBeVisible();
+});
+
+for (const outcome of ["offer", "skip note"]) {
+  test(`a new edit re-demonstration clears the earlier Google sign-in ${outcome}`, async ({ page }) => {
+    await page.goto(`${baseUrl}/host?scenario=edit-google-demo-missing`);
+    const setup = page.frameLocator("iframe");
+    await setup.getByRole("button", { name: "Re-demonstrate" }).click();
+    await setup.getByRole("button", { name: "Finish re-demonstration" }).click();
+    const panel = setup.getByRole("region", { name: "Finish the Google sign-in setup" });
+    await expect(panel).toBeVisible();
+    if (outcome === "skip note") await panel.getByRole("button", { name: "Skip for now" }).click();
+    await setup.getByRole("button", { name: "Re-demonstrate" }).click();
+    await expect(setup.getByRole("button", { name: "Finish re-demonstration" })).toBeVisible();
+    await expect(panel).toHaveCount(0);
+    await expect(setup.getByText(googleSignInSkipNote)).toHaveCount(0);
+    // The next demonstration is checked on its own.
+    await setup.getByRole("button", { name: "Finish re-demonstration" }).click();
+    await expect(panel).toBeVisible();
+    expect(await page.evaluate(() => window.__googleSignInRequests)).toEqual([{ method: "getGoogleSignIn", params: {} }, { method: "getGoogleSignIn", params: {} }]);
+  });
+}
+
+test("a create demonstration after Start over doesn't keep the earlier Google sign-in skip note", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=google-demo-polled`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByLabel("Agent name").fill("Download monthly statement");
+  await setup.getByLabel("Website address").fill("https://portal.example.test/reports");
+  await setup.getByLabel("What should the agent do?").fill("Download the monthly statement.");
+  await setup.getByRole("button", { name: "Continue to demonstration" }).click();
+  await setup.getByRole("button", { name: "Continue to review" }).click();
+  await setup.getByRole("button", { name: "Skip for now" }).click();
+  await setup.getByRole("button", { name: "Back to demonstration" }).click();
+  await setup.getByRole("button", { name: "Start over" }).click();
+  await setup.getByRole("button", { name: "Continue to demonstration" }).click();
+  await setup.getByRole("button", { name: "Continue to review" }).click();
+  // A fresh offer for the new demonstration, not the skip note from the last one.
+  await expect(setup.getByRole("region", { name: "Finish the Google sign-in setup" })).toBeVisible();
+  await expect(setup.getByText(googleSignInSkipNote)).toHaveCount(0);
+});
+
+test("edit saving the Google sign-in from the offer after a test requires a new test", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-google-demo-missing`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByRole("button", { name: "Re-demonstrate" }).click();
+  await setup.getByRole("button", { name: "Finish re-demonstration" }).click();
+  const panel = setup.getByRole("region", { name: "Finish the Google sign-in setup" });
+  await expect(panel).toBeVisible();
+  await setup.getByRole("button", { name: "Test changes" }).click();
+  const result = setup.locator(".edit-result-failed");
+  await expect(result).toContainText("Google sign-in needed");
+  await panel.getByRole("button", { name: "Set up Google sign-in" }).click();
+  await expect(panel).toHaveCount(0);
+  await expect(setup.getByText(googleSignInSkipNote)).toHaveCount(0);
+  await expect(setup.getByRole("heading", { name: "Steps", exact: true })).toBeFocused();
+  await expect(setup.getByText("Changed since this test")).toBeVisible();
+  await expect(result).toHaveCount(0);
+  expect(await page.evaluate(() => window.__googleSignInRequests)).toEqual([
+    { method: "getGoogleSignIn", params: {} },
+    { method: "setUpGoogleSignIn", params: { reason: "demonstration" } },
+  ]);
+});
+
+test("edit cancelling the Google sign-in setup leaves the skip note and keeps the test", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-google-demo-needs`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByRole("button", { name: "Re-demonstrate" }).click();
+  await setup.getByRole("button", { name: "Finish re-demonstration" }).click();
+  await setup.getByRole("button", { name: "Test changes" }).click();
+  const result = setup.locator(".edit-result-failed");
+  await expect(result).toContainText("Google sign-in needed");
+  await setup.getByRole("region", { name: "Finish the Google sign-in setup" }).getByRole("button", { name: "Set up Google sign-in" }).click();
+  await expect(setup.getByRole("status").filter({ hasText: googleSignInSkipNote })).toBeFocused();
+  await expect(result).toContainText("Google sign-in needed");
+  await expect(setup.getByText("Changed since this test")).toHaveCount(0);
+});
+
+for (const [scenario, requests] of [["edit-google-demo-ready", [{ method: "getGoogleSignIn", params: {} }]], ["edit-google-demo-signedout", []], ["edit-google-demo-nocap", []]] as const) {
+  test(`shows no Google sign-in offer for ${scenario}`, async ({ page }) => {
+    await page.goto(`${baseUrl}/host?scenario=${scenario}`);
+    const setup = page.frameLocator("iframe");
+    await setup.getByRole("button", { name: "Re-demonstrate" }).click();
+    await setup.getByRole("button", { name: "Finish re-demonstration" }).click();
+    await expect(setup.getByRole("button", { name: "Re-demonstrate" })).toBeEnabled();
+    await expect.poll(() => page.evaluate(() => window.__googleSignInRequests)).toEqual(requests);
+    await expect(setup.getByText("Finish the Google sign-in setup")).toHaveCount(0);
+    await expect(setup.getByText(googleSignInSkipNote)).toHaveCount(0);
+  });
+}
+
 for (const mode of ["create", "edit"]) {
   test(`${mode} shows the opening-window overlay without removing the browser`, async ({ page }) => {
     await page.goto(`${baseUrl}/host?scenario=${mode === "edit" ? "edit-" : ""}window-switch`);
@@ -3390,7 +3538,7 @@ function hostPage(url: string, scenario: string | null): string {
       savedCredentials = request.params.kinds;
       send({ saved: savedCredentials, ...(edit && scenario !== "edit-credentials-legacy-add" ? { changed: true } : {}) });
     } else if (request.method === "connectGoogle") { window.__googleRequests.push(request.params); send({ connected: !scenario.endsWith("cancel") });
-    } else if (request.method === "getGoogleSignIn") { window.__googleSignInRequests.push({ method: request.method, params: request.params }); send({ status: googleSignInStatus, email: googleSignInStatus === "missing" ? null : "ops@example.test" });
+    } else if (request.method === "getGoogleSignIn") { window.__googleSignInRequests.push({ method: request.method, params: request.params }); if (scenario.endsWith("google-demo-error")) { fail("Reiterate couldn't load the Google sign-in."); return; } send({ status: googleSignInStatus, email: googleSignInStatus === "missing" ? null : "ops@example.test" });
     } else if (request.method === "setUpGoogleSignIn") {
       window.__googleSignInRequests.push({ method: request.method, params: request.params });
       // "cancel" and "needs" scenarios close the dialog without saving.
@@ -3417,7 +3565,8 @@ function hostPage(url: string, scenario: string | null): string {
         steps: stopped && !organizing ? recorded.map((step, index) => ({ ...step, stage: organized[index][0], description: organized[index][1] })) : recorded,
         downloads: [{ id: "file", name: "statement-2026-09.csv", state: downloadState }], organizing, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null });
     }
-    else if (request.method === "getRecording" || request.method === "stopRecording") { if (request.method === "stopRecording") recordingActive = false; send({ id: "recording-1", status: request.method === "getRecording" && recordingActive ? "recording" : "stopped", liveViewUrl: request.method === "getRecording" && recordingActive ? "https://live.browserbase.com/session" : null, liveViewSwitching: scenario.endsWith("window-switch") && window.__liveViewSwitching, steps: edit ? (request.method === "stopRecording" ? redemonstrationSteps : []) : steps, ...(scenario.includes("google-demo-") ? { google: { signedIn: googleDemo } } : {}), expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
+    // "polled" demonstrations end in the virtual browser, so the next read reports them stopped.
+    else if (request.method === "getRecording" || request.method === "stopRecording") { if (request.method === "stopRecording" || scenario.endsWith("google-demo-polled")) recordingActive = false; send({ id: "recording-1", status: request.method === "getRecording" && recordingActive ? "recording" : "stopped", liveViewUrl: request.method === "getRecording" && recordingActive ? "https://live.browserbase.com/session" : null, liveViewSwitching: scenario.endsWith("window-switch") && window.__liveViewSwitching, steps: edit ? (request.method === "stopRecording" ? redemonstrationSteps : []) : steps, ...(scenario.includes("google-demo-") ? { google: { signedIn: googleDemo } } : {}), expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
     else if (request.method === "cancelRecording") { recordingActive = false; recordingExists = false; send(undefined); }
     else if (request.method === "saveAgent") { if (window.__savedSchedule || scenario === "rerun-save-rejection" && window.__savedAgents.length > 0) fail("This agent is scheduled. Edit it in agent settings."); else { window.__savedAgents.push(request.params); send({ id: "agent-1" }); } }
     else if (request.method === "testAgent") { testAttempts += 1; window.__testArguments.push(request.params.arguments); exportSentAt = Date.now(); if (scenario === "email-cutoff" && window.__testArguments.length > 1) setTimeout(() => send({ id: "run-" + window.__testArguments.length }), 1000); else send({ id: "run-" + window.__testArguments.length }); }
