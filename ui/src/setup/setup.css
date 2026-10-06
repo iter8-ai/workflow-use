@@ -516,6 +516,18 @@ select {
   margin-top: 1px;
 }
 
+/* Reads as the second paragraph of the sign-in note above it, indented past its lock icon. */
+.captured-steps .google-verify-note {
+  padding-top: 0;
+  padding-left: 38px;
+  border-top: 0;
+}
+
+.google-verify-note a {
+  color: #5236ad;
+  text-underline-offset: 3px;
+}
+
 /* After the demonstration ends the remote browser stops recording; cover it so it no longer looks live. */
 .demonstrate-finished {
   position: absolute;
