@@ -17,11 +17,7 @@ base() {
   }
 }
 
-touched() { # prints the top-level areas the branch changed
-  git diff --name-only "$(base)" HEAD | awk -F/ '{print $1}' | sort -u
-}
-
-has() { touched | grep -qx "$1"; }
+has() { grep -qx "$1" <<< "$areas"; }
 
 main_checkout() {
   local common
@@ -34,6 +30,13 @@ main_checkout() {
 ui_ready() {
   npm --prefix ui run -s type-gen >/dev/null
 }
+
+case "${1:-test}" in
+  test|lint)
+    baseline="$(base)"
+    areas="$(git diff --name-only "$baseline" HEAD | awk -F/ '{print $1}' | sort -u)"
+    ;;
+esac
 
 case "${1:-test}" in
   prepare)
@@ -60,7 +63,7 @@ case "${1:-test}" in
       (cd recording && uv sync -q --frozen --group dev && uv run --no-sync pytest -q -p no:warnings) || status=1
     fi
     # workflows/ has no CI test job; its lint runs in the lint step.
-    [ "$(touched | grep -c -x -E 'ui|recording')" -gt 0 ] || echo "no ui or recording changes"
+    has ui || has recording || echo "no ui or recording changes"
     exit $status
     ;;
   lint)
