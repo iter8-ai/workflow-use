@@ -759,18 +759,20 @@ test("an edit draft replaces only the agent instructions and keeps the agent's o
   const compiled = compileAgent(draft);
   const agentStage = compiled.stages[0];
   const legacy = { type: "agent", prompt: "Old written instructions", step_limit: 16 };
+  const wait = { type: "sleep", sleep_ms: 5000, retry: { attempts: 2 } };
+  const textCheck = { type: "expect_text", text: "Report ready", timeout_ms: 10000 };
   const cases: Array<{ live: unknown[]; stages: unknown[] }> = [
     // A written-instructions agent with a wait and a download.
-    { live: [legacy, { type: "sleep", sleep_ms: 5000 }, { type: "download" }], stages: [agentStage, { type: "sleep", sleep_ms: 5000 }, { type: "download" }] },
+    { live: [legacy, wait, { type: "download" }], stages: [agentStage, wait, { type: "download" }] },
     // A structured agent reloaded after publish with a reload tail.
-    { live: [{ ...legacy, prompt: "Previously compiled" }, { type: "download" }, { type: "sleep", sleep_ms: 5000 }, { type: "reload" }], stages: [agentStage, { type: "download" }, { type: "sleep", sleep_ms: 5000 }, { type: "reload" }] },
+    { live: [{ ...legacy, prompt: "Previously compiled" }, { type: "download" }, wait, { type: "reload" }], stages: [agentStage, { type: "download" }, wait, { type: "reload" }] },
     // Stages before the first agent stay first; later legacy agent prompts are not copied.
-    { live: [{ type: "reload" }, legacy, { ...legacy, prompt: "Second old prompt" }, { type: "download" }], stages: [{ type: "reload" }, agentStage, { type: "download" }] },
-    // Nothing else to keep uses the compiled default.
-    { live: [legacy], stages: compiled.stages },
+    { live: [textCheck, legacy, wait, { ...legacy, prompt: "Second old prompt" }, { type: "download" }], stages: [textCheck, agentStage, wait, { type: "download" }] },
+    { live: [legacy], stages: [agentStage] },
+    { live: [legacy, { ...legacy, prompt: "Second old prompt" }], stages: [agentStage] },
     { live: [{ type: "download" }], stages: [agentStage, { type: "download" }] },
-    { live: [{ type: "sleep", sleep_ms: 5000 }, { type: "reload" }, { type: "download" }], stages: [agentStage, { type: "sleep", sleep_ms: 5000 }, { type: "reload" }, { type: "download" }] },
-    { live: [], stages: compiled.stages },
+    { live: [wait, { type: "reload" }, { type: "download" }], stages: [agentStage, wait, { type: "reload" }, { type: "download" }] },
+    { live: [], stages: [agentStage] },
   ];
   for (const { live, stages } of cases) {
     const config = compileEditAgent(draft, live);
