@@ -5,7 +5,7 @@ Users demonstrate a browser task, review its Draft and test what the web agent w
 ## Language
 
 **Draft**:
-The editable description of a web agent's task, including its demonstrated Steps and chosen Completion criterion. Reopening a Draft does not change what successful execution means.
+The editable description of a web agent's task. It can include demonstrated Steps and a saved Completion criterion. Reopening a Draft does not change what successful execution means.
 _Avoid_: Recording, executable configuration
 
 **Completion criterion**:

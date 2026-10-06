@@ -12,6 +12,8 @@ Requests use `{type: "workflow-use:request", version: 1, id, method, params}`. R
 | cancelRecording | `id` | null |
 | requestCredentials | `kinds`, optional `replace` | `{saved: kinds}` |
 | saveAgent | `draft`, `config`, optional `agentId` | `{id}` |
+| loadAgent | empty object | Live agent projection with optional `setup` (see [Editing a saved agent](#editing-a-saved-agent)) |
+| saveDraft | `draft`, `config` | `{draftId}` |
 | testAgent | `agentId`, `arguments: {}` | `{id}` |
 | getTestRun | `agentId`, `runId` | `{status, stopping?, error?, files?, liveViewUrl?, failure?, stoppedAtStep?, confirmation?, screens?, activity?}` |
 | stopTest | `agentId`, `runId` | null |
@@ -42,7 +44,7 @@ Recording steps never contain sign-in values; a `credential` step records only t
 
 Create saves `draft.doneWhen` explicitly: `{kind: "file"}` unless the user chooses another check. The compiler refuses a Draft without a readable `doneWhen` rather than default it to a download. File checks compile to `[agent, download]`; `{kind: "text", value}` to `[agent, expect_text]` with 1–200 characters and a 10-second timeout; `{kind: "described", value}`, `{kind: "email", address, channelId}` and `{kind: "clicked", value}` to `[agent]`. The host must accept these exact stage lists. A successful run may have no files.
 
-Described criteria contain 1–300 characters after trimming and reject disclosed credentials, like exact text checks. They are appended to the agent prompt: the agent returns `completed` only when the criterion is visibly met and supplies short, factual on-screen evidence in `confirmation`. If the steps finish without meeting it, the agent returns `failed`, a reason starting exactly `Success criterion not met: `, and `step: null`. The host may classify that failure as `steps`; the UI maps the prefix to `check`, shows the remaining reason, opens Done-when choices, and does not blame a step. Successful described checks show `Agent saw: …` evidence. Existing saved `text` drafts still compile to `expect_text`. No host/CFE contract change is required: `saveAgent` in `ui/src/setup/host.ts` passes the compiled config through.
+Described criteria contain 1–300 characters after trimming and reject disclosed credentials, like exact text checks. They are appended to the agent prompt: the agent returns `completed` only when the criterion is visibly met and supplies short, factual on-screen evidence in `confirmation`. If the steps finish without meeting it, the agent returns `failed`, a reason starting exactly `Success criterion not met: `, and `step: null`. The host may classify that failure as `steps`; the UI maps the prefix to `check`, shows the remaining reason, opens Done-when choices, and does not blame a step. Successful described checks show `Agent saw: …` evidence.
 
 Hosts advertise `emailRoutes` only when all three email methods are available. The route starts with the creator as its allowed sender. After engine success, the UI polls every five seconds for at most three minutes, including hung requests, using the current test's fixed start timestamp as `since`. Only `routed` passes the email check. Rejected email offers an explicit sender-accept action followed by a new test. Editing invalidates scheduling until another test passes. Edit applies the same check to a saved email criterion, with the same methods and its own test-start timestamp; the host decides whether the saved route is still authorized for this agent.
 
@@ -52,9 +54,11 @@ The modern host opens its existing `SchedulePresetEditor` for `chooseSchedule`. 
 
 ## Editing a saved agent
 
+Hosts must persist `saveAgent.draft` and `saveDraft.draft` with their corresponding version's config and return the live version's stored setup in `loadAgent.setup`.
+
 `loadAgent` returns the live version's projected `name`, `url`, `goal`, `steps` and `stages`, and `setup`: the authored setup stored with that version, exactly as saved, including `doneWhen`. Hosts that omit `setup` still work. `ui/src/setup/compiler.ts` decides how the version can be edited:
 
 - Structured editing, when `steps` is non-empty, `setup.doneWhen` is one of the five kinds with exactly its keys and the limits a Draft compiles with (trimmed `text` 1–200 and `described` 1–300 characters, `clicked` 1–20000, an email `address` and a `channelId` of 1–100 letters, digits or hyphens), and the saved stages execute it: one `download` for `file`; one `expect_text` with the trimmed text for `text`; neither for the others; the criterion line in the agent prompt for `described`; the route address in the agent prompt for `email`. Other host stages are ignored. Edit never offers controls for the criterion, and recompiles with the saved one.
-- Raw editing otherwise. Without steps and with a missing or readable criterion nothing changes. A malformed criterion, or steps with a missing or contradicted criterion, makes the page say steps can't be edited and why. It never infers a criterion from stage shapes, and never defaults one to a download. A readable saved `email` criterion still applies in raw editing: a test passes only once the export is routed to its saved channel after that test's start.
+- Raw editing otherwise. An agent without steps stays editable when its criterion is missing or readable. A malformed criterion, or steps with a missing or contradicted criterion, makes the page say steps can't be edited and why. It never infers a criterion from stage shapes, and never defaults one to a download. A readable saved `email` criterion still applies in raw editing: a test passes only once the export is routed to its saved channel after that test's start.
 
-`saveDraft` sends the stored setup back with only the edited fields replaced. Raw editing changes only `name`, `url` and `goal` and keeps the stored steps and criterion byte for byte, even a malformed one. Its `config.prompt` is empty, and the host must keep the live version's top-level prompt for it.
+`saveDraft` sends the stored setup with the current Draft fields applied for structured editing. For raw editing, its `draft` changes only `name`, `url` and `goal`; it keeps the stored steps and criterion byte for byte, even a malformed one. Raw stage edits travel in `config.stages`. Raw `config.prompt` is empty, so the host must keep the live version's top-level prompt.
