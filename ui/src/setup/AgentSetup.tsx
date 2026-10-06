@@ -2,7 +2,7 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type K
 import { applyOrganizedSteps, compileAgent, credentialKinds, dateRuleChoices, dateRuleLabel, doneWhenOptions, draftChanges, findUnambiguousEmailStep, formatDate, groupSteps, mergeDateSteps, openQuestions, replaceStepsFrom, requiredCredentials, resolveDateRule, type CredentialKind, type DateRule, type DoneWhen, type SetupDraft, type SetupStep } from "./compiler";
 import { browserbaseLiveViewUrl, createHostBridge, HostRequestTimeoutError, type EditAgent as EditAgentData, type HostBridge, type RecordedDownload, type Recording } from "./host";
 import { HelpTip } from "./HelpTip";
-import { RunScreen } from "./RunView";
+import { RunScreen, RunView } from "./RunView";
 import { applyTestRunUpdate, failureLabel, safeFileUrl, type WorkbenchRun } from "./testRun";
 import { ActivityLog, TestBrowser } from "./TestWorkbench";
 import "./setup.css";
@@ -59,7 +59,9 @@ export default function AgentSetup() {
   const [googleAllowed, setGoogleAllowed] = useState(false);
   const [savedCredentials, setSavedCredentials] = useState<CredentialKind[]>([]);
   const [otpSource, setOtpSource] = useState<"authenticator" | "email" | undefined>();
-  const [mode, setMode] = useState<"create" | "edit" | "run">("create");
+  const [mode, setMode] = useState<"create" | "edit" | "run" | null>(null);
+  const [connectionAttempt, setConnectionAttempt] = useState(0);
+  const [runCloseError, setRunCloseError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -148,6 +150,8 @@ export default function AgentSetup() {
       return;
     }
     let active = true;
+    setConnecting(true);
+    setError(null);
     void bridge.request("ready", {}).then((result) => {
       if (!active) {
         return;
@@ -168,7 +172,7 @@ export default function AgentSetup() {
     return () => {
       active = false;
     };
-  }, [bridge]);
+  }, [bridge, connectionAttempt]);
 
   useEffect(() => {
     recordingRef.current = recording;
@@ -632,6 +636,15 @@ export default function AgentSetup() {
     }
   }
 
+  async function closeRunOpening(): Promise<void> {
+    if (!bridge) return;
+    setBusy(true);
+    setRunCloseError(null);
+    try { await bridge.request("close", {}); }
+    catch (requestError) { setRunCloseError(errorMessage(requestError)); }
+    finally { setBusy(false); }
+  }
+
   function requestClose(): void {
     if (hasAbandonableWork) {
       setConfirmClose(true);
@@ -651,8 +664,8 @@ export default function AgentSetup() {
   if (mode === "edit") return <EditScreen bridge={bridge} credentialsAllowed={credentialsAllowed} googleAllowed={googleAllowed} />;
   if (mode === "run") return <RunScreen bridge={bridge} />;
   // The host decides the mode; until it answers, a run page does not flash the setup steps.
-  if (connecting && new URLSearchParams(window.location.search).get("mode") === "run") {
-    return <main className="setup-unavailable"><p>Connecting to Reiterate</p></main>;
+  if (mode === null && new URLSearchParams(window.location.search).get("mode") === "run") {
+    return <RunView name={null} url="" run={null} loading={connecting} loadError={error} readError={null} closeError={runCloseError} closing={busy} onRetry={() => setConnectionAttempt((attempt) => attempt + 1)} onClose={() => void closeRunOpening()} />;
   }
 
   return (

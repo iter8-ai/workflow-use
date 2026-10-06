@@ -52,24 +52,24 @@ export function safeFileUrl(value: string): string | null {
 }
 
 /**
- * Reads a run `intervalMs` after the previous read settles, so at most one read is in flight, until a read reports
+ * Reads a run two seconds after the previous read settles, so at most one read is in flight, until a read reports
  * the run finished. The returned function stops reading; a read that settles after it is ignored.
  */
-export function pollRun(read: () => Promise<TestRun>, onRead: (next: TestRun) => void, onError: (error: unknown) => void, intervalMs = 2_000): () => void {
+export function pollRun(read: () => Promise<TestRun>, onRead: (next: TestRun) => void, onError: (error: unknown) => void): () => void {
   let active = true;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const poll = (): void => {
     void read().then((next) => {
       if (!active) return;
       onRead(next);
-      if (next.status === "running") timer = setTimeout(poll, intervalMs);
+      if (next.status === "running") timer = setTimeout(poll, 2_000);
     }, (error: unknown) => {
       if (!active) return;
       onError(error);
-      timer = setTimeout(poll, intervalMs);
+      timer = setTimeout(poll, 2_000);
     });
   };
-  timer = setTimeout(poll, intervalMs);
+  timer = setTimeout(poll, 2_000);
   return () => {
     active = false;
     clearTimeout(timer);

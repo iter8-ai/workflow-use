@@ -2725,6 +2725,42 @@ async function expectOnlyWatchRequests(page: Page): Promise<void> {
   expect(await page.evaluate(() => window.__stopRequests)).toEqual([]);
 }
 
+for (const failure of ["rejected", "timeout"] as const) {
+  test(`keeps a run read-only when ready ${failure}, including retry and failed close`, async ({ page }) => {
+    await page.clock.install({ time: clockStart });
+    await page.goto(`${baseUrl}/host?scenario=run-ready-${failure}`);
+    await page.clock.pauseAt(clockPaused);
+    const run = page.frameLocator("iframe");
+    if (failure === "timeout") {
+      await expect(run.getByText("Opening the run…")).toBeVisible();
+      await expect(run.getByRole("navigation", { name: "Agent setup progress" })).toHaveCount(0);
+      await page.clock.runFor(45_000);
+    }
+    const problem = run.getByRole("alert").filter({ hasText: "The run couldn’t be opened" });
+    await expect(problem).toBeVisible();
+    await expect(run.getByRole("navigation", { name: "Agent setup progress" })).toHaveCount(0);
+    expect(await page.evaluate(() => window.__requestMethods)).toEqual(["ready"]);
+    await problem.getByRole("button", { name: "Try again", exact: true }).click();
+    if (failure === "timeout") {
+      await expect(run.getByText("Opening the run…")).toBeVisible();
+      await page.clock.runFor(45_000);
+    }
+    await expect(problem).toBeVisible();
+    await expect(run.getByRole("navigation", { name: "Agent setup progress" })).toHaveCount(0);
+    expect(await page.evaluate(() => window.__requestMethods)).toEqual(["ready", "ready"]);
+    await run.getByRole("button", { name: "Close run", exact: true }).click();
+    await expect(run.getByRole("alert").filter({ hasText: "Closing failed. Try again." })).toBeVisible();
+    await expect(problem).toBeVisible();
+    await problem.getByRole("button", { name: "Back to web agents", exact: true }).click();
+    await expect(run.getByRole("alert").filter({ hasText: "Closing failed. Try again." })).toHaveCount(0);
+    await problem.getByRole("button", { name: "Try again", exact: true }).click();
+    await expect(run.getByRole("heading", { name: "Monthly statement", level: 1 })).toBeVisible();
+    expect(await page.evaluate(() => window.__requestMethods)).toEqual(["ready", "ready", "close", "close", "ready", "loadRun"]);
+    expect(await page.evaluate(() => window.__closeRequests)).toEqual([{}, {}]);
+    await expectOnlyWatchRequests(page);
+  });
+}
+
 test("watches an existing run to its result in the setup's browser and activity, using only read requests", async ({ page }) => {
   await page.clock.install({ time: clockStart });
   await page.goto(`${baseUrl}/host?scenario=run-activity-success`);
@@ -3039,6 +3075,10 @@ function hostPage(url: string, scenario: string | null): string {
     const send = (result) => event.source.postMessage({ type: "workflow-use:response", version: 1, id: request.id, result }, event.origin);
     const fail = (error) => event.source.postMessage({ type: "workflow-use:response", version: 1, id: request.id, error }, event.origin);
     if (request.method === "ready") {
+      if (scenario.startsWith("run-ready-") && window.__requestMethods.filter((method) => method === "ready").length <= 2) {
+        if (scenario === "run-ready-rejected") fail("The connection to Reiterate was lost.");
+        return;
+      }
       if (scenario === "delayed-ready") setTimeout(() => send({ schedule: true }), 300);
       else send({ schedule: true, mode: watch ? "run" : edit ? "edit" : "create", credentials: !["sign-in-unsupported", "edit-credentials-unsupported"].includes(scenario), google: !scenario.endsWith("old-host"), emailRoutes: !legacy, chooseSchedule: !legacy && scenario !== "no-text" });
     } else if (request.method === "loadRun") {
@@ -3154,7 +3194,7 @@ function hostPage(url: string, scenario: string | null): string {
         if (scenario !== "lost-schedule-reply" && scenario !== "legacy-lost-schedule-reply") send(undefined);
       }
     }
-    else if (request.method === "close") { window.__closeRequests.push(request.params); send(undefined); }
+    else if (request.method === "close") { window.__closeRequests.push(request.params); if (scenario.startsWith("run-ready-") && window.__closeRequests.length === 1) fail("Closing failed. Try again."); else send(undefined); }
     else fail("Unknown request");
   });
 </script></body></html>`;
