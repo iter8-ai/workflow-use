@@ -6,13 +6,13 @@ Requests use `{type: "workflow-use:request", version: 1, id, method, params}`. R
 
 | Method | Parameters | Result |
 | --- | --- | --- |
-| ready | empty object | `{schedule: boolean, credentials?: boolean, emailRoutes?: boolean, chooseSchedule?: boolean, mode?: "create" \| "edit" \| "run"}` |
+| ready | empty object | See `RequestMap["ready"]["result"]` in [host.ts](../ui/src/setup/host.ts). |
 | startRecording | `url` | Recording |
 | getRecording / stopRecording | `id` | Recording |
 | cancelRecording | `id` | null |
 | requestCredentials | `kinds`, optional `replace` | `{saved: kinds}` |
 | saveAgent | `draft`, `config`, optional `agentId` | `{id}` |
-| loadRun | empty object | `{agentId, runId, name, url, run: TestRun}` |
+| loadRun | empty object | See `WatchedRun` in [host.ts](../ui/src/setup/host.ts). |
 | testAgent | `agentId`, `arguments: {}` | `{id}` |
 | getTestRun | `agentId`, `runId` | `{status, stopping?, error?, files?, liveViewUrl?, failure?, stoppedAtStep?, confirmation?, screens?, activity?}` |
 | stopTest | `agentId`, `runId` | null |
@@ -41,7 +41,7 @@ Recording steps never contain sign-in values; a `credential` step records only t
 
 ## Test feedback and completion checks
 
-`failure` is null or `{kind, message}`. Kinds are `service`, `signin`, `website`, `steps`, `result`, `check`, `stopped`, and `unknown`. A stopped test has `status: "failed"` and `failure: {kind: "stopped", message: "You stopped the test."}`. While a stop request is pending, a running test may report `stopping: true`. The host returns user-safe messages and never provider error bodies. The UI uses fixed service-failure copy. `stoppedAtStep` is a nullable 1-based demonstrated step number. `confirmation` is nullable final-page text. `screens` contains up to 20 `{image}` records, oldest first, with PNG data URLs. The page labels them only "Final screen" or "Earlier screen": a screen's recorded note can hold the agent's private reasoning, so hosts don't send it and the page ignores a `thought` field from older hosts. The live view is watch-only. Finished image navigation never controls the browser.
+`failure` is null or `{kind, message}`. The allowed kinds are defined by `TestRun` in [host.ts](../ui/src/setup/host.ts). A stopped test has `status: "failed"` and `failure: {kind: "stopped", message: "You stopped the test."}`. While a stop request is pending, a running test may report `stopping: true`. The host returns user-safe messages and never provider error bodies. The UI uses fixed service-failure copy. `stoppedAtStep` is a nullable 1-based demonstrated step number. `confirmation` is nullable final-page text. `screens` contains up to 20 `{image}` records, oldest first, with PNG data URLs. The page labels them only "Final screen" or "Earlier screen": a screen's recorded note can hold the agent's private reasoning, so hosts don't send it and the page ignores a `thought` field from older hosts. The live view is watch-only. Finished image navigation never controls the browser.
 
 `activity` is the run's activity feed: `{revision, browser, snapshot, items}`. `browser` is `starting`, `live`, `closing`, `closed`, `unavailable` or `unknown`; `closing` and `closed` mean the agent closed the browser while the run may still be finishing, and `unknown` means the browser was lost without a confirmed closure. `snapshot` is null or `{image, sequence}` with the latest PNG data URL of the agent's page. `items` holds up to 200 `{sequence, kind, status, text}` entries, oldest first: `kind` is `stage`, `action` or `lifecycle`, `status` is `started`, `executed`, `blocked`, `rejected`, `completed` or `failed`, and `text` is a fixed label written by the web agent. `activity` is null when the host could not read the feed this time and absent when there is none. A higher `revision` replaces the shown feed; a lower one is stale. The setup test and run observer draw the live browser from `snapshot` and finished screens from `screens`. Neither embeds the provider's viewer, so the provider's disconnect page cannot appear; `liveViewUrl` remains for older setup pages and is null once the browser is no longer live.
 

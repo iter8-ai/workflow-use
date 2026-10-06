@@ -6,7 +6,7 @@ product
 
 ## Users and purpose
 
-Accountants and operations users set up web agents by demonstrating a task in an embedded virtual browser. They review the captured steps, choose reusable inputs, test a fresh run, and schedule only after checking the result.
+The setup UI is for accountants and operations users. See the [README](README.md) for the setup flow and current limits.
 
 ## Product direction
 
