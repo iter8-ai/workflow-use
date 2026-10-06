@@ -25,6 +25,15 @@ def is_public_http_url(url: str) -> bool:
         return True
 
 
+def is_google_sign_in(url: str) -> bool:
+    """Google's own sign-in pages, e.g. the window a site's "Continue with Google" button opens."""
+    try:
+        hostname = urlsplit(url).hostname
+    except ValueError:
+        return False
+    return (hostname or "").rstrip(".").lower() == "accounts.google.com"
+
+
 def safe_public_url(url: str) -> str | None:
     """Return a public URL only when it has no query parameters or fragment."""
     if not is_public_http_url(url):

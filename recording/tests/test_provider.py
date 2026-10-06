@@ -255,3 +255,110 @@ async def test_browser_startup_records_only_top_level_navigation(
         assert [(step.type, step.url, step.target) for step in service.response(recording).steps] == expected
     finally:
         await service.close()
+
+
+@pytest.mark.asyncio
+async def test_a_sign_in_window_the_website_opens_is_shown_in_the_live_view_and_not_recorded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Browserbase's live view shows one tab. When a site's "Continue with Google" opens a window, the person
+    demonstrating must see that window, then the site again once it closes. Google's sign-in is not a step."""
+    from workflow_use_recording.service import RecordingOwner, RecordingService
+
+    playwright = pytest.importorskip("playwright.async_api")
+    context_route = playwright.BrowserContext.route
+
+    async def fixture_route(context: Any, pattern: Any, handler: Any, **kwargs: Any) -> None:
+        await context_route(context, pattern, handler, **kwargs)
+
+        async def serve(route: Any) -> None:
+            if route.request.url.startswith("https://accounts.google.com/"):
+                body = """
+                    <label>Email or phone <input type="email" autocomplete="username"></label>
+                    <label>Password <input type="password" name="Passwd"></label>
+                    <button>Next</button>
+                """
+            else:
+                body = """<button onclick="window.open('https://accounts.google.com/signin', 'google', 'popup')">
+                    Continue with Google</button>"""
+            await route.fulfill(content_type="text/html", body=body)
+
+        await context_route(context, "**/*", serve)
+
+    monkeypatch.setattr(playwright.BrowserContext, "route", fixture_route)
+    runtime = await playwright.async_playwright().start()
+    browser = await runtime.chromium.launch()
+    context = await browser.new_context()
+
+    async def tabs() -> list[Any]:
+        listed = []
+        for page in context.pages:
+            cdp = await context.new_cdp_session(page)
+            target_id = (await cdp.send("Target.getTargetInfo"))["targetInfo"]["targetId"]
+            await cdp.detach()
+            listed.append(
+                SimpleNamespace(id=target_id, debugger_fullscreen_url=f"https://live.browserbase.com/{target_id}")
+            )
+        return listed
+
+    class Sessions:
+        async def create(self, **_kwargs: Any) -> Any:
+            return SimpleNamespace(id="session-1", connect_url="wss://connect.browserbase.test/session-1")
+
+        async def debug(self, _session_id: str) -> Any:
+            return SimpleNamespace(debugger_fullscreen_url="https://live.browserbase.com/first-tab", pages=await tabs())
+
+        async def update(self, _session_id: str, **_kwargs: str) -> None:
+            pass
+
+    class AsyncBrowserbase:
+        def __init__(self) -> None:
+            self.sessions = Sessions()
+
+        async def __aexit__(self, *_args: Any) -> None:
+            pass
+
+    async def connect_over_cdp(_connect_url: str) -> Any:
+        return browser
+
+    browserbase = ModuleType("browserbase")
+    browserbase.AsyncBrowserbase = AsyncBrowserbase  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "browserbase", browserbase)
+    service = RecordingService(BrowserbaseProvider(project_id="project-1"))
+    owner = RecordingOwner("iter7", "owner@iter7.example")
+    monkeypatch.setattr(runtime.chromium, "connect_over_cdp", connect_over_cdp)
+    monkeypatch.setattr(playwright, "async_playwright", lambda: SimpleNamespace(start=lambda: _start(runtime)))
+
+    async def live_view_becomes(expected: str) -> None:
+        for _ in range(100):
+            if service.response(recording).live_view_url == expected:
+                return
+            await asyncio.sleep(0.05)
+        assert service.response(recording).live_view_url == expected
+
+    try:
+        recording = await service.create(owner, "https://example.com/login")
+        assert service.response(recording).live_view_url == "https://live.browserbase.com/first-tab"
+        site = context.pages[0]
+        async with site.expect_popup() as opened:
+            await site.get_by_role("button", name="Continue with Google").click()
+        google = await opened.value
+        await google.wait_for_load_state()
+        first_tab, popup_tab = await tabs()
+        assert first_tab.id != popup_tab.id
+        await live_view_becomes(popup_tab.debugger_fullscreen_url)
+
+        await google.get_by_label("Email or phone").fill("person@example.com")
+        await google.get_by_label("Password").press_sequentially("google-password")
+        await google.get_by_role("button", name="Next").click()
+        await google.close()
+        await live_view_becomes("https://live.browserbase.com/first-tab")
+
+        await service.stop(recording.id, owner)
+        assert [(step.type, step.target) for step in recording.steps] == [
+            ("navigation", None),
+            ("click", "Continue with Google"),
+        ]
+        assert service.take_credentials(recording) == {}
+    finally:
+        await service.close()
