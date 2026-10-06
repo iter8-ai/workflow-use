@@ -553,6 +553,7 @@ test("keeps keyboard focus on the demonstration's next action and shows what was
   await expect(setup.getByRole("link", { name: "Add an authenticator app to your Google Account" })).toHaveAttribute("href", "https://myaccount.google.com/two-step-verification/authenticator");
   await expect(setup.getByRole("link", { name: "Add an authenticator app to your Google Account" })).toHaveAttribute("target", "_blank");
   await expect(setup.getByLabel("Recorded steps list").locator("ol")).toHaveCSS("list-style-type", "decimal");
+  await googleShots(page, "rail-note-old-host", setup.locator(".google-verify-note"));
 
   await page.keyboard.press("Enter");
   await expect(setup.getByRole("button", { name: "Continue to review" })).toBeFocused();
@@ -1371,6 +1372,37 @@ test("a Google sign-in status that answers after the setup was saved doesn't bri
   await expect(setup.getByRole("region", { name: "Finish the Google sign-in setup" })).toHaveCount(0);
   await expect(setup.getByText(googleSignInSkipNote)).toHaveCount(0);
 });
+
+for (const mode of ["create", "edit"]) {
+  test(`${mode} ignores a Google sign-in status from an earlier demonstration`, async ({ page }) => {
+    await page.goto(`${baseUrl}/host?scenario=${mode === "edit" ? "edit-" : ""}google-demo-late`);
+    const setup = page.frameLocator("iframe");
+    if (mode === "create") await describeAndDemonstrate(setup);
+    else {
+      await setup.getByRole("button", { name: "Re-demonstrate" }).click();
+      await setup.getByRole("button", { name: "Finish re-demonstration" }).click();
+    }
+    await expect.poll(() => page.evaluate(() => window.__googleSignInRequests.length)).toBe(1);
+    await page.evaluate(() => { window.__firstGoogleSignInReply = window.__answerGoogleSignIn; });
+    if (mode === "create") {
+      await setup.getByRole("button", { name: "Back to demonstration" }).click();
+      await setup.getByRole("button", { name: "Start over" }).click();
+      await setup.getByRole("button", { name: "Continue to demonstration" }).click();
+      await setup.getByRole("button", { name: "Finish demonstration" }).click();
+      await setup.getByRole("button", { name: "Continue to review" }).click();
+    } else {
+      await setup.getByRole("button", { name: "Re-demonstrate" }).click();
+      await setup.getByRole("button", { name: "Finish re-demonstration" }).click();
+    }
+    await expect.poll(() => page.evaluate(() => window.__googleSignInRequests.length)).toBe(2);
+    const panel = setup.getByRole("region", { name: "Finish the Google sign-in setup" });
+    await page.evaluate(() => window.__firstGoogleSignInReply());
+    await page.waitForTimeout(250);
+    await expect(panel).toHaveCount(0);
+    await page.evaluate(() => window.__answerGoogleSignIn());
+    await expect(panel).toBeVisible();
+  });
+}
 
 test("a Google sign-in setup that fails keeps the offer so it can be tried again", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=google-demo-retry`);
@@ -3325,7 +3357,7 @@ for (const failure of ["rejected", "timeout"] as const) {
     }
     await expect(problem).toBeVisible();
     await expect(run.getByRole("navigation", { name: "Agent setup progress" })).toHaveCount(0);
-    expect(await page.evaluate(() => window.__requestMethods)).toEqual(["ready", "ready"]);
+    await expect.poll(() => page.evaluate(() => window.__requestMethods)).toEqual(["ready", "ready"]);
     await run.getByRole("button", { name: "Close run", exact: true }).click();
     await expect(run.getByRole("alert").filter({ hasText: "Closing failed. Try again." })).toBeVisible();
     await expect(problem).toBeVisible();
