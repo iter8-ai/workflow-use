@@ -57,7 +57,7 @@ case "${1:-test}" in
       (cd ui && npx tsc --noEmit -p .) || status=1
       # Fixture-driven setup flows (e2e/agent-setup.spec.ts); a private port avoids other runs' servers.
       port=$((41000 + RANDOM % 900))
-      (cd ui && PLAYWRIGHT_BASE_URL="http://127.0.0.1:$port" npx playwright test --reporter=line --workers=2) || status=1
+      (cd ui && CI=1 PLAYWRIGHT_BASE_URL="http://127.0.0.1:$port" npx playwright test --reporter=line --workers=2) || status=1
     fi
     if has recording; then
       (cd recording && uv sync -q --frozen --group dev && uv run --no-sync pytest -q -p no:warnings) || status=1
