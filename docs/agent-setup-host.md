@@ -10,6 +10,7 @@ Requests use `{type: "workflow-use:request", version: 1, id, method, params}`. R
 | startRecording | `url` | Recording |
 | getRecording / stopRecording | `id` | Recording |
 | cancelRecording | `id` | null |
+| getGoogleSignIn / setUpGoogleSignIn | See `RequestMap` in [host.ts](../ui/src/setup/host.ts). | See `RequestMap` and `GoogleSignInStatus` in [host.ts](../ui/src/setup/host.ts). |
 | requestCredentials | `kinds`, optional `replace` | `{saved: kinds}` |
 | saveAgent | `draft`, `config`, optional `agentId` | `{id}` |
 | loadRun | empty object | See `WatchedRun` in [host.ts](../ui/src/setup/host.ts). |
@@ -38,6 +39,10 @@ Treat all draft text and recorded page content as untrusted. The compiler emits 
 Recording steps never contain sign-in values; a `credential` step records only the kind (`username`, `password`, or `otp`). The recording service's `POST /recordings/{id}/stop` response additionally carries `credentials: {username?, password?}`, the values typed into the demonstrated sign-in form, exactly once and with `Cache-Control: no-store`. This is a service-to-host field: the host must keep it, save it as the agent's encrypted parameters, and strip it before answering the iframe's `stopRecording`, whose Recording result has no credentials. Discarding the recording (`cancelRecording`) must discard the values captured by it.
 
 `requestCredentials` asks the host to make sure the listed kinds are saved. The host asks the user in its own UI only for kinds it does not hold (typically the authenticator key for a one-time code), or for all listed kinds when `replace` is true, and answers with the kinds that are saved, never the values. Hosts that return `credentials: false` (or omit it) from `ready` cannot store sign-in details, and the UI will not test an agent that needs them.
+
+Google sign-in setup is a separate, organisation-wide host capability. Return `googleSignIn: true` from `ready` only when the host supports both `getGoogleSignIn` and `setUpGoogleSignIn`; see their exact request and result types in [host.ts](../ui/src/setup/host.ts). A stopped `Recording` may include `google.signedIn` to say whether the demonstration ended signed in to Google. The UI checks `getGoogleSignIn` only when that value is true and the capability is advertised. It offers setup when the returned status is not `ready`. See `GoogleSignInStatus` in `host.ts` for the status values and the meaning of partial setup.
+
+The host's dialog collects and stores the Google email, password, and authenticator key for reuse across agents in the organisation. The iframe may receive the email and status, but never the password or authenticator key. The post-demonstration offer sends `reason: "demonstration"`; Google failure recovery sends `reason: "test"`. See `RequestMap` for the allowed reasons. A completed change returns `changed: true` and requires another test before scheduling or publishing. Cancel returns `changed: false` and leaves the existing saved sign-in unchanged. A Google test failure uses the host's user-safe `failure.message` with the new setup button. Hosts without this capability keep the existing `google`/`connectGoogle` path, or direct users to Credentials → Connect Google.
 
 ## Test feedback and completion checks
 
