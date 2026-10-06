@@ -2,6 +2,10 @@
 
 This public fork adds a demonstration-based setup flow for computer-use agents. Users describe a task, demonstrate a task in a remote browser, edit the captured steps, and test before scheduling.
 
+Write step instructions and stage names using what the website shows, such as "Click the account selector" or "Enter Email [work]". Ordinary CSS, XPath, or selector wording and bracketed labels are allowed; detected locator syntax or screen coordinates require a rewrite. Detected locators in hidden recorded targets are omitted from run instructions and click completion choices without blocking a valid visible instruction. Named date fields retain their names. Switching a field with such a hidden target between Text and a saved sign-in kind preserves its authored instruction.
+
+Step validation errors show the current step number and highlight its row in Review or edit. Use "Go to step" to focus and scroll to its instruction, including from Test. Changing the steps clears the old validation message; continue to Test or test again to check the revised steps.
+
 The default `ui/` app is an embedded authoring interface that also lets users inspect an existing agent run without changing it. See [the host contract](docs/agent-setup-host.md) to open a run for inspection. Its host handles authentication, agent storage, test execution, and scheduling through an origin-checked message bridge. The separate `recording/` service captures browser actions. It does not run agents. Compiled configurations select the computer-use engine explicitly.
 
 ## Run locally
