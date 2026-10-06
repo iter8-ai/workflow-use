@@ -67,7 +67,8 @@ export default function AgentSetup() {
   const [connectionAttempt, setConnectionAttempt] = useState(0);
   const [runCloseError, setRunCloseError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(true);
-  const [busy, setBusy] = useState(false);
+  const [operationBusy, setBusy] = useState(false);
+  const busy = operationBusy || googleSignIn.prompt.busy;
   const [error, setError] = useState<string | null>(null);
   const [stepError, setStepError] = useState<StepValidationError | null>(null);
   const [stepFocus, setStepFocus] = useState<string | null>(null);
@@ -751,7 +752,7 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed, googleSignInAll
   const [checked, setChecked] = useState(false);
   const [recording, setRecording] = useState<Recording | null>(null);
   const [fromStep, setFromStep] = useState(0);
-  const [busy, setBusy] = useState(true);
+  const [operationBusy, setBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [stepError, setStepError] = useState<StepValidationError | null>(null);
   const [conflict, setConflict] = useState<{ updatedBy: string | null; updatedAt: string | null } | null>(null);
@@ -774,6 +775,7 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed, googleSignInAll
   const changesHeadingRef = useRef<HTMLHeadingElement>(null);
   const stepsHeadingRef = useRef<HTMLHeadingElement>(null);
   const googleSignIn = useGoogleSignInPrompt(bridge, googleSignInAllowed, recording, { onChanged: () => { setCredentialsChanged(true); resetTest(); }, heading: () => stepsHeadingRef.current });
+  const busy = operationBusy || googleSignIn.prompt.busy;
   const fieldRefs = useRef<Record<string, HTMLInputElement | HTMLTextAreaElement | null>>({});
   const dialogOpen = publishOpen || conflict !== null || confirmClose || screenOpen;
 

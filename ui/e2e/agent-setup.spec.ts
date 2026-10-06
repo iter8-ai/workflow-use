@@ -1464,31 +1464,44 @@ test("edit holds the Google sign-in offer while a test runs, so a save can't dis
   ]);
 });
 
-for (const saved of [true, false]) {
-  test(`a Google sign-in setup ${saved ? "saved" : "cancelled"} after a new edit re-demonstration leaves the new offer and test alone`, async ({ page }) => {
-    await page.goto(`${baseUrl}/host?scenario=edit-google-demo-slowsave`);
-    const setup = page.frameLocator("iframe");
-    await setup.getByRole("button", { name: "Re-demonstrate" }).click();
-    await setup.getByRole("button", { name: "Finish re-demonstration" }).click();
-    const panel = setup.getByRole("region", { name: "Finish the Google sign-in setup" });
-    await panel.getByRole("button", { name: "Set up Google sign-in" }).click();
-    await expect.poll(() => page.evaluate(() => window.__googleSignInRequests.length)).toBe(2);
-    // While the dialog is still open, the user starts over and tests the new demonstration.
-    await setup.getByRole("button", { name: "Re-demonstrate" }).click();
-    await setup.getByRole("button", { name: "Finish re-demonstration" }).click();
-    await expect(panel).toBeVisible();
-    await setup.getByRole("button", { name: "Test changes" }).click();
-    const result = setup.locator(".edit-result-failed");
-    await expect(result).toContainText("Google sign-in needed");
-    await page.evaluate((save) => window.__closeGoogleSignInSetUp(save), saved);
-    await page.waitForTimeout(250);
-    // A save leaves nothing to offer; a cancel leaves the new demonstration's offer, not the skip note.
-    await expect(setup.getByText(googleSignInSkipNote)).toHaveCount(0);
-    if (saved) await expect(panel).toHaveCount(0);
-    else await expect(panel.getByRole("button", { name: "Skip for now" })).toBeEnabled();
-    await expect(result).toContainText("Google sign-in needed");
-    await expect(setup.getByText("Changed since this test")).toHaveCount(0);
-  });
+for (const mode of ["create", "edit"]) {
+  for (const saved of [true, false]) {
+    test(`${mode} waits for a Google sign-in setup ${saved ? "save" : "cancellation"} before another operation`, async ({ page }) => {
+      await page.goto(`${baseUrl}/host?scenario=${mode === "edit" ? "edit-" : ""}google-demo-slowsave`);
+      const setup = page.frameLocator("iframe");
+      if (mode === "create") await describeAndDemonstrate(setup);
+      else {
+        await setup.getByRole("button", { name: "Re-demonstrate" }).click();
+        await setup.getByRole("button", { name: "Finish re-demonstration" }).click();
+      }
+      const panel = setup.getByRole("region", { name: "Finish the Google sign-in setup" });
+      await panel.getByRole("button", { name: "Set up Google sign-in" }).click();
+      await expect.poll(() => page.evaluate(() => window.__googleSignInRequests.length)).toBe(2);
+      await expect(panel.getByRole("button", { name: "Skip for now" })).toBeDisabled();
+      if (mode === "create") {
+        await expect(setup.getByRole("button", { name: "Back to demonstration" })).toBeDisabled();
+        await expect(setup.getByRole("button", { name: "Continue to test" })).toBeDisabled();
+      } else {
+        await expect(setup.getByRole("button", { name: "Re-demonstrate" })).toBeDisabled();
+        await expect(setup.getByRole("button", { name: "Test changes" })).toBeDisabled();
+        await expect(setup.getByRole("button", { name: "Change sign-in details" })).toBeDisabled();
+      }
+      expect(await page.evaluate(() => window.__testArguments)).toEqual([]);
+      await page.evaluate((save) => window.__closeGoogleSignInSetUp(save), saved);
+      if (saved) {
+        await expect(panel).toHaveCount(0);
+        await expect(setup.getByText(googleSignInSkipNote)).toHaveCount(0);
+      } else await expect(setup.getByRole("status").filter({ hasText: googleSignInSkipNote })).toBeVisible();
+      if (mode === "create") {
+        await setup.getByRole("button", { name: "Continue to test" }).click();
+        await setup.getByRole("button", { name: "Run test" }).click();
+      } else await setup.getByRole("button", { name: "Test changes" }).click();
+      const result = setup.locator(mode === "create" ? ".run-status" : ".edit-result-failed");
+      await expect(result).toContainText("Google sign-in needed");
+      expect(await page.evaluate(() => window.__testArguments)).toHaveLength(1);
+      await expect(setup.getByText(mode === "create" ? "Changes require a new test." : "Changed since this test")).toHaveCount(0);
+    });
+  }
 }
 
 test("edit cancelling the Google sign-in setup leaves the skip note and keeps the test", async ({ page }) => {
