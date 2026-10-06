@@ -41,7 +41,7 @@ For an optional deployment smoke check, open `/setup-check.html` and download it
 
 Start with a website address without query parameters or fragments; the compiler rejects either so they cannot enter a saved configuration or agent prompt. Navigate to the required page inside the demonstration browser. Recordings are ephemeral and expire after 15 minutes. Typed text and dropdown choices are recorded and repeated as exact values; they can be edited in review. Sign-in is different: each demonstrated sign-in field compiles to an exact `$username`, `$password`, or `$otp` placeholder. The username and password typed during the demonstration are handed to the host once when the recording stops; the host stores them as encrypted agent parameters and asks in its own dialog only for what the demonstration could not provide, such as an authenticator key. The setup page learns only which kinds are saved. The web agent engine substitutes them while typing, so the model and the setup page never receive them.
 
-Schedules repeat the tested workflow. Relative dates such as “previous month” are not resolved automatically. A successful test still requires the user to inspect the result before scheduling.
+Schedules repeat the tested workflow. For recognized date steps, Review asks what to enter on future runs: keep the demonstrated date or choose a relative rule such as the start or end of last month. A successful test still requires the user to inspect the result before scheduling.
 
 ## Source and license
 
