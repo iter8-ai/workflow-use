@@ -1196,6 +1196,13 @@ for (const mode of ["create", "edit"]) {
         await expect(result).toContainText("Google sign-in needed");
         await expect(setup.getByText(mode === "edit" ? "Changed since this test" : "Changes require a new test.")).toHaveCount(0);
       }
+      if (mode === "edit") {
+        const changes = setup.locator(".edit-changes");
+        await expect(changes.getByRole("status")).toHaveText("No unpublished changes");
+        await expect(changes.getByText("Sign-in details: updated", { exact: true })).toHaveCount(0);
+        await expect(changes.getByText("Leave without publishing to undo")).toHaveCount(0);
+        await expect(setup.getByRole("region", { name: "Sign-in details" }).getByRole("status")).toHaveCount(0);
+      }
     });
   }
 }
@@ -1213,6 +1220,24 @@ for (const mode of ["create", "edit"]) {
     await expect(result.getByRole("button", { name: "Connect Google" })).toHaveCount(0);
   });
 }
+
+test("saving the organisation Google sign-in preserves an agent credential change", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-google-signin-saved`);
+  const setup = page.frameLocator("iframe");
+  const changes = setup.locator(".edit-changes");
+  await setup.getByRole("button", { name: "Change sign-in details" }).click();
+  await expect(changes.getByRole("status")).toHaveText("1 unpublished change");
+  await expect(changes.getByText("Sign-in details: updated", { exact: true })).toBeVisible();
+  await setup.getByRole("button", { name: "Test changes" }).click();
+  const result = setup.locator(".edit-result-failed");
+  await expect(result).toContainText("Google sign-in needed");
+  await result.getByRole("button", { name: "Set up Google sign-in" }).click();
+  await expect(setup.getByText("Changed since this test")).toBeVisible();
+  await expect(result).toHaveCount(0);
+  await expect(changes.getByRole("status")).toHaveText("1 unpublished change");
+  await expect(changes.getByText("Sign-in details: updated", { exact: true })).toBeVisible();
+  await expect(changes.getByText("Leave without publishing to undo")).toBeVisible();
+});
 
 const googleSignInPanelBody = "You signed in with Google during the demonstration. Google asks for a verification code every time the agent signs in, so the agent needs your Google password and an authenticator key. It takes about two minutes.";
 const googleSignInSkipNote = "Test runs will stop at Google's verification until the Google sign-in is set up.";
@@ -1426,12 +1451,18 @@ test("edit saving the Google sign-in from the offer after a test requires a new 
   await setup.getByRole("button", { name: "Test changes" }).click();
   const result = setup.locator(".edit-result-failed");
   await expect(result).toContainText("Google sign-in needed");
+  const changes = setup.locator(".edit-changes");
+  const changeCount = await changes.getByRole("status").innerText();
   await panel.getByRole("button", { name: "Set up Google sign-in" }).click();
   await expect(panel).toHaveCount(0);
   await expect(setup.getByText(googleSignInSkipNote)).toHaveCount(0);
   await expect(setup.getByRole("heading", { name: "Steps", exact: true })).toBeFocused();
   await expect(setup.getByText("Changed since this test")).toBeVisible();
   await expect(result).toHaveCount(0);
+  await expect(changes.getByRole("status")).toHaveText(changeCount);
+  await expect(changes.getByText("Sign-in details: updated", { exact: true })).toHaveCount(0);
+  await expect(changes.getByText("Leave without publishing to undo")).toHaveCount(0);
+  await expect(setup.getByRole("region", { name: "Sign-in details" }).getByRole("status")).toHaveCount(0);
   expect(await page.evaluate(() => window.__googleSignInRequests)).toEqual([
     { method: "getGoogleSignIn", params: {} },
     { method: "setUpGoogleSignIn", params: { reason: "demonstration" } },
@@ -1512,10 +1543,14 @@ test("edit cancelling the Google sign-in setup leaves the skip note and keeps th
   await setup.getByRole("button", { name: "Test changes" }).click();
   const result = setup.locator(".edit-result-failed");
   await expect(result).toContainText("Google sign-in needed");
+  const changes = setup.locator(".edit-changes");
+  const changeCount = await changes.getByRole("status").innerText();
   await setup.getByRole("region", { name: "Finish the Google sign-in setup" }).getByRole("button", { name: "Set up Google sign-in" }).click();
   await expect(setup.getByRole("status").filter({ hasText: googleSignInSkipNote })).toBeFocused();
   await expect(result).toContainText("Google sign-in needed");
   await expect(setup.getByText("Changed since this test")).toHaveCount(0);
+  await expect(changes.getByRole("status")).toHaveText(changeCount);
+  await expect(changes.getByText("Sign-in details: updated", { exact: true })).toHaveCount(0);
 });
 
 for (const [scenario, requests] of [["edit-google-demo-ready", [{ method: "getGoogleSignIn", params: {} }]], ["edit-google-demo-signedout", []], ["edit-google-demo-nocap", []]] as const) {

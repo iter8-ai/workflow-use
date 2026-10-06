@@ -774,7 +774,7 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed, googleSignInAll
   const revertFocusRef = useRef<string | null>(null);
   const changesHeadingRef = useRef<HTMLHeadingElement>(null);
   const stepsHeadingRef = useRef<HTMLHeadingElement>(null);
-  const googleSignIn = useGoogleSignInPrompt(bridge, googleSignInAllowed, recording, { onChanged: () => { setCredentialsChanged(true); resetTest(); }, heading: () => stepsHeadingRef.current });
+  const googleSignIn = useGoogleSignInPrompt(bridge, googleSignInAllowed, recording, { onChanged: () => resetTest(), heading: () => stepsHeadingRef.current });
   const busy = operationBusy || googleSignIn.prompt.busy;
   const fieldRefs = useRef<Record<string, HTMLInputElement | HTMLTextAreaElement | null>>({});
   const dialogOpen = publishOpen || conflict !== null || confirmClose || screenOpen;
@@ -930,8 +930,10 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed, googleSignInAll
   const connectGoogle = async (): Promise<void> => {
     setBusy(true); setError(null);
     try {
-      if (googleSignInAllowed ? await googleSignIn.setUp("test") : (await bridge.request("connectGoogle", { agentId: agent.agentId }, { timeoutMs: interactiveRequestTimeoutMs })).connected) {
-        setCredentialsChanged(true); resetTest();
+      const changed = googleSignInAllowed ? await googleSignIn.setUp("test") : (await bridge.request("connectGoogle", { agentId: agent.agentId }, { timeoutMs: interactiveRequestTimeoutMs })).connected;
+      if (changed) {
+        if (!googleSignInAllowed) setCredentialsChanged(true);
+        resetTest();
       }
     } catch (e) { setError(errorMessage(e)); }
     finally { setBusy(false); }
