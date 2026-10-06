@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { applyOrganizedSteps, compileAgent, credentialKinds, dateRuleChoices, dateRuleLabel, doneWhenOptions, draftChanges, findUnambiguousEmailStep, formatDate, groupSteps, mergeDateSteps, openQuestions, replaceStepsFrom, requiredCredentials, resolveDateRule, StepValidationError, type CredentialKind, type DateRule, type DoneWhen, type SetupDraft, type SetupStep } from "./compiler";
+import { applyOrganizedSteps, compileAgent, credentialKinds, dateRuleChoices, dateRuleLabel, doneWhenOptions, draftChanges, findUnambiguousEmailStep, formatDate, groupSteps, mergeDateSteps, openQuestions, replaceStepsFrom, requiredCredentials, resolveDateRule, StepValidationError, usableTarget, type CredentialKind, type DateRule, type DoneWhen, type SetupDraft, type SetupStep } from "./compiler";
 import { browserbaseLiveViewUrl, createHostBridge, HostRequestTimeoutError, type EditAgent as EditAgentData, type HostBridge, type RecordedDownload, type Recording } from "./host";
 import { HelpTip } from "./HelpTip";
 import { RunScreen, RunView } from "./RunView";
@@ -1433,10 +1433,10 @@ function StepEditor(props: StepEditorProps): JSX.Element {
     if (value) props.onUpdateStep(stepId, { date: { ...props.steps.find((step) => step.id === stepId)!.date!, rule: { kind: "described", text: value } } });
   };
   const setFieldKind = (step: SetupStep, kind: CredentialKind | ""): void => {
-    const field = step.target ?? "the field";
-    props.onUpdateStep(step.id, kind === ""
-      ? { type: "input", value: "", description: `Fill in ${field}` }
-      : { type: "credential", value: kind, description: `Enter the saved ${credentialLabel(kind)} in ${field}` });
+    // A recorded selector is not a field name, so the instruction the user wrote stays as it is.
+    const field = step.target == null ? "the field" : usableTarget(step);
+    const description = field === undefined ? {} : { description: kind === "" ? `Fill in ${field}` : `Enter the saved ${credentialLabel(kind)} in ${field}` };
+    props.onUpdateStep(step.id, kind === "" ? { type: "input", value: "", ...description } : { type: "credential", value: kind, ...description });
   };
   const toggleSelected = (id: string): void => setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
   return <>

@@ -262,6 +262,35 @@ test("treats a qualified bare tag as a locator, visible or recorded", () => {
   assert.doesNotThrow(() => compileAgent(benign));
 });
 
+test("treats any qualified element name as a locator, and a stage written as a selector as actionable", () => {
+  for (const locator of ["css: fieldset", "selector: article", "css=tbody", "selector: my-widget", "xpath: section"]) {
+    const visible = baseDraft();
+    visible.steps[0] = { ...visible.steps[0]!, description: `Click ${locator}` };
+    assert.throws(() => compileAgent(visible), (error: unknown) => error instanceof Error && error.name === "StepValidationError" && /what the control shows on screen/.test(error.message), locator);
+
+    const hidden = baseDraft();
+    hidden.steps = [{ id: "submit", type: "click", description: "Click Submit", target: locator }];
+    const prompt = (compileAgent(hidden).stages[0] as { prompt: string }).prompt;
+    assert.match(prompt, /1\. Click Submit\.$/, locator);
+    assert.equal(doneWhenOptions(hidden.steps, null, { kind: "file" }).some((option) => option.doneWhen?.kind === "clicked"), false, locator);
+  }
+
+  const stage = baseDraft();
+  stage.steps[1] = { ...stage.steps[1]!, id: "stage-step", stage: "#reports > button" };
+  assert.throws(() => compileAgent(stage), (error: unknown) => error instanceof Error && error.name === "StepValidationError"
+    && (error as Error & { stepId?: unknown }).stepId === "stage-step" && /stage name/i.test(error.message) && !error.message.includes("#reports"));
+
+  const benign = baseDraft();
+  benign.steps = [
+    { id: "dark", type: "click", description: "Click CSS: Dark", target: "CSS: Dark", stage: "Selector: Main menu" },
+    { id: "language", type: "click", description: "Open the language selector: a list opens", target: "Language selector", stage: "CSS [beta] selector" },
+    { id: "breadcrumb", type: "click", description: "Click Details", target: "Details", stage: "Settings > Users" },
+  ];
+  const prompt = (compileAgent(benign).stages[0] as { prompt: string }).prompt;
+  assert.match(prompt, /Selector: Main menu:\n1\. Click CSS: Dark\./);
+  assert.match(prompt, /Settings > Users:\n3\. Click Details\./);
+});
+
 test("keeps a date field's visible name when its recorded target is a selector", () => {
   const dates = (rule: NonNullable<SetupStep["date"]>["rule"], format = "%Y-%m-%d"): SetupStep[] => [
     { id: "depart", type: "date", description: "Enter Departure date", target: "[id=end]", date: { value: "2026-10-20", format, rule } },

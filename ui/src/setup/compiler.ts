@@ -492,11 +492,15 @@ const codeNearbyPattern = /\b(?:otp|passcode|(?:verification|security|access|aut
 // labels ("Email [work]", "Settings > Users", "#general", "report.pdf > Details") stay allowed.
 // "tag.class" counts only for a real HTML tag, so a file name such as "report.pdf" is not a selector.
 const htmlTag = String.raw`(?:a|button|div|span|input|label|li|ul|ol|nav|form|select|option|table|tr|td|th|section|header|footer|main|aside|p|img|svg|textarea|h[1-6])`;
+// Every HTML element name, for a locator that names only the element.
+const htmlElement = String.raw`(?:a|abbr|address|area|article|aside|audio|b|base|bdi|bdo|blockquote|body|br|button|canvas|caption|cite|code|col|colgroup|data|datalist|dd|del|details|dfn|dialog|div|dl|dt|em|embed|fieldset|figcaption|figure|footer|form|h[1-6]|head|header|hgroup|hr|html|i|iframe|img|input|ins|kbd|label|legend|li|link|main|map|mark|menu|meta|meter|nav|noscript|object|ol|optgroup|option|output|p|picture|pre|progress|q|rp|rt|ruby|s|samp|script|search|section|select|slot|small|source|span|strong|style|sub|summary|sup|svg|table|tbody|td|template|textarea|tfoot|th|thead|time|title|tr|track|u|ul|var|video|wbr)`;
 const idOrClass = String.raw`(?:${htmlTag})?(?:[#.][a-z_-][\w-]*)+`;
 const coordinate = String.raw`-?\d+(?:\.\d+)?(?:px)?`;
 const rawReplayPatterns = [
-  // An explicit locator: css: #submit, selector=.submit, xpath: //button, css: button (but not "selector: a list opens")
-  new RegExp(String.raw`\b(?:css|selector|xpath)\s*[:=]\s*["']?(?:[#.][a-z_-]|\/|\[|\*|[a-z][\w-]*[#.[][\w@-]|${htmlTag}(?![\w-])(?!\s+[a-z]))`, "i"),
+  // An explicit locator: css: #submit, selector=.submit, xpath: //button
+  /\b(?:css|selector|xpath)\s*[:=]\s*["']?(?:[#.][a-z_-]|\/|\[|\*|[a-z][\w-]*[#.[][\w@-])/i,
+  // ... or naming a lowercase element: css: fieldset, selector: my-widget (but not "CSS: Dark" or "selector: a list opens")
+  new RegExp(String.raw`\b(?:css|CSS|selector|Selector|SELECTOR|xpath|XPath|XPATH)\s*[:=]\s*["']?(?:${htmlElement}|[a-z][a-z\d]*-[a-z\d-]*)(?![\w-])(?!\s+[A-Za-z])`),
   // CSS attribute selector: [name="email"], [data-testid=export]
   /\[\s*[a-z_][\w:-]*\s*[~|^$*]?=\s*(?:"[^"]*"|'[^']*'|[^\]\s]+)\s*(?:[is]\s*)?\]/i,
   // Ids and classes joined by a combinator or a space: #reports > button, nav > .item, .toolbar .btn-primary
@@ -611,6 +615,8 @@ function validateDraftStep(step: SetupStep, hasEmailChallenge: boolean, otpSourc
   if ((step.stage?.length ?? 0) > maximumStageLength) {
     throw new Error(`Stage name must be at most ${maximumStageLength} characters.`);
   }
+  // The stage name is a heading in the prompt, so it must not carry a locator either.
+  if (looksLikeRawReplay(step.stage)) throw new Error("Rewrite the stage name in words, not a selector or screen coordinates.");
   validateStep(step);
   if (step.requestsEmailCode) {
     if (step.type !== "click") throw new Error("Only a click can request or resend an email code.");
@@ -885,7 +891,7 @@ function looksLikeRawReplay(value: string | null | undefined): boolean {
 }
 
 /** The recorded label of the step's control, unless the recorder kept a selector or coordinates instead. */
-function usableTarget(step: SetupStep): string | undefined {
+export function usableTarget(step: SetupStep): string | undefined {
   const target = optionalStepText(step.target);
   return looksLikeRawReplay(target) ? undefined : target;
 }
