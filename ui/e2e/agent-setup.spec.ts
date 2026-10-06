@@ -98,7 +98,7 @@ test("opens an expected outcome in Edit without changing the agent and keeps a c
   await expect(added).toHaveValue("");
   await expect(rail.getByText("No changes yet.")).toBeVisible();
   await expect(setup.getByRole("button", { name: "Publish changes" })).toHaveAccessibleDescription("Make a change to publish.");
-  const existing = setup.getByLabel("Step 1 expected outcome");
+  const existing = setup.getByRole("textbox", { name: "Step 1 expected outcome", exact: true });
   await existing.fill("");
   await expect(existing).toBeFocused();
   await expect(existing).toHaveValue("");

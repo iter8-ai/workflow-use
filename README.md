@@ -2,6 +2,8 @@
 
 This public fork adds a demonstration-based setup flow for computer-use agents. Users describe a task, demonstrate a task in a remote browser, edit the captured steps, and test before scheduling.
 
+For structured agents, Review and Edit use the same Instructions editor. Steps are grouped by stage, with controls to insert, remove, and reorder them or add an optional expected outcome.
+
 The default `ui/` app is an embedded authoring interface. Its host handles authentication, agent storage, test execution, and scheduling through an origin-checked message bridge. The separate `recording/` service captures browser actions. It does not run agents. Compiled configurations select the computer-use engine explicitly.
 
 ## Run locally
@@ -16,10 +18,9 @@ Open the app through a host iframe with `?parentOrigin=https://your-host.example
 
 ```sh
 cd ui
-npm test
+npm run test:local
 npm run build
-npx playwright install chromium
-npm run test:e2e
+npm run test:e2e:local
 ```
 
 The browser tests use a controlled host fixture. They do not prove a live Browserbase session or an actual computer-use run.
