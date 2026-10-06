@@ -68,6 +68,89 @@ test("keeps a newly added expected outcome open in Review", async ({ page }) => 
   await expect(disclosure).toHaveCount(0);
 });
 
+test("shows the same Instructions editor in Review and Edit", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=success`);
+  const setup = page.frameLocator("iframe");
+  await describeAndDemonstrate(setup);
+  for (const scenario of ["review", "edit"]) {
+    if (scenario === "edit") await page.goto(`${baseUrl}/host?scenario=edit`);
+    const instructions = setup.locator(".instructions-editor");
+    await expect(setup.getByRole("heading", { name: "Instructions", exact: true })).toBeVisible();
+    await expect(setup.getByRole("heading", { name: "Steps", exact: true })).toHaveCount(0);
+    await expect(instructions.locator("ol > li.review-step")).toHaveCount(2);
+    await expect(setup.locator(".edit-step")).toHaveCount(0);
+    await expect(instructions.getByLabel("Step 1 expected outcome")).toHaveValue("The reports list is visible");
+    await expect(instructions.getByLabel("Step 2 expected outcome")).toHaveCount(0);
+    await expect(instructions.getByRole("button", { name: "Add expected outcome" })).toHaveCount(1);
+    await expect(instructions.getByRole("button", { name: /^(Move step \d (up|down)|Remove step \d)$/ })).toHaveCount(6);
+    await expect(instructions.getByRole("button", { name: "Insert step", exact: true })).toBeVisible();
+    await expect(instructions.getByRole("button", { name: /Continue to test|Back to demonstration|Test changes|Publish changes|Re-demonstrate/ })).toHaveCount(0);
+  }
+});
+
+test("opens an expected outcome in Edit without changing the agent and keeps a cleared one open", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit`);
+  const setup = page.frameLocator("iframe");
+  const rail = setup.locator(".edit-changes");
+  await setup.getByRole("button", { name: "Add expected outcome" }).click();
+  const added = setup.getByLabel("Step 2 expected outcome");
+  await expect(added).toBeFocused();
+  await expect(added).toHaveValue("");
+  await expect(rail.getByText("No changes yet.")).toBeVisible();
+  await expect(setup.getByRole("button", { name: "Publish changes" })).toHaveAccessibleDescription("Make a change to publish.");
+  const existing = setup.getByLabel("Step 1 expected outcome");
+  await existing.fill("");
+  await expect(existing).toBeFocused();
+  await expect(existing).toHaveValue("");
+  await expect(rail.getByText("No changes yet.")).toHaveCount(0);
+  await existing.fill("The reports list is visible");
+  await expect(rail.getByText("No changes yet.")).toBeVisible();
+});
+
+test("inserts, reorders and removes Review steps with focus kept in the list", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=success`);
+  const setup = page.frameLocator("iframe");
+  await describeAndDemonstrate(setup);
+  await setup.getByRole("button", { name: "Insert step", exact: true }).click();
+  const inserted = setup.getByLabel("Step 3 description");
+  await expect(inserted).toBeFocused();
+  await expect(inserted).toHaveValue("");
+  await inserted.fill("Open the downloaded file");
+  await setup.getByRole("button", { name: "Move step 3 up" }).click();
+  await expect(setup.getByLabel("Step 2 description")).toHaveValue("Open the downloaded file");
+  await expect(setup.getByLabel("Step 3 description")).toHaveValue("Download the statement");
+  await setup.getByRole("button", { name: "Remove step 1", exact: true }).click();
+  await expect(setup.getByLabel("Step 1 description")).toHaveValue("Open the downloaded file");
+  await expect(setup.getByLabel("Step 1 description")).toBeFocused();
+  await setup.getByRole("button", { name: "Continue to test" }).click();
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await expect.poll(() => page.evaluate(() => window.__savedAgents.length)).toBe(1);
+  const saved = await page.evaluate(() => window.__savedAgents[0]);
+  expect(saved.draft.steps.map((step: { description: string }) => step.description)).toEqual(["Open the downloaded file", "Download the statement"]);
+});
+
+test("keeps every legacy stage byte for byte under Instructions when other fields change", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-raw-multi`);
+  const setup = page.frameLocator("iframe");
+  await expect(setup.getByRole("heading", { name: "Instructions", exact: true })).toBeVisible();
+  await expect(setup.getByLabel("Agent instructions", { exact: true })).toHaveCount(2);
+  await expect(setup.locator(".raw-preserved")).toHaveText("Then: Download stage · Sleep stage · 5 s — kept as is");
+  await expect(setup.locator(".review-step")).toHaveCount(0);
+  await expect(setup.getByRole("button", { name: "Insert step" })).toHaveCount(0);
+  await expect(setup.locator(".edit-changes").getByText("No changes yet.")).toBeVisible();
+  await setup.getByLabel("Goal", { exact: true }).fill("Download the updated report.");
+  await setup.getByLabel("Maximum actions", { exact: true }).nth(1).fill("12");
+  await setup.getByRole("button", { name: "Test changes" }).click();
+  await expect.poll(() => page.evaluate(() => window.__savedAgents.length)).toBe(1);
+  const saved = await page.evaluate(() => window.__savedAgents[0]);
+  expect(JSON.stringify(saved.config.stages)).toBe(JSON.stringify([
+    { type: "agent", prompt: "Sign in.\r\n  Open reports  \n\n- keep this bullet\n", step_limit: 16 },
+    { type: "download" },
+    { type: "agent", prompt: "Second stage\n\twith a tab", step_limit: 12, note: "kept" },
+    { type: "sleep", sleep_ms: 5000 },
+  ]));
+});
+
 test("shows the demonstration's download and groups the finished steps into stages", async ({ page }) => {
   await page.clock.install();
   await page.goto(`${baseUrl}/host?scenario=organized`);
@@ -112,7 +195,7 @@ test("edits stage names and keeps a moved step in the stage it moves into", asyn
   await expect(setup.getByLabel("Stage name for step 1")).toHaveValue("Open reports");
   await setup.getByLabel("Stage name for step 2").fill("Download the statement");
   await setup.getByRole("button", { name: "Move step 2 up" }).click();
-  await expect(setup.getByLabel("Stage name for step 1")).toHaveValue("Open reports");
+  await expect(setup.getByLabel("Stage name for steps 1–2")).toHaveValue("Open reports");
   await expect(setup.getByLabel("Stage name for step 2")).toHaveCount(0);
   await setup.getByRole("button", { name: "Test changes" }).click();
   await expect.poll(() => page.evaluate(() => window.__savedAgents.length)).toBe(1);
@@ -157,11 +240,11 @@ test("answers a date question in Edit and records a revertable change", async ({
   await page.goto(`${baseUrl}/host?scenario=edit-date`);
   const setup = page.frameLocator("iframe");
   await expect(setup.getByLabel("Step 1 description")).toHaveValue("Enter the To date");
-  await expect(setup.locator(".edit-step > b")).toHaveCount(0);
+  await expect(setup.locator(".review-step > b")).toHaveCount(0);
   await expect(setup.locator(".step-number-prefix")).toHaveCount(1);
   await expect(setup.getByText("1 question to answer before testing", { exact: true })).toBeVisible();
   await expect(setup.getByRole("button", { name: "Test changes" })).toBeDisabled();
-  await expect(setup.locator(".edit-steps")).not.toContainText(/[{}]/);
+  await expect(setup.locator(".review-list")).not.toContainText(/[{}]/);
   await setup.getByRole("radio", { name: /End of last month/ }).click();
   await expect(setup.getByText("Step 1 date", { exact: true })).toBeVisible();
   await expect(setup.getByRole("button", { name: "Revert Step 1 date", exact: true })).toBeVisible();
@@ -3098,7 +3181,7 @@ function hostPage(url: string, scenario: string | null): string {
     } else if (request.method === "loadAgent") {
       if (scenario === "edit-missing") { fail("This agent no longer exists. It may have been deleted."); return; }
       if (!window.__loadAvailable) { fail("Loading failed. Try again."); return; }
-      send({ agentId: "agent-1", name: editName, url: publishedDraft?.draft.url ?? "https://portal.example.test/reports", goal: publishedDraft?.draft.goal ?? "Download the monthly report.", steps: publishedDraft?.draft.steps ?? (scenario.startsWith("edit-raw") && scenario !== "edit-raw-empty" ? null : scenario === "edit-raw-empty" ? [] : editSteps), stages: publishedDraft?.config.stages ?? [{ type: "agent", prompt: scenario === "edit-raw-placeholders" ? "Sign in with $username and $otp. Open reports." : "Open reports", step_limit: 16 }, { type: "download" }, { type: "sleep", sleep_ms: 5000 }, { type: "reload" }], ...(scenario === "edit-old-host" ? {} : { credentials: { saved: savedCredentials } }), liveConfigId: "config-3", version: editVersion, internal, schedule: scenario === "edit-schedule" ? "Daily 09:00 UTC" : null, nextRunAt: scenario === "edit-schedule" ? "2026-10-02T09:00:00Z" : null });
+      send({ agentId: "agent-1", name: editName, url: publishedDraft?.draft.url ?? "https://portal.example.test/reports", goal: publishedDraft?.draft.goal ?? "Download the monthly report.", steps: publishedDraft?.draft.steps ?? (scenario.startsWith("edit-raw") && scenario !== "edit-raw-empty" ? null : scenario === "edit-raw-empty" ? [] : editSteps), stages: publishedDraft?.config.stages ?? (scenario === "edit-raw-multi" ? [{ type: "agent", prompt: "Sign in.\\r\\n  Open reports  \\n\\n- keep this bullet\\n", step_limit: 16 }, { type: "download" }, { type: "agent", prompt: "Second stage\\n\\twith a tab", step_limit: 8, note: "kept" }, { type: "sleep", sleep_ms: 5000 }] : [{ type: "agent", prompt: scenario === "edit-raw-placeholders" ? "Sign in with $username and $otp. Open reports." : "Open reports", step_limit: 16 }, { type: "download" }, { type: "sleep", sleep_ms: 5000 }, { type: "reload" }]), ...(scenario === "edit-old-host" ? {} : { credentials: { saved: savedCredentials } }), liveConfigId: "config-3", version: editVersion, internal, schedule: scenario === "edit-schedule" ? "Daily 09:00 UTC" : null, nextRunAt: scenario === "edit-schedule" ? "2026-10-02T09:00:00Z" : null });
     } else if (request.method === "renameAgent") { window.__renameRequests.push(request.params.name); if (scenario === "edit-rename-error" && window.__renameRequests.length === 1) fail("Rename failed. Try again."); else { editName = request.params.name; send(null); }
     } else if (request.method === "saveDraft") { window.__savedAgents.push(request.params); send({ draftId: "draft-1" });
     } else if (request.method === "publishDraft") {
