@@ -1,5 +1,7 @@
 import { strict as assert } from "node:assert";
 import { once } from "node:events";
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { createServer } from "node:http";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
@@ -18,9 +20,9 @@ function own(child: ChildProcess) {
   return child;
 }
 
-async function start(env: NodeJS.ProcessEnv = {}, args: string[] = []) {
-  const child = own(spawn(process.execPath, [launcher, ...args], {
-    cwd, env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"],
+async function start(env: NodeJS.ProcessEnv = {}, args: string[] = [], root = cwd) {
+  const child = own(spawn(process.execPath, [join(root, "scripts", "serve-acceptance.mjs"), ...args], {
+    cwd: root, env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"],
   }));
   assert.ok(child.stdout);
   assert.ok(child.stderr);
@@ -93,7 +95,7 @@ describe("serve-acceptance public CLI", { timeout: 30_000 }, () => {
     assert.deepEqual(await provenance.json(), { sha: receipt.sha, trackedDirty: receipt.trackedDirty, port: receipt.port, boundary: "fake-fixture-evidence" });
   });
 
-  it("refuses a supplied SHA mismatch and a colliding private port", async () => {
+  it("refuses mismatched or changed source and a colliding private port", async (t) => {
     await assert.rejects(() => start({ EXPECTED_SHA: "0".repeat(40) }));
     const first = await start({}, ["--port", "0"]);
     const second = own(spawn(process.execPath, [launcher, "--port", String(first.receipt.port)], { cwd, env: process.env, stdio: "ignore" }));
@@ -102,6 +104,54 @@ describe("serve-acceptance public CLI", { timeout: 30_000 }, () => {
       second.once("exit", resolve);
     });
     assert.notEqual(code, 0);
+    await cleanup(first.child);
+
+    const fixture = await mkdtemp(join(cwd, ".acceptance-source-"));
+    const fixtureUi = join(fixture, "ui");
+    const fixtureChildren: ChildProcess[] = [];
+    t.after(async () => {
+      await Promise.all(fixtureChildren.map(cleanup));
+      await rm(fixture, { recursive: true, force: true });
+    });
+    for (const directory of ["scripts", "e2e", "src"]) await mkdir(join(fixtureUi, directory), { recursive: true });
+    for (const file of ["scripts/serve-acceptance.mjs", "e2e/agent-setup.spec.ts", "vite.config.ts", "package.json"]) {
+      await copyFile(join(cwd, file), join(fixtureUi, file));
+    }
+    await writeFile(join(fixture, ".gitignore"), "node_modules/\n.vite/\n");
+    const probe = join(fixtureUi, "src", "probe.ts");
+    await writeFile(probe, "export default 0;\n");
+    const git = async (...args: string[]) => (await run("git", args, { cwd: fixture })).stdout;
+    await git("init");
+    await git("add", ".");
+    await git("-c", "user.name=Acceptance test", "-c", "user.email=acceptance@example.invalid", "-c", "commit.gpgsign=false", "commit", "-m", "Acceptance fixture");
+    const sourceSha = (await git("rev-parse", "HEAD")).trim();
+    const original = await readFile(probe, "utf8");
+    for (const change of ["clean", "dirty", "head"]) {
+      if (change === "dirty") await writeFile(probe, "export default 1;\n");
+      const before = await readFile(probe, "utf8");
+      const statusBefore = await git("status", "--porcelain", "--untracked-files=no");
+      const server = await start({ EXPECTED_SHA: change === "dirty" ? undefined : sourceSha }, [], fixtureUi);
+      fixtureChildren.push(server.child);
+      assert.equal(server.receipt.trackedDirty, change === "dirty");
+      assert.equal((await fetch(`${server.receipt.url}/__acceptance`)).status, 200);
+      if (change === "head") {
+        await git("-c", "user.name=Acceptance test", "-c", "user.email=acceptance@example.invalid", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "New source identity");
+      } else {
+        await writeFile(probe, "export default 2;\n");
+        if (change === "dirty") assert.equal(await git("status", "--porcelain", "--untracked-files=no"), statusBefore);
+      }
+      for (const path of ["/__acceptance", "/host", "/host?scenario=success", "/", "/src/probe.ts"]) {
+        const response = await fetch(`${server.receipt.url}${path}`, { redirect: "manual" });
+        assert.equal(response.status, 409);
+        assert.deepEqual(await response.json(), { error: "source changed; restart the acceptance launcher" });
+      }
+      if (change !== "head") {
+        await writeFile(probe, before);
+        assert.equal((await fetch(`${server.receipt.url}/__acceptance`)).status, 409);
+      }
+      await cleanup(server.child);
+      await writeFile(probe, original);
+    }
   });
 
   it("serves an unknown scenario as a boundary-fake fixture", async () => {

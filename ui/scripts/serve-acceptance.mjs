@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import { dirname, join } from "node:path";
@@ -9,8 +10,9 @@ import { createServer } from "vite";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const uiRoot = dirname(scriptDir);
 const specPath = join(uiRoot, "e2e", "agent-setup.spec.ts");
-const sha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: uiRoot, encoding: "utf8" }).trim();
-const trackedDirty = execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], { cwd: uiRoot, encoding: "utf8" }).trim() !== "";
+const startupSource = sourceIdentity();
+const { sha, trackedDirty } = startupSource;
+let sourceChanged = false;
 const expectedSha = process.env.EXPECTED_SHA;
 
 if (expectedSha !== undefined && !/^[0-9a-f]{40}$/i.test(expectedSha)) fail("EXPECTED_SHA must be a full 40-character git SHA");
@@ -26,6 +28,11 @@ const vite = await createServer({
 });
 
 const acceptanceMiddleware = (request, response, next) => {
+  if (!sourceChanged) {
+    try { sourceChanged = sourceIdentity().fingerprint !== startupSource.fingerprint; }
+    catch { sourceChanged = true; }
+  }
+  if (sourceChanged) return sendJson(response, 409, { error: "source changed; restart the acceptance launcher" });
   const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
   if (requestUrl.pathname === "/__acceptance") {
     return sendJson(response, 200, { sha, trackedDirty, port: actualPort(), boundary: "fake-fixture-evidence" });
@@ -68,6 +75,15 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
     await new Promise((resolve) => httpServer.close(resolve));
     process.exit(0);
   });
+}
+
+function sourceIdentity() {
+  const git = (args) => execFileSync("git", args, { cwd: uiRoot });
+  const sha = git(["rev-parse", "HEAD"]).toString().trim();
+  const status = git(["status", "--porcelain", "--untracked-files=no"]);
+  const diff = git(["diff", "--no-ext-diff", "--no-textconv", "--no-relative", "--binary", "HEAD"]);
+  const fingerprint = createHash("sha256").update(sha).update(status).update(diff).digest("hex");
+  return { sha, trackedDirty: status.toString().trim() !== "", fingerprint };
 }
 
 function loadHostPage() {
