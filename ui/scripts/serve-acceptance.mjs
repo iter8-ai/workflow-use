@@ -31,7 +31,13 @@ const acceptanceMiddleware = (request, response, next) => {
     return sendJson(response, 200, { sha, trackedDirty, port: actualPort(), boundary: "fake-fixture-evidence" });
   }
   if (requestUrl.pathname === "/host") {
-    const scenario = requestUrl.searchParams.get("scenario") ?? "success";
+    const scenario = requestUrl.searchParams.get("scenario");
+    if (scenario === null) {
+      requestUrl.searchParams.set("scenario", "success");
+      response.writeHead(302, { location: `${requestUrl.pathname}${requestUrl.search}` });
+      response.end();
+      return;
+    }
     response.statusCode = 200;
     response.setHeader("content-type", "text/html; charset=utf-8");
     response.end(addAuditDom(hostPage(loopbackUrl(), scenario)));

@@ -1,4 +1,5 @@
 import { strict as assert } from "node:assert";
+import { once } from "node:events";
 import { createServer } from "node:http";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
@@ -47,7 +48,7 @@ async function start(env: NodeJS.ProcessEnv = {}, args: string[] = []) {
   return { child, receipt };
 }
 
-async function stop(child: ChildProcess) {
+async function cleanup(child: ChildProcess) {
   if (child.exitCode !== null || child.signalCode !== null) return;
   await new Promise<void>((resolve) => {
     const timer = setTimeout(() => child.kill("SIGKILL"), 5_000);
@@ -56,7 +57,7 @@ async function stop(child: ChildProcess) {
   });
 }
 
-afterEach(async () => { await Promise.all([...children].map(stop)); });
+afterEach(async () => { await Promise.all([...children].map(cleanup)); });
 
 describe("serve-acceptance public CLI", { timeout: 30_000 }, () => {
   it("serves the real UI, boundary-fake host, provenance, and audit DOM", async () => {
@@ -64,6 +65,20 @@ describe("serve-acceptance public CLI", { timeout: 30_000 }, () => {
     assert.match(receipt.url, /^http:\/\/127\.0\.0\.1:\d+$/);
     assert.match(receipt.sha, /^[0-9a-f]{40}$/);
     assert.equal(receipt.port, Number(new URL(receipt.url).port));
+    for (const query of ["", "?other=value"]) {
+      const response = await fetch(`${receipt.url}/host${query}`, { redirect: "manual" });
+      assert.equal(response.status, 302);
+      assert.equal(response.headers.get("location"), `/host?${query ? "other=value&" : ""}scenario=success`);
+      await response.text();
+    }
+    const defaultHost = await fetch(`${receipt.url}/host`);
+    assert.equal(defaultHost.status, 200);
+    assert.equal(defaultHost.url, `${receipt.url}/host?scenario=success`);
+    await defaultHost.text();
+    const emptyScenario = await fetch(`${receipt.url}/host?scenario=`);
+    assert.equal(emptyScenario.status, 200);
+    assert.equal(emptyScenario.redirected, false);
+    await emptyScenario.text();
     const host = await fetch(`${receipt.url}/host?scenario=success`);
     const html = await host.text();
     assert.equal(host.status, 200);
@@ -99,7 +114,9 @@ describe("serve-acceptance public CLI", { timeout: 30_000 }, () => {
   it("releases its port on SIGTERM without changing tracked status", async () => {
     const before = (await run("git", ["status", "--porcelain", "--untracked-files=no"], { cwd })).stdout;
     const first = await start();
-    await stop(first.child);
+    const exited = once(first.child, "exit", { signal: AbortSignal.timeout(5_000) });
+    first.child.kill("SIGTERM");
+    assert.deepEqual(await exited, [0, null]);
     const probe = createServer();
     await new Promise<void>((resolve, reject) => probe.once("error", reject).listen(first.receipt.port, "127.0.0.1", () => resolve()));
     await new Promise<void>((resolve) => probe.close(() => resolve()));
