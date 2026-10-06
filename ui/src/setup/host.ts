@@ -21,7 +21,7 @@ export type TestRun = {
   stopping?: boolean;
   error?: string;
   files?: Array<{ name: string; url: string }>;
-  /** Watch-only view of the running test's browser. */
+  /** Legacy watch-only URL for the running agent's browser; current pages use activity snapshots. */
   liveViewUrl?: string | null;
   failure?: { kind: "service" | "signin" | "google" | "website" | "steps" | "result" | "check" | "stopped" | "unknown"; message: string } | null;
   stoppedAtStep?: number | null;

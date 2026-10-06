@@ -1,6 +1,6 @@
 import type { TestActivity, TestRun } from "./host";
 
-/** A test run as the create and edit pages show it. `connectionLost` is set when the last status check failed. */
+/** `connectionLost` means a status read failed or the host could not read activity, not that the browser closed. */
 export type WorkbenchRun = TestRun & { id: string; connectionLost?: boolean };
 
 type ActivityItem = TestActivity["items"][number];
