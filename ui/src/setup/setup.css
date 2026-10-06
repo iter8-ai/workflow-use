@@ -843,6 +843,12 @@ select {
   border-color: #d9dbe7;
   background: #ffffff;
 }
+.instructions-editor .review-expected-outcome {
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding-left: 18px;
+}
 .instructions-editor .review-step-note input[type="checkbox"] { width: 16px; height: 16px; margin: 0; padding: 0; accent-color: #6546c9; }
 
 .instructions-editor .review-step-kind {
@@ -1212,6 +1218,7 @@ select {
   .instructions-editor .review-step textarea::placeholder {
     opacity: 1;
   }
+  .instructions-editor .review-expected-outcome { grid-template-columns: minmax(0, 1fr); padding-left: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {

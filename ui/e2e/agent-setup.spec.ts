@@ -152,13 +152,15 @@ test("keeps every legacy stage byte for byte under Instructions when other field
 });
 
 test("shows the demonstration's download and groups the finished steps into stages", async ({ page }) => {
-  await page.clock.install();
+  await page.clock.install({ time: clockStart });
   await page.goto(`${baseUrl}/host?scenario=organized`);
+  await page.clock.pauseAt(clockPaused);
   const setup = page.frameLocator("iframe");
   await setup.getByLabel("Agent name").fill("Monthly statement");
   await setup.getByLabel("Website address").fill("https://portal.example.test/reports");
   await setup.getByLabel("What should the agent do?").fill("Download the monthly statement.");
   await setup.getByRole("button", { name: "Continue to demonstration" }).click();
+  await expect(setup.getByRole("button", { name: "Finish demonstration" })).toBeVisible();
 
   await page.clock.runFor(2_100);
   await expect(setup.getByRole("status").filter({ hasText: "Downloading statement-2026-09.csv…" })).toBeVisible();
