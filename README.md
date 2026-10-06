@@ -43,7 +43,7 @@ Start with a website address without query parameters or fragments; the compiler
 
 For a Google sign-in demonstration, first [add an authenticator app to your Google Account](https://myaccount.google.com/two-step-verification/authenticator). When Google asks you to confirm on your phone or tap a number in the Gmail app, choose "More ways to verify" (or "Try another way") and enter the code from your authenticator app during the demonstration.
 
-Schedules repeat the tested workflow. Relative dates such as “previous month” are not resolved automatically. A successful test still requires the user to inspect the result before scheduling.
+Schedules repeat the tested workflow. For recognized date steps, Review asks what to enter on future runs: keep the demonstrated date or choose a relative rule such as the start or end of last month. A successful test still requires the user to inspect the result before scheduling.
 
 ## Source and license
 
