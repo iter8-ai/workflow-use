@@ -1366,7 +1366,7 @@ select {
 .download-notice.download-completed { border-color: #b8dcc9; background: #edf7f2; }
 .download-notice.download-completed svg { color: #1d6b4a; }
 .download-notice.download-failed { border-color: #e4b0b7; background: #fff5f5; color: #922e3d; }
-.edit-card > .download-notice { position: static; transform: none; width: fit-content; margin-top: 8px; }
+.edit-card > .download-notice, .edit-card > .redemo-controls > .download-notice { position: static; transform: none; width: fit-content; margin-top: 8px; }
 .captured-steps li.captured-download { color: #1d6b4a; font-weight: 600; }
 
 /* Stages: a short heading over each run of steps with one purpose. */

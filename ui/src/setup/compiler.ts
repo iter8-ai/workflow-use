@@ -521,7 +521,8 @@ export function compileAgent(draft: SetupDraft, otpSource?: "authenticator" | "e
 
 /**
  * Compiles an edited agent's steps into its existing stage list: the first agent stage becomes the compiled
- * instructions, other agent stages (stale instructions) are dropped, and every other stage stays where it was.
+ * instructions, other agent stages (stale instructions) are dropped, and non-agent stages retain their order.
+ * Without an agent stage, instructions go first; without any non-agent stages, use the new-agent defaults.
  */
 export function compileEditAgent(draft: SetupDraft, liveStages: unknown[], otpSource?: "authenticator" | "email"): Omit<CompiledAgent, "stages"> & { stages: unknown[] } {
   const compiled = compileAgent(draft, otpSource);

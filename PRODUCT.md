@@ -22,4 +22,4 @@ Recording is not agent success. Generated instructions are drafts. Test status c
 
 ## Data boundary
 
-Keep credentials out of prompts and recorded steps; see the [README setup and sign-in guidance](README.md) for demonstrated sign-in. Browser and platform credentials stay server-side. The public iframe communicates through a narrow origin-checked host bridge; no Auth0 token is passed to it.
+Keep credential values out of prompts and recorded steps; see the [README setup and sign-in guidance](README.md) for demonstrated sign-in and the [sign-in details contract](docs/agent-setup-host.md#sign-in-details) for capturing and storing demonstrated sign-in values. Browser and platform credentials stay server-side. The public iframe communicates through a narrow origin-checked host bridge; no Auth0 token is passed to it.
