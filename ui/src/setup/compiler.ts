@@ -235,10 +235,10 @@ function dateFieldName(step: SetupStep, precedingClick?: SetupStep): string {
   const text = `${step.target ?? ""} ${step.description}`;
   if (/\bfrom\b|\balates\b|\bstart\b|\balgus\b/i.test(text)) return "From";
   if (/\bto\b|\buntil\b|\bend\b|\bkuni\b|\blõpp\b/i.test(text)) return "To";
-  const partName = step.target?.trim();
+  const partName = usableTarget(step)?.trim();
   if (partName !== undefined && !/^(?:day|month|year|dd|mm|yyyy)$/i.test(partName)) return partName;
-  const clickTarget = precedingClick?.type === "click" ? precedingClick.target?.trim() : undefined;
-  return clickTarget || partName || "the date field";
+  const clickTarget = precedingClick?.type === "click" ? usableTarget(precedingClick)?.trim() : undefined;
+  return clickTarget || "the date field";
 }
 
 function markUiMerged(step: SetupStep): SetupStep {
@@ -474,7 +474,37 @@ const credentialDisclosurePattern = new RegExp(
 const secretFieldPattern = /pass.?(?:word|code|phrase)|\bpin\b|api.?key|\bauth\b|credential|jwt|secret|token|one.?time|\botp\b|verification.?code|2fa|mfa|security.?answer|cvv|cvc|card.?number/iu;
 // A one-time code a few words after its label ("code sent to me 482913").
 const codeNearbyPattern = /\b(?:otp|passcode|(?:verification|security|access|auth(?:entication)?|one[- ]time|2fa|mfa|sms) code)s?\b[^.\n]{0,40}?\b\d{4,8}\b/iu;
-const rawReplayPattern = /\b(?:css|xpath|selector)\b|#[a-z][\w-]*(?:\s*[>+~]|\[)|\[[^\]]+\]|(?:^|\s)(?:x|y)\s*[:=]\s*\d+|^\s*\d+(?:px)?\s*,\s*\d+(?:px)?\s*$/i;
+// Locator syntax, never a label read off the screen: words like "selector" and bracketed
+// labels ("Email [work]", "Settings > Users", "#general", "report.pdf > Details") stay allowed.
+// "tag.class" counts only for a real HTML tag, so a file name such as "report.pdf" is not a selector.
+const htmlTag = String.raw`(?:a|button|div|span|input|label|li|ul|ol|nav|form|select|option|table|tr|td|th|section|header|footer|main|aside|p|img|svg|textarea|h[1-6])`;
+const idOrClass = String.raw`(?:${htmlTag})?(?:[#.][a-z_-][\w-]*)+`;
+const coordinate = String.raw`-?\d+(?:\.\d+)?(?:px)?`;
+const rawReplayPatterns = [
+  // An explicit locator: css: #submit, selector=.submit, xpath: //button
+  /\b(?:css|selector|xpath)\s*[:=]\s*["']?(?:[#.][a-z_-]|\/|\[|\*|[a-z][\w-]*[#.[][\w@-])/i,
+  // CSS attribute selector: [name="email"], [data-testid=export]
+  /\[\s*[a-z_][\w:-]*\s*[~|^$*]?=\s*(?:"[^"]*"|'[^']*'|[^\]\s]+)\s*(?:[is]\s*)?\]/i,
+  // Ids and classes joined by a combinator or a space: #reports > button, nav > .item, .toolbar .btn-primary
+  new RegExp(String.raw`(?:^|[\s(])${idOrClass}\s*[>+~]\s*[a-z#.*[]|(?:^|[\s(])[a-z][\w-]*\s*[>+~]\s*${idOrClass}|(?:^|[\s(])${idOrClass}\s+${idOrClass}(?![\w.])`, "i"),
+  // Structural pseudo-classes: li:nth-child(3), a:not(.x)
+  /[\w)\]]:(?:nth-(?:last-)?(?:child|of-type)|not|has|is|where)\(/i,
+  // XPath: //button, //*[@id='x'], /html/body
+  /(?:^|[\s("'])\/\/(?:[a-z][\w-]*|\*)|\[\s*@[\w:-]+|(?:^|[\s("'])\/html(?:\/|\[)/i,
+  // Screen coordinates, signed or decimal: x: 120, y: 340, at (-120, 340), 120px, 340px, or a bare "120, 340"
+  new RegExp(String.raw`\bx\s*[:=]\s*${coordinate}\s*[,;]?\s*y\s*[:=]\s*${coordinate}(?![\d.])|\b(?:at|coordinates?|position|point)\s*\(\s*${coordinate}\s*,\s*${coordinate}\s*\)|^\s*\(?\s*${coordinate}\s*,\s*${coordinate}\s*\)?\s*$|\b\d+px\s*,\s*-?\d+px\b`, "i"),
+];
+/** A problem with one step. The message does not name the step, so the page can show its current number. */
+export class StepValidationError extends Error {
+  readonly stepId: string;
+
+  constructor(stepId: string, message: string) {
+    super(message);
+    this.name = "StepValidationError";
+    this.stepId = stepId;
+  }
+}
+
 const maximumNameLength = 150;
 const maximumStageLength = 60;
 const maximumUrlLength = 2_048;
@@ -545,39 +575,48 @@ function validateDraft(draft: SetupDraft, otpSource?: "authenticator" | "email")
   let hasEmailChallenge = false;
   for (const step of draft.steps) {
     requireText(step.id, "Step id");
-    requireText(step.description, `Description for step ${step.id}`);
-    rejectCredentialDisclosure(step.description, step.expectedOutcome, step.target, step.value, step.stage);
-    if ((step.stage?.length ?? 0) > maximumStageLength) {
-      throw new Error(`Stage name for step ${step.id} must be at most ${maximumStageLength} characters.`);
-    }
     if (stepIds.has(step.id)) {
       throw new Error(`Step id ${step.id} is duplicated.`);
     }
     stepIds.add(step.id);
-
-    validateStep(step);
-    if (step.requestsEmailCode) {
-      if (step.type !== "click") throw new Error(`Step ${step.id}: only a click can request or resend an email code.`);
-      if (clickCount(step) !== 1) throw new Error(`Step ${step.id}: mark each request or resend as one click.`);
-      if (otpSource === "email") hasEmailChallenge = true;
-    }
-    if (otpSource === "email" && step.type === "credential" && step.value === "otp") {
-      if (!hasEmailChallenge) throw new Error(`Step ${step.id}: mark the click that requests or resends the email code before entering it.`);
-      hasEmailChallenge = false;
-    }
-    if (step.type === "select_change" && optionalStepText(step.value) === undefined) {
-      throw new Error(`Step ${step.id} does not say which option to choose. Enter the option or remove the step.`);
-    }
-    if (step.type === "input" && (step.value === null || step.value === undefined)) {
-      throw new Error(`Step ${step.id} does not say what to type (the recorded text was too long). Enter the text or remove the step.`);
-    }
-    if (step.type === "input" && step.value && secretFieldPattern.test(step.target ?? "")) {
-      throw new Error(`Step ${step.id} types into ${step.target}. Mark it as a saved sign-in field instead of typing the value.`);
-    }
     if (step.inputName !== undefined) {
       throw new Error("Reusable inputs are not supported in this release.");
     }
+    try {
+      hasEmailChallenge = validateDraftStep(step, hasEmailChallenge, otpSource);
+    } catch (error) {
+      throw error instanceof Error ? new StepValidationError(step.id, error.message) : error;
+    }
   }
+}
+
+/** Checks one step; returns whether an email code has been requested and not yet entered. */
+function validateDraftStep(step: SetupStep, hasEmailChallenge: boolean, otpSource?: "authenticator" | "email"): boolean {
+  if (step.description.trim() === "") throw new Error("Add an instruction for this step.");
+  rejectCredentialDisclosure(step.description, step.expectedOutcome, step.target, step.value, step.stage);
+  if ((step.stage?.length ?? 0) > maximumStageLength) {
+    throw new Error(`Stage name must be at most ${maximumStageLength} characters.`);
+  }
+  validateStep(step);
+  if (step.requestsEmailCode) {
+    if (step.type !== "click") throw new Error("Only a click can request or resend an email code.");
+    if (clickCount(step) !== 1) throw new Error("Mark each request or resend as one click.");
+    if (otpSource === "email") hasEmailChallenge = true;
+  }
+  if (otpSource === "email" && step.type === "credential" && step.value === "otp") {
+    if (!hasEmailChallenge) throw new Error("Mark the click that requests or resends the email code before entering it.");
+    hasEmailChallenge = false;
+  }
+  if (step.type === "select_change" && optionalStepText(step.value) === undefined) {
+    throw new Error("It does not say which option to choose. Enter the option or remove the step.");
+  }
+  if (step.type === "input" && (step.value === null || step.value === undefined)) {
+    throw new Error("It does not say what to type because the recorded text was too long. Enter the text or remove the step.");
+  }
+  if (step.type === "input" && step.value && secretFieldPattern.test(step.target ?? "")) {
+    throw new Error("It types into a sign-in field. Mark it as a saved sign-in field instead of typing the value.");
+  }
+  return hasEmailChallenge;
 }
 
 /** Candidate checks ordered by the strength of evidence in the finished run. */
@@ -604,7 +643,7 @@ export function doneWhenOptions(
   }
   if (confirmation) options.push({ label: `“${confirmation}” is shown (checked by the agent)`, strength: "medium", why: "The agent judges it in context, so small wording changes still pass.", doneWhen: { kind: "described", value: confirmation } });
   const last = steps.at(-1);
-  if (last?.type === "click" && last.target) options.push({ label: `The agent clicks “${last.target}”`, strength: "weak", why: "This proves the click, but not the website result.", doneWhen: { kind: "clicked", value: last.target } });
+  if (last?.type === "click" && last.target && usableTarget(last) !== undefined) options.push({ label: `The agent clicks “${last.target}”`, strength: "weak", why: "This proves the click, but not the website result.", doneWhen: { kind: "clicked", value: last.target } });
   const downloadsInDemonstration = steps.some((step) => step.type === "download");
   options.push({ label: "A file is downloaded in the browser", strength: "strong", why: downloadsInDemonstration ? "Your demonstration downloaded a file, and Reiterate saves it." : "Reiterate saves the downloaded file.", recommended: downloadsInDemonstration && !options.some((option) => option.recommended), doneWhen: { kind: "file" } });
   options.push({ label: "Describe what success looks like", strength: "medium", why: "Write it in your own words; the agent checks it on the screen at the end of each run.", action: "custom" });
@@ -628,35 +667,38 @@ export function findUnambiguousEmailStep(steps: SetupStep[]): number | null {
 
 function validateStep(step: SetupStep): void {
   const url = optionalStepText(step.url);
-  const target = optionalStepText(step.target);
+  const target = usableTarget(step);
   const value = optionalStepText(step.value);
   if (step.type === "navigation") {
-    validateUrl(url ?? target ?? step.description, `URL for step ${step.id}`);
+    validateUrl(url ?? target ?? step.description, "The web address");
   } else if (url !== undefined) {
-    validateUrl(url, `URL for step ${step.id}`);
+    validateUrl(url, "The web address");
   }
   if (step.type === "credential" && !credentialKinds.includes(value as CredentialKind)) {
-    throw new Error(`Step ${step.id} must be a saved username, password, or one-time code.`);
+    throw new Error("Choose a saved username, password, or one-time code for this field.");
   }
   if (step.type === "date") {
-    if (step.date === undefined || parseIsoDate(step.date.value) === null) throw new Error(`Step ${step.id} needs a valid ISO date.`);
-    if (step.date.format !== "parts" && !(FORMATS as readonly string[]).includes(step.date.format)) throw new Error(`Step ${step.id} needs a supported date format.`);
-    if (step.date.rule?.kind === "days_ago" && (!Number.isInteger(step.date.rule.days) || step.date.rule.days < 1 || step.date.rule.days > 366)) throw new Error(`Step ${step.id} days_ago must be between 1 and 366.`);
+    if (step.date === undefined || parseIsoDate(step.date.value) === null) throw new Error("It needs a valid ISO date.");
+    if (step.date.format !== "parts" && !(FORMATS as readonly string[]).includes(step.date.format)) throw new Error("It needs a supported date format.");
+    if (step.date.rule?.kind === "days_ago" && (!Number.isInteger(step.date.rule.days) || step.date.rule.days < 1 || step.date.rule.days > 366)) throw new Error("The number of days ago must be between 1 and 366.");
     if (step.date.rule?.kind === "described") {
       const text = step.date.rule.text.trim();
-      if (text.length < 1 || text.length > 120) throw new Error(`Step ${step.id} date description must be 1 to 120 characters.`);
+      if (text.length < 1 || text.length > 120) throw new Error("The date answer must be 1 to 120 characters.");
       rejectCredentialDisclosure(text);
     }
   }
   if (value !== undefined && isMaskedValue(value)) {
-    throw new Error(`Step ${step.id} contains a hidden value. Remove it and demonstrate the step again.`);
+    throw new Error("It contains a hidden value. Remove it and demonstrate the step again.");
   }
-  if (looksLikeRawReplay(target) || looksLikeRawReplay(step.description) || looksLikeRawReplay(step.stage)) {
-    throw new Error(`Step ${step.id} must use a semantic target, not a selector or screen coordinates.`);
+  // The recorded target is hidden from the user, so a selector there is dropped from the prompt instead.
+  if (looksLikeRawReplay(step.description)) {
+    throw new Error("Rewrite the instruction using what the control shows on screen, not a selector or screen coordinates.");
   }
 }
 
-function formatStep(step: SetupStep, index: number, otpSource?: "authenticator" | "email"): string {
+function formatStep(recorded: SetupStep, index: number, otpSource?: "authenticator" | "email"): string {
+  // A copy for the prompt only: the draft keeps what was recorded.
+  const step = { ...recorded, target: usableTarget(recorded) ?? null };
   const targetValue = optionalStepText(step.target);
   const literalValue = optionalStepText(step.value);
   const expectedOutcome = optionalStepText(step.expectedOutcome);
@@ -825,7 +867,13 @@ function optionalStepText(value: string | null | undefined): string | undefined 
 }
 
 function looksLikeRawReplay(value: string | null | undefined): boolean {
-  return value !== null && value !== undefined && rawReplayPattern.test(value);
+  return value !== null && value !== undefined && rawReplayPatterns.some((pattern) => pattern.test(value));
+}
+
+/** The recorded label of the step's control, unless the recorder kept a selector or coordinates instead. */
+function usableTarget(step: SetupStep): string | undefined {
+  const target = optionalStepText(step.target);
+  return looksLikeRawReplay(target) ? undefined : target;
 }
 
 function escapeLiteral(value: string): string {

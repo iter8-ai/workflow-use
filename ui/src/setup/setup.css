@@ -808,6 +808,21 @@ select {
   background: #ffffff;
 }
 
+/* The step a validation message is about. */
+.review-step.step-invalid,
+.edit-step.step-invalid {
+  border-radius: 6px;
+  background: #fff5f5;
+}
+
+.step-invalid .step-number-prefix { color: #922e3d; }
+
+.setup-panel .review-step textarea[aria-invalid="true"],
+.edit-step textarea[aria-invalid="true"] {
+  border-color: #922e3d;
+  background: #ffffff;
+}
+
 .setup-panel .review-step textarea::placeholder {
   color: #767c92;
   opacity: 0;

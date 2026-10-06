@@ -144,7 +144,7 @@ test("rejects URL credentials, raw replay targets, and host limits", () => {
   urlCredentials.url = "https://user:password@example.test/public";
 
   const rawSelector = baseDraft();
-  rawSelector.steps[0] = { ...rawSelector.steps[0], target: "#reports > button" };
+  rawSelector.steps[0] = { ...rawSelector.steps[0], description: "Click #reports > button" };
 
   const tooLongName = baseDraft();
   tooLongName.name = "a".repeat(151);
@@ -158,9 +158,167 @@ test("rejects URL credentials, raw replay targets, and host limits", () => {
   }));
 
   assert.throws(() => compileAgent(urlCredentials), /http\(s\).*credentials/i);
-  assert.throws(() => compileAgent(rawSelector), /semantic target/i);
+  assert.throws(() => compileAgent(rawSelector), /what the control shows on screen/i);
   assert.throws(() => compileAgent(tooLongName), /150 characters/i);
   assert.throws(() => compileAgent(tooManySteps), /200 demonstrated steps/i);
+});
+
+test("accepts semantic labels that mention selectors or use brackets, including stage headings", () => {
+  const draft = baseDraft();
+  draft.steps = [
+    { id: "account", type: "click", description: "Click the account selector", target: "Account selector" },
+    { id: "email", type: "input", description: "Fill in Email [work]", target: "Email [work]", value: "reports@example.test", stage: "CSS [beta] selector" },
+    { id: "theme", type: "select_change", description: "Choose Dark in the CSS theme selector", target: "XPath mode", value: "Dark" },
+    { id: "breadcrumb", type: "click", description: "Click Settings > Users", target: "Settings > Users" },
+    { id: "channel", type: "click", description: "Open the #general channel", target: "#general" },
+    { id: "version", type: "click", description: "Click Version (1, 2)", target: "Version (1, 2)" },
+    { id: "file", type: "click", description: "Open https://portal.example.test/reports/2024 in the list", target: "Total + VAT" },
+    { id: "size", type: "input", description: "Enter width x: 1024 and height y: 768", target: "Size", value: "1024x768" },
+    { id: "pin", type: "click", description: "Drop the marker at latitude 40.7128, longitude -74.0060", target: "Map" },
+  ];
+  const prompt = (compileAgent(draft).stages[0] as { prompt: string }).prompt;
+  assert.match(prompt, /1\. Click the account selector\./);
+  assert.match(prompt, /CSS \[beta\] selector:\n2\. Fill in Email \[work\]: replace any text in Email \[work\] with exactly "reports@example\.test"\./);
+  assert.match(prompt, /3\. Choose Dark in the CSS theme selector: in XPath mode, choose exactly "Dark"\./);
+});
+
+test("rejects instructions written as selectors, XPath, or screen coordinates", () => {
+  for (const description of [
+    "Click #reports > button",
+    "Click input[name=\"email\"]",
+    "Click button[data-testid='export']",
+    "Click div.menu > a.item",
+    "Click .toolbar .btn-primary + .btn",
+    "Click li:nth-child(3)",
+    "Click //button[@id='export']",
+    "Click /html/body/div[2]/button",
+    "Click at x: 120, y: 340",
+    "Click x=120 y=340",
+    "120, 340",
+    "Click at (120, 340)",
+  ]) {
+    const draft = baseDraft();
+    draft.steps[0] = { ...draft.steps[0]!, description };
+    assert.throws(() => compileAgent(draft), /what the control shows on screen/, description);
+  }
+});
+
+test("rejects explicit locator qualifiers, chained ids and classes, and signed or decimal coordinates", () => {
+  for (const description of [
+    "Click css: #submit",
+    "Click selector: .submit",
+    "Click css=button.primary",
+    "Click selector=[data-testid=export]",
+    "Click xpath: //button",
+    "Click .toolbar .btn-primary",
+    "Click #main .nav-link",
+    "Click at (-120, 340)",
+    "Click at (12.5, 40.25)",
+    "Click x: -120, y: 340.5",
+    "-120, 340",
+  ]) {
+    const draft = baseDraft();
+    draft.steps[0] = { ...draft.steps[0]!, description };
+    assert.throws(() => compileAgent(draft), /what the control shows on screen/, description);
+  }
+
+  const draft = baseDraft();
+  draft.steps = [
+    { id: "breadcrumb", type: "click", description: "Open report.pdf > Details", target: "Details > report.pdf" },
+    { id: "files", type: "click", description: "Download report.pdf invoice.csv", target: "Download" },
+    { id: "account", type: "click", description: "Open the account selector: choose Personal", target: "Account selector: Personal" },
+    { id: "theme", type: "select_change", description: "Set Theme CSS: Dark", target: "XPath: off", value: "Dark" },
+    { id: "label", type: "click", description: "Click Open", target: "report.pdf > Details" },
+    { id: "css", type: "click", description: "Submit the form", target: "css: #submit" },
+    { id: "selector", type: "click", description: "Click Submit", target: "selector: .submit" },
+    { id: "chain", type: "click", description: "Export the report", target: ".toolbar .btn-primary" },
+    { id: "point", type: "click", description: "Open the menu", target: "-120, 340" },
+  ];
+  const prompt = (compileAgent(draft).stages[0] as { prompt: string }).prompt;
+  assert.match(prompt, /1\. Click Details > report\.pdf to open report\.pdf > Details\./);
+  assert.match(prompt, /5\. Click Open\. Its recorded label was "report\.pdf > Details"\./);
+  assert.match(prompt, /6\. Complete this action: Submit the form\.\n7\. Click Submit\.\n8\. Complete this action: Export the report\.\n9\. Complete this action: Open the menu\./);
+  for (const raw of ["#submit", ".submit", ".btn-primary", "-120"]) assert.ok(!prompt.includes(raw), raw);
+});
+
+test("follows the visible instruction and leaves out a recorded selector or coordinate target", () => {
+  const draft = baseDraft();
+  draft.steps = [
+    { id: "nav", type: "navigation", description: "Open the portal", target: "#nav > a", url: "https://portal.example.test/reports" },
+    { id: "sign-in", type: "click", description: "Sign in", target: "#login > button" },
+    { id: "submit", type: "click", description: "Click Continue", target: "button[type=\"submit\"]" },
+    { id: "search", type: "input", description: "Search for invoices", target: "input[name='q']", value: "invoices" },
+    { id: "pass", type: "credential", description: "Enter the saved password", target: "//input[@id='pw']", value: "password" },
+    { id: "format", type: "select_change", description: "Choose PDF as the format", target: "form.export > select", value: "PDF" },
+    { id: "date", type: "date", description: "Enter the report date", target: "x: 120, y: 340", date: { value: "2026-09-06", format: "%d.%m.%Y", rule: { kind: "today" } } },
+    { id: "work", type: "click", description: "Click Email", target: "Email [work]" },
+  ];
+  const before = structuredClone(draft);
+  const prompt = (compileAgent(draft).stages[0] as { prompt: string }).prompt;
+
+  assert.match(prompt, /1\. Navigate to https:\/\/portal\.example\.test\/reports to open the portal\./);
+  assert.match(prompt, /2\. Complete this action: Sign in\./);
+  assert.match(prompt, /3\. Click Continue\.\n/);
+  assert.match(prompt, /4\. Search for invoices: replace any text in the field with exactly "invoices"\./);
+  assert.match(prompt, /5\. Enter the saved password: type exactly \$password into the sign-in field\./);
+  assert.match(prompt, /6\. Choose PDF as the format: in the field, choose exactly "PDF"\./);
+  assert.match(prompt, /7\. Set the date field to \{today\|%d\.%m\.%Y\}\./);
+  assert.match(prompt, /8\. Click Email\. Its recorded label was "Email \[work\]"\./);
+  for (const raw of ["#nav", "#login", "button[", "input[", "//input", "form.export", "x: 120"]) assert.ok(!prompt.includes(raw), raw);
+  assert.deepEqual(draft, before);
+  assert.equal(doneWhenOptions([draft.steps[1]!], null, { kind: "file" }).some((option) => option.doneWhen?.kind === "clicked"), false);
+});
+
+test("names a merged date by its visible field, never a recorded selector", () => {
+  const parts: SetupStep[] = [
+    { id: "day", type: "input", description: "Type 06", target: "input[name=\"day\"]", value: "06" },
+    { id: "month", type: "input", description: "Type 09", target: "input[name=\"month\"]", value: "09" },
+    { id: "year", type: "input", description: "Type 2026", target: "input[name=\"year\"]", value: "2026" },
+  ];
+  const opener: SetupStep = { id: "open", type: "click", description: "Open the date picker", target: "#report-date > input" };
+  for (const steps of [parts, [opener, ...parts.map((part) => ({ ...part, target: part.id }))]]) {
+    const merged = mergeDateSteps(steps).at(-1)!;
+    assert.equal(merged.type, "date");
+    assert.equal(merged.description, "Enter the date");
+    const draft = { ...baseDraft(), steps: [{ ...merged, date: { ...merged.date!, rule: { kind: "fixed" as const } } }] };
+    const prompt = (compileAgent(draft).stages[0] as { prompt: string }).prompt;
+    assert.match(prompt, /1\. Set the date field to exactly day "06", month "09" and year "2026" in their separate boxes\./);
+    assert.ok(!prompt.includes("input[") && !prompt.includes("#report-date"));
+  }
+});
+
+test("reports which step a validation error belongs to without repeating what the step contains", () => {
+  const stepId = "4c793770-6a98-4bc5-b4f9-7fb4d4bcc847";
+  const cases: Array<[Partial<SetupStep>, RegExp, "authenticator" | "email" | undefined]> = [
+    [{ description: "Click #reports > button" }, /what the control shows on screen/, undefined],
+    [{ description: "  " }, /Add an instruction/, undefined],
+    [{ description: "Log in with password hunter2-secret" }, /Remove sign-in details/, undefined],
+    [{ type: "select_change", target: "Month", value: null }, /which option to choose/, undefined],
+    [{ type: "input", target: "Notes", value: null }, /what to type/, undefined],
+    [{ type: "input", target: "Card number", value: "sunflower" }, /Mark it as a saved sign-in field/, undefined],
+    [{ type: "key_press", value: "••••••" }, /hidden value/, undefined],
+    [{ type: "credential", value: "api_key" }, /saved username, password, or one-time code/, undefined],
+    [{ url: "https://portal.example.test/reports#latest" }, /query parameters or a fragment/, undefined],
+    [{ stage: "x".repeat(61) }, /Stage name/, undefined],
+    [{ type: "input", target: "Notes", value: "notes", requestsEmailCode: true }, /only a click/i, "email"],
+    [{ type: "credential", target: "Code", value: "otp" }, /mark the click that requests/i, "email"],
+  ];
+  for (const [change, message, otpSource] of cases) {
+    const draft = baseDraft();
+    draft.steps[1] = { ...draft.steps[1]!, id: stepId, ...change };
+    assert.throws(() => compileAgent(draft, otpSource), (error: unknown) => {
+      assert.ok(error instanceof Error, String(error));
+      assert.equal(error.name, "StepValidationError", error.message);
+      assert.equal((error as Error & { stepId?: unknown }).stepId, stepId);
+      assert.match(error.message, message);
+      for (const leaked of [stepId, "Step ", "hunter2", "Card number", "sunflower", "#reports", "#latest"]) assert.ok(!error.message.includes(leaked), `${error.message} includes ${leaked}`);
+      return true;
+    });
+  }
+
+  const goal = baseDraft();
+  goal.goal = "Password: hunter2";
+  assert.throws(() => compileAgent(goal), (error: unknown) => error instanceof Error && error.name === "Error" && !("stepId" in error));
 });
 
 test("rejects direct and fallback navigation URLs with queries or fragments", () => {
