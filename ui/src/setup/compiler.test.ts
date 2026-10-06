@@ -241,6 +241,57 @@ test("rejects explicit locator qualifiers, chained ids and classes, and signed o
   for (const raw of ["#submit", ".submit", ".btn-primary", "-120"]) assert.ok(!prompt.includes(raw), raw);
 });
 
+test("treats a qualified bare tag as a locator, visible or recorded", () => {
+  for (const prefix of ["css", "selector"]) {
+    const visible = baseDraft();
+    visible.steps[0] = { ...visible.steps[0]!, description: `Click ${prefix}: button` };
+    assert.throws(() => compileAgent(visible), (error: unknown) => error instanceof Error && error.name === "StepValidationError" && /what the control shows on screen/.test(error.message));
+
+    const hidden = baseDraft();
+    hidden.steps = [{ id: "submit", type: "click", description: "Click Submit", target: `${prefix}: button` }];
+    const prompt = (compileAgent(hidden).stages[0] as { prompt: string }).prompt;
+    assert.match(prompt, /1\. Click Submit\.$/);
+    assert.ok(!prompt.includes(`${prefix}: button`), prompt);
+    assert.equal(doneWhenOptions(hidden.steps, null, { kind: "file" }).some((option) => option.doneWhen?.kind === "clicked"), false);
+  }
+  const benign = baseDraft();
+  benign.steps = [
+    { id: "dark", type: "click", description: "Click CSS: Dark", target: "CSS: Dark" },
+    { id: "language", type: "click", description: "Open the language selector: a list opens", target: "Language selector" },
+  ];
+  assert.doesNotThrow(() => compileAgent(benign));
+});
+
+test("keeps a date field's visible name when its recorded target is a selector", () => {
+  const dates = (rule: NonNullable<SetupStep["date"]>["rule"], format = "%Y-%m-%d"): SetupStep[] => [
+    { id: "depart", type: "date", description: "Enter Departure date", target: "[id=end]", date: { value: "2026-10-20", format, rule } },
+    { id: "return", type: "date", description: "Enter Return date", target: "[id=start]", date: { value: "2026-10-23", format, rule } },
+  ];
+  const cases: Array<[SetupStep[], RegExp, RegExp]> = [
+    [dates({ kind: "fixed" }), /1\. Set Departure date to exactly "2026-10-20"\./, /2\. Set Return date to exactly "2026-10-23"\./],
+    [dates({ kind: "today" }), /1\. Set Departure date to \{today\|%Y-%m-%d\}\./, /2\. Set Return date to \{today\|%Y-%m-%d\}\./],
+    [dates({ kind: "described", text: "the departure in the confirmation" }), /1\. Set Departure date to the date meaning/, /2\. Set Return date to the date meaning/],
+    [dates({ kind: "today" }, "parts").map((step) => ({ ...step, parts: dateParts() })), /1\. Set Departure date to the date \{today\|%Y-%m-%d\}: type day/, /2\. Set Return date to the date \{today\|%Y-%m-%d\}: type day/],
+  ];
+  for (const [steps, departure, back] of cases) {
+    const prompt = (compileAgent({ ...baseDraft(), steps }).stages[0] as { prompt: string }).prompt;
+    assert.match(prompt, departure);
+    assert.match(prompt, back);
+    assert.ok(!prompt.includes("[id="), prompt);
+  }
+
+  const unanswered = dates(null);
+  assert.match(openQuestions({ ...baseDraft(), steps: unanswered }, "2026-10-05")[0]!.text, /into Departure date\./);
+  // "end" and "start" in a selector say nothing about which side of a range the field is.
+  const goal = "Download last month's bookings";
+  for (const step of unanswered) {
+    assert.deepEqual(dateRuleChoices(step, goal, "2026-10-05")[0]?.rule, dateRuleChoices({ ...step, target: null }, goal, "2026-10-05")[0]?.rule);
+  }
+  const merged = mergeDateSteps([{ id: "return-input", type: "input", description: "Enter Return date", target: "[id=start]", value: "23.10.2026" }])[0]!;
+  assert.equal(merged.type, "date");
+  assert.equal(merged.description, "Enter the Return date");
+});
+
 test("follows the visible instruction and leaves out a recorded selector or coordinate target", () => {
   const draft = baseDraft();
   draft.steps = [
@@ -262,7 +313,7 @@ test("follows the visible instruction and leaves out a recorded selector or coor
   assert.match(prompt, /4\. Search for invoices: replace any text in the field with exactly "invoices"\./);
   assert.match(prompt, /5\. Enter the saved password: type exactly \$password into the sign-in field\./);
   assert.match(prompt, /6\. Choose PDF as the format: in the field, choose exactly "PDF"\./);
-  assert.match(prompt, /7\. Set the date field to \{today\|%d\.%m\.%Y\}\./);
+  assert.match(prompt, /7\. Set report date to \{today\|%d\.%m\.%Y\}\./);
   assert.match(prompt, /8\. Click Email\. Its recorded label was "Email \[work\]"\./);
   for (const raw of ["#nav", "#login", "button[", "input[", "//input", "form.export", "x: 120"]) assert.ok(!prompt.includes(raw), raw);
   assert.deepEqual(draft, before);

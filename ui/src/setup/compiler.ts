@@ -189,7 +189,8 @@ export function dateRuleLabel(rule: DateRule, _today: DateToday, _format: string
 }
 
 function dateSide(step: SetupStep): "from" | "to" | null {
-  const text = `${step.target ?? ""} ${step.description}`.toLowerCase();
+  // A selector's "start" or "end" says nothing about the side of a range.
+  const text = `${usableTarget(step) ?? ""} ${step.description}`.toLowerCase();
   if (/\b(from|start|alates|algus)\b/.test(text)) return "from";
   if (/\b(to|end|until|kuni|lõpp)\b/.test(text)) return "to";
   return null;
@@ -226,19 +227,32 @@ export function openQuestions(draft: SetupDraft, today: DateToday = new Date()):
     kind: "date" as const,
     stepId: step.id,
     stepIndex: index,
-    text: `Step ${index + 1} enters the date ${formatDate(step.date.value, step.date.format)} into ${step.target ?? "the date field"}. What should it be on future runs?`,
+    text: `Step ${index + 1} enters the date ${formatDate(step.date.value, step.date.format)} into ${dateField(step)}. What should it be on future runs?`,
     choices: dateRuleChoices(step, draft.goal, today),
   }] : []);
 }
 
 function dateFieldName(step: SetupStep, precedingClick?: SetupStep): string {
-  const text = `${step.target ?? ""} ${step.description}`;
+  const text = `${usableTarget(step) ?? ""} ${step.description}`;
   if (/\bfrom\b|\balates\b|\bstart\b|\balgus\b/i.test(text)) return "From";
   if (/\bto\b|\buntil\b|\bend\b|\bkuni\b|\blõpp\b/i.test(text)) return "To";
   const partName = usableTarget(step)?.trim();
   if (partName !== undefined && !/^(?:day|month|year|dd|mm|yyyy)$/i.test(partName)) return partName;
+  const described = describedDateField(step.description)?.replace(/\s*\b(?:date|day|month|year)$/i, "");
   const clickTarget = precedingClick?.type === "click" ? usableTarget(precedingClick)?.trim() : undefined;
-  return clickTarget || "the date field";
+  return described || clickTarget || "the date field";
+}
+
+/** The date field a step's instruction names, e.g. "Departure date" in "Enter Departure date". */
+function describedDateField(description: string): string | undefined {
+  const named = /^(?:(?:enter|set|fill in|type|choose|pick|select)\s+)?(?:the\s+)?(.+?)\.?$/i.exec(description.trim())?.[1];
+  // "Enter the date" names no field, and "Type 06" repeats a typed value.
+  return named === undefined || /^(?:date|day|month|year)(?: field)?$/i.test(named) || !/\p{L}/u.test(named) || looksLikeRawReplay(named) ? undefined : named;
+}
+
+/** The date field to name in the prompt: the recorded label, else the one the instruction names. */
+function dateField(step: SetupStep): string {
+  return usableTarget(step) ?? describedDateField(step.description) ?? "the date field";
 }
 
 function markUiMerged(step: SetupStep): SetupStep {
@@ -481,8 +495,8 @@ const htmlTag = String.raw`(?:a|button|div|span|input|label|li|ul|ol|nav|form|se
 const idOrClass = String.raw`(?:${htmlTag})?(?:[#.][a-z_-][\w-]*)+`;
 const coordinate = String.raw`-?\d+(?:\.\d+)?(?:px)?`;
 const rawReplayPatterns = [
-  // An explicit locator: css: #submit, selector=.submit, xpath: //button
-  /\b(?:css|selector|xpath)\s*[:=]\s*["']?(?:[#.][a-z_-]|\/|\[|\*|[a-z][\w-]*[#.[][\w@-])/i,
+  // An explicit locator: css: #submit, selector=.submit, xpath: //button, css: button (but not "selector: a list opens")
+  new RegExp(String.raw`\b(?:css|selector|xpath)\s*[:=]\s*["']?(?:[#.][a-z_-]|\/|\[|\*|[a-z][\w-]*[#.[][\w@-]|${htmlTag}(?![\w-])(?!\s+[a-z]))`, "i"),
   // CSS attribute selector: [name="email"], [data-testid=export]
   /\[\s*[a-z_][\w:-]*\s*[~|^$*]?=\s*(?:"[^"]*"|'[^']*'|[^\]\s]+)\s*(?:[is]\s*)?\]/i,
   // Ids and classes joined by a combinator or a space: #reports > button, nav > .item, .toolbar .btn-primary
@@ -749,7 +763,7 @@ function formatInstruction(
   }
   if (step.type === "date" && step.date !== undefined) {
     const date = step.date;
-    const field = target ?? "the date field";
+    const field = escapeLiteral(dateField(step));
     const rule = date.rule ?? { kind: "fixed" as const };
     if (rule.kind === "fixed") {
       const partOrder = datePartOrder(step);

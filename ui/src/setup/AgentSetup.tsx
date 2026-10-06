@@ -960,8 +960,6 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
       setStageLimitErrors(errors);
       if (Object.values(errors).some(Boolean)) return;
     }
-    const emptyStep = raw ? -1 : draft.steps.findIndex((step) => !step.description.trim());
-    if (emptyStep !== -1) { setError(`Add an instruction for step ${emptyStep + 1} before testing.`); return; }
     setBusy(true); setOperation("test"); setError(null); setStepError(null); setTestRun(null); setChecked(false);
     // The test runs the steps shown now; a late reorganization would no longer match it.
     setRecording((current) => current?.organizing === true ? { ...current, organizing: false } : current);
