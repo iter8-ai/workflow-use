@@ -364,8 +364,57 @@ def test_signed_in_context_is_private_and_claimed_once() -> None:
     assert "context-private" not in stopped.text + read.text
     assert foreign.status_code == 404
     assert claimed.json() == {"contextId": "context-private"}
-    assert again.status_code == 409 and again.json()["detail"] == "google_context_unavailable"
+    assert again.status_code == 200 and again.json() == claimed.json()
     assert not session.deleted
+
+
+def test_google_context_confirm_routes_follow_state_table() -> None:
+    provider = FakeProvider()
+    with client(provider) as http:
+        recording = create_recording(http)
+        url = f"/recordings/{recording['id']}/google-context"
+        provider.sessions[0].signed_in = True
+        for suffix in ("/adopted", "/returned"):
+            assert http.post(url + suffix, headers=headers()).status_code == 409
+        assert http.post(url, headers=headers()).status_code == 409
+
+        http.post(f"/recordings/{recording['id']}/stop", headers=headers())
+        assert http.post(url + "/returned", headers=headers()).status_code == 204
+        assert http.post(url + "/adopted", headers=headers()).status_code == 409
+        assert http.post(url, headers=headers()).json() == {"contextId": "context-private"}
+        assert http.post(url, headers=headers()).json() == {"contextId": "context-private"}
+        assert http.post(url + "/adopted", headers=headers()).status_code == 204
+        assert http.post(url + "/adopted", headers=headers()).status_code == 204
+        assert http.post(url + "/returned", headers=headers()).status_code == 409
+        unavailable = http.post(url, headers=headers())
+        assert unavailable.status_code == 409
+        assert unavailable.json()["detail"] == "google_context_unavailable"
+        assert "context-private" not in unavailable.text
+
+        returned = create_recording(http)
+        returned_url = f"/recordings/{returned['id']}/google-context"
+        provider.sessions[1].signed_in = True
+        http.post(f"/recordings/{returned['id']}/stop", headers=headers())
+        assert http.post(returned_url, headers=headers()).status_code == 200
+        assert http.post(returned_url + "/returned", headers=headers()).status_code == 204
+        assert http.post(returned_url + "/returned", headers=headers()).status_code == 204
+        assert http.post(returned_url, headers=headers()).json() == {"contextId": "context-private"}
+
+
+def test_google_context_routes_hide_foreign_and_unknown_recordings() -> None:
+    provider = FakeProvider()
+    with client(provider) as http:
+        recording = create_recording(http)
+        provider.sessions[0].signed_in = True
+        http.post(f"/recordings/{recording['id']}/stop", headers=headers())
+        assert http.post(f"/recordings/{recording['id']}/google-context", headers=headers()).status_code == 200
+        for suffix in ("", "/adopted", "/returned"):
+            for recording_id, request_headers in (
+                (recording["id"], headers(email="foreign@iter7.example")),
+                ("unknown", headers()),
+            ):
+                response = http.post(f"/recordings/{recording_id}/google-context{suffix}", headers=request_headers)
+                assert response.status_code == 404
 
 
 def test_unsigned_context_is_deleted_after_release() -> None:

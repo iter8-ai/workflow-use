@@ -253,6 +253,47 @@ async def test_shutdown_deletes_unclaimed_but_not_claimed_contexts() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cleanup", ["delete", "sweep", "shutdown", "evict"])
+async def test_lent_context_survives_every_recorder_cleanup(cleanup: str) -> None:
+    provider = ContextProvider()
+    service = RecordingService(provider, max_sessions=1 if cleanup == "evict" else 2)
+    owner = RecordingOwner("iter7", "owner@iter7.example")
+    recording = await service.create(owner, "https://example.com")
+    await service.stop(recording.id, owner)
+    assert await service.claim_google_context(recording.id, owner) == "private-context"
+    assert await service.claim_google_context(recording.id, owner) == "private-context"
+
+    if cleanup == "delete":
+        assert await service.delete(recording.id, owner)
+    elif cleanup == "sweep":
+        recording.stopped_at = datetime.now(UTC) - timedelta(minutes=61)
+        await service.cleanup()
+    elif cleanup == "shutdown":
+        await service.close()
+    else:
+        await service.create(owner, "https://example.org")
+    assert provider.sessions[0].delete_attempts == 0
+
+
+@pytest.mark.asyncio
+async def test_returned_context_is_deleted_but_adopted_context_is_not() -> None:
+    provider = ContextProvider()
+    service = RecordingService(provider)
+    owner = RecordingOwner("iter7", "owner@iter7.example")
+    returned = await service.create(owner, "https://example.com")
+    adopted = await service.create(owner, "https://example.org")
+    for recording in (returned, adopted):
+        await service.stop(recording.id, owner)
+        assert await service.claim_google_context(recording.id, owner) == "private-context"
+    assert await service.return_google_context(returned.id, owner)
+    assert await service.adopt_google_context(adopted.id, owner)
+    assert await service.delete(returned.id, owner)
+    assert await service.delete(adopted.id, owner)
+    assert provider.sessions[0].delete_attempts == 1
+    assert provider.sessions[1].delete_attempts == 0
+
+
+@pytest.mark.asyncio
 async def test_failed_context_deletion_keeps_ownership_for_sweep_retry() -> None:
     provider = ContextProvider()
     service = RecordingService(provider)

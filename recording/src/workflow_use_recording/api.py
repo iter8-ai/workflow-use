@@ -134,6 +134,30 @@ def create_app(provider: BrowserProvider, config: RecordingConfig, organizer: St
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="google_context_unavailable")
         return JSONResponse(content={"contextId": context_id}, headers={"Cache-Control": "no-store"})
 
+    @app.post("/recordings/{recording_id}/google-context/adopted", status_code=204)
+    async def adopt_google_context(recording_id: str, recording_owner: RecordingOwner = Depends(owner)) -> Response:
+        try:
+            adopted = await service.adopt_google_context(recording_id, recording_owner)
+        except Exception:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=SERVICE_UNAVAILABLE) from None
+        if adopted is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording not found.")
+        if not adopted:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="google_context_unavailable")
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.post("/recordings/{recording_id}/google-context/returned", status_code=204)
+    async def return_google_context(recording_id: str, recording_owner: RecordingOwner = Depends(owner)) -> Response:
+        try:
+            returned = await service.return_google_context(recording_id, recording_owner)
+        except Exception:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=SERVICE_UNAVAILABLE) from None
+        if returned is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording not found.")
+        if not returned:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="google_context_unavailable")
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
     return app
 
 

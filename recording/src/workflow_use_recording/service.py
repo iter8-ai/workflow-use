@@ -69,6 +69,7 @@ class Recording:
     stopped_at: datetime | None = None
     context_id: str | None = field(default=None, repr=False)
     context_delete: Callable[[], Awaitable[None]] | None = field(default=None, repr=False)
+    context_state: Literal["owned", "lent", "released"] = "owned"
     context_delete_pending: bool = False
     deleted: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -340,13 +341,44 @@ class RecordingService:
                 return ""
             if not recording.google_signed_in or recording.context_id is None:
                 return ""
-            context_id, recording.context_id = recording.context_id, None
+            recording.context_state = "lent"
+            return recording.context_id
+
+    async def adopt_google_context(self, recording_id: str, owner: RecordingOwner) -> bool | None:
+        recording = await self.get(recording_id, owner)
+        if recording is None:
+            return None
+        async with recording.lock:
+            if self._recordings.get(recording_id) is not recording or recording.deleted:
+                return None
+            if recording.context_state == "released":
+                return True
+            if recording.context_state != "lent":
+                return False
+            recording.context_state = "released"
+            recording.context_id = None
             recording.context_delete = None
             recording.context_delete_pending = False
-            return context_id
+            return True
+
+    async def return_google_context(self, recording_id: str, owner: RecordingOwner) -> bool | None:
+        recording = await self.get(recording_id, owner)
+        if recording is None:
+            return None
+        async with recording.lock:
+            if self._recordings.get(recording_id) is not recording or recording.deleted:
+                return None
+            if recording.context_state == "released":
+                return False
+            if recording.context_state == "lent":
+                recording.context_state = "owned"
+                return True
+            return recording.status != "recording" and recording.google_signed_in and recording.context_id is not None
 
     async def _delete_context(self, recording: Recording) -> bool:
         async with recording.lock:
+            if recording.context_state == "lent":
+                return True
             if recording.context_id is None or recording.context_delete is None:
                 recording.context_delete_pending = False
                 return True
