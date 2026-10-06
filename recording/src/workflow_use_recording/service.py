@@ -520,6 +520,9 @@ class RecordingService:
             id=recording.id,
             status=recording.status,
             live_view_url=live_view_url,
+            live_view_switching=bool(
+                recording.status == "recording" and getattr(recording.browser, "live_view_switching", False)
+            ),
             steps=recording.steps,
             expires_at=recording.expires_at,
             blocked_reason=recording.blocked_reason,

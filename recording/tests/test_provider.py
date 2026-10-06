@@ -398,6 +398,7 @@ async def test_a_sign_in_window_the_website_opens_is_shown_in_the_live_view_and_
     runtime = await playwright.async_playwright().start()
     browser = await runtime.chromium.launch()
     context = await browser.new_context()
+    popup_debug_ready = asyncio.Event()
 
     async def tabs() -> list[Any]:
         listed = []
@@ -415,6 +416,8 @@ async def test_a_sign_in_window_the_website_opens_is_shown_in_the_live_view_and_
             return SimpleNamespace(id="session-1", connect_url="wss://connect.browserbase.test/session-1")
 
         async def debug(self, _session_id: str) -> Any:
+            if len(context.pages) > 1:
+                await popup_debug_ready.wait()
             return SimpleNamespace(debugger_fullscreen_url="https://live.browserbase.com/first-tab", pages=await tabs())
 
         async def update(self, _session_id: str, **_kwargs: str) -> None:
@@ -460,9 +463,12 @@ async def test_a_sign_in_window_the_website_opens_is_shown_in_the_live_view_and_
             await site.get_by_role("button", name="Continue with Google").click()
         google = await opened.value
         await google.wait_for_load_state()
+        assert service.response(recording).live_view_switching is True
+        popup_debug_ready.set()
         first_tab, popup_tab = await tabs()
         assert first_tab.id != popup_tab.id
         await live_view_becomes(popup_tab.debugger_fullscreen_url)
+        assert service.response(recording).live_view_switching is False
 
         await google.get_by_label("Email or phone").fill("person@example.com")
         await google.get_by_label("Password").press_sequentially("google-password")
@@ -478,3 +484,20 @@ async def test_a_sign_in_window_the_website_opens_is_shown_in_the_live_view_and_
         assert service.take_credentials(recording) == {}
     finally:
         await service.close()
+
+
+@pytest.mark.asyncio
+async def test_popup_live_view_switching_expires_after_fifteen_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
+    from datetime import UTC, datetime
+
+    from workflow_use_recording import provider
+    from workflow_use_recording.service import Recording, RecordingOwner, RecordingService
+
+    monkeypatch.setattr(provider, "LIVE_VIEW_SWITCH_TIMEOUT_SECONDS", 0.01)
+    session = provider.PlaywrightRecordingSession(browser=object(), runtime=object(), live_view_url="first")
+    recording = Recording("id", RecordingOwner("org", "user@example.com"), datetime.now(UTC), browser=session)
+    page = object()
+    session.open_tab(page)
+    assert RecordingService.response(recording).live_view_switching is True
+    await asyncio.sleep(0.02)
+    assert RecordingService.response(recording).live_view_switching is False

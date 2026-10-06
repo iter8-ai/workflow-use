@@ -53,6 +53,7 @@ export default function AgentSetup() {
   const [emailRoutesAllowed, setEmailRoutesAllowed] = useState(false);
   const [chooseScheduleAllowed, setChooseScheduleAllowed] = useState(false);
   const [credentialsAllowed, setCredentialsAllowed] = useState(false);
+  const [googleAllowed, setGoogleAllowed] = useState(false);
   const [savedCredentials, setSavedCredentials] = useState<CredentialKind[]>([]);
   const [otpSource, setOtpSource] = useState<"authenticator" | "email" | undefined>();
   const [mode, setMode] = useState<"create" | "edit">("create");
@@ -152,6 +153,7 @@ export default function AgentSetup() {
       setEmailRoutesAllowed(result.emailRoutes === true);
       setChooseScheduleAllowed(result.chooseSchedule === true);
       setCredentialsAllowed(result.credentials === true);
+      setGoogleAllowed(result.google === true);
       setMode(result.mode ?? "create");
       setConnecting(false);
     }).catch((requestError: Error) => {
@@ -418,6 +420,15 @@ export default function AgentSetup() {
     }
   }
 
+  async function connectGoogle(): Promise<void> {
+    if (bridge === undefined || bridge === null || agentId === null) return;
+    setError(null); setBusy(true);
+    try {
+      if ((await bridge.request("connectGoogle", { agentId }, { timeoutMs: interactiveRequestTimeoutMs })).connected) invalidateTest();
+    } catch (requestError) { setError(errorMessage(requestError)); }
+    finally { setBusy(false); }
+  }
+
   async function runTest(nextDoneWhen: DoneWhen = doneWhen, nextSteps = steps, nextRevision = revision): Promise<void> {
     if (bridge === undefined || bridge === null) {
       return;
@@ -634,7 +645,7 @@ export default function AgentSetup() {
     return <main className="setup-unavailable"><h1>Open agent setup from Reiterate</h1><p>This page needs the Reiterate host to securely create and test an agent.</p></main>;
   }
 
-  if (mode === "edit") return <EditScreen bridge={bridge} credentialsAllowed={credentialsAllowed} />;
+  if (mode === "edit") return <EditScreen bridge={bridge} credentialsAllowed={credentialsAllowed} googleAllowed={googleAllowed} />;
 
   return (
     <main className={`agent-setup setup-flow${screen === "demonstrate" ? " agent-setup-demonstrating" : screen === "test" ? " agent-setup-testing" : ""}`}>
@@ -655,7 +666,7 @@ export default function AgentSetup() {
           {screen === "describe" && <Describe name={name} url={url} goal={goal} busy={busy || connecting} onName={(value) => setDraftField(setName, value)} onUrl={(value) => setDraftField(setUrl, value)} onGoal={(value) => setDraftField(setGoal, value)} onContinue={() => void startRecording()} />}
           {screen === "demonstrate" && <Demonstrate recording={recording} steps={steps} liveViewUrl={liveViewUrl} busy={busy} onStop={() => void stopRecording()} onReview={continueToReview} onReset={() => void reset()} />}
           {screen === "review" && <Review steps={steps} goal={goal} organizing={recording?.organizing === true} busy={busy} credentialsAllowed={credentialsAllowed} savedCredentials={savedCredentials} onRequestOtp={() => void requestReviewOtp()} onUpdateStep={updateStep} onRemoveStep={removeStep} onMergeSteps={(ids) => { setSteps((current) => combineDateSteps(current, ids)); invalidateTest(); }} onUndoMergedStep={(id) => { setSteps((current) => undoDateMerge(current, id)); invalidateTest(); }} onMoveStep={(index, delta) => { setSteps((current) => moveStep(current, index, delta)); invalidateTest(); }} onBack={() => setScreen("demonstrate")} onContinue={continueToTest} onInsert={() => { const id = `inserted-${Date.now()}`; setSteps((current) => [...current, { id, type: "agent", description: "" }]); invalidateTest(); }} />}
-          {screen === "test" && <Test steps={steps} url={url} scheduleRecovery={scheduleRecovery} emailRoutesAllowed={emailRoutesAllowed} textAllowed={chooseScheduleAllowed} doneWhen={doneWhen} emailStatus={emailStatus} emailFrom={emailFrom} emailFiles={emailFiles} canContinue={canContinue} onDoneWhen={chooseDoneWhen} onChooseEmail={() => void chooseEmailDoneWhen()} onAllowEmail={() => void allowEmailSender()} onChangeCredentials={() => void changeCredentials()} run={testRun} busy={busy} onRun={() => void runTest()} onStop={() => void stopTest()} onSchedule={() => void schedule()} onBack={() => setScreen("review")} onEditStep={editTestStep} />}
+          {screen === "test" && <Test steps={steps} url={url} scheduleRecovery={scheduleRecovery} emailRoutesAllowed={emailRoutesAllowed} textAllowed={chooseScheduleAllowed} googleAllowed={googleAllowed} doneWhen={doneWhen} emailStatus={emailStatus} emailFrom={emailFrom} emailFiles={emailFiles} canContinue={canContinue} onDoneWhen={chooseDoneWhen} onChooseEmail={() => void chooseEmailDoneWhen()} onAllowEmail={() => void allowEmailSender()} onChangeCredentials={() => void changeCredentials()} onConnectGoogle={() => void connectGoogle()} run={testRun} busy={busy} onRun={() => void runTest()} onStop={() => void stopTest()} onSchedule={() => void schedule()} onBack={() => setScreen("review")} onEditStep={editTestStep} />}
           {screen === "schedule" && !scheduleSaved && <div className="setup-panel"><div className="stage-title"><h2>Schedule</h2><p>Your test passed. Scheduled runs repeat the tested steps.</p></div><p>Finish setup to run manually, or choose a daily schedule.</p>{scheduleAllowed && <><label className="result-check"><input type="checkbox" aria-label="Schedule daily" checked={cron !== ""} disabled={busy || scheduleRecovery} onChange={(event) => setCron(event.target.checked ? localTimeToUtcCron(dailyTime) : "")} />Schedule daily</label>{cron !== "" && <label>Time of day<input type="time" aria-label="Time of day" value={dailyTime} disabled={busy || scheduleRecovery} onChange={(event) => { setDailyTime(event.target.value); if (event.target.value) setCron(localTimeToUtcCron(event.target.value)); }} /><span className="field-note">Your local time. The schedule is stored in UTC.</span></label>}</>}<div className="setup-actions"><button className="button button-quiet" type="button" onClick={() => setScreen("test")} disabled={busy || scheduleRecovery}>Back to test</button><button className="button button-primary" type="button" onClick={() => void saveInlineSchedule()} disabled={!canContinue || busy || (cron !== "" && dailyTime === "")}>{cron.trim() ? "Schedule agent" : "Finish setup"}</button></div></div>}
           {scheduleSaved && <div className="setup-panel"><div className="stage-title"><h2>Your agent is ready</h2><p>{cron.trim() ? "The schedule is saved. It will repeat the tested workflow." : "Run this agent manually whenever you need it."}</p></div><div className="setup-actions"><button className="button button-primary" type="button" onClick={() => void close()} disabled={busy}>Open agent</button></div></div>}
         </section>
@@ -665,7 +676,7 @@ export default function AgentSetup() {
   );
 }
 
-function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; credentialsAllowed: boolean }): JSX.Element {
+function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: HostBridge; credentialsAllowed: boolean; googleAllowed: boolean }): JSX.Element {
   const [agent, setAgent] = useState<EditAgentData | null>(null);
   const [draft, setDraft] = useState<SetupDraft | null>(null);
   const [stages, setStages] = useState<unknown[]>([]);
@@ -849,6 +860,15 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
     } catch (e) { setCredentialError(errorMessage(e)); }
     finally { setBusy(false); setOperation(null); }
   };
+  const connectGoogle = async (): Promise<void> => {
+    setBusy(true); setError(null);
+    try {
+      if ((await bridge.request("connectGoogle", { agentId: agent.agentId }, { timeoutMs: interactiveRequestTimeoutMs })).connected) {
+        setCredentialsChanged(true); resetTest();
+      }
+    } catch (e) { setError(errorMessage(e)); }
+    finally { setBusy(false); }
+  };
   const requestEditOtp = async (): Promise<void> => {
     setBusy(true); setOperation("credentials"); setCredentialError(null);
     try {
@@ -1008,7 +1028,8 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
       <b>{succeeded ? "Test completed" : testRun.failure?.kind === "stopped" ? "Test stopped" : "Test failed"}</b>
       {!succeeded && <>
         <b>{editFailureLabel(testRun.failure?.kind)}</b>
-        {(testRun.failure?.message || testRun.error) && <p>{testRun.failure?.message || testRun.error}</p>}
+        {testRun.failure?.kind === "google" && <><h3>The agent needs a Google sign-in</h3><p>Connect the Google account this website uses, then run the test again.</p>{googleAllowed ? <button className="button button-quiet" disabled={busy} onClick={() => void connectGoogle()}>Connect Google</button> : <p>Open Credentials → Connect Google for this agent.</p>}</>}
+        {(testRun.failure?.message || testRun.error) && testRun.failure?.kind !== "google" && <p>{testRun.failure?.message || testRun.error}</p>}
       </>}
       {testRun.stoppedAtStep != null && <p>Stopped at step {testRun.stoppedAtStep}{draft.steps[testRun.stoppedAtStep - 1]?.description ? `: ${draft.steps[testRun.stoppedAtStep - 1]!.description}` : ""}</p>}
       {testRun.confirmation && <p>{testRun.confirmation}</p>}
@@ -1072,7 +1093,7 @@ function EditScreen({ bridge, credentialsAllowed }: { bridge: HostBridge; creden
           </div>
           {recording?.blockedReason && <p className="edit-result edit-result-failed" role="alert">Cannot continue: {recording.blockedReason}</p>}
           {recording?.status === "expired" && <p className="edit-result edit-result-failed" role="alert">Demonstration expired. Re-demonstrate again.</p>}
-          {recordingActive && <div className="browser-frame edit-recording">{browserbaseLiveViewUrl(recording.liveViewUrl) ? <iframe title="Virtual browser" src={browserbaseLiveViewUrl(recording.liveViewUrl)!} allow="clipboard-read; clipboard-write" /> : <p>Opening the virtual browser.</p>}</div>}
+          {recordingActive && <div className="browser-frame edit-recording">{browserbaseLiveViewUrl(recording.liveViewUrl) ? <iframe title="Virtual browser" src={browserbaseLiveViewUrl(recording.liveViewUrl)!} allow="clipboard-read; clipboard-write" /> : <p>Opening the virtual browser.</p>}{recording.liveViewSwitching && <div className="browser-switching" role="status">Opening the new window…</div>}</div>}
           {recordingActive && <DownloadNotice downloads={recording.downloads ?? []} />}
         </section>}
       </div><aside className="edit-rail">
@@ -1147,6 +1168,7 @@ function editFailureLabel(kind: string | null | undefined): string {
   switch (kind) {
     case "stopped": return "Stopped by you";
     case "signin": return "Sign-in problem";
+    case "google": return "Google sign-in needed";
     case "website": return "Website problem";
     case "steps": return "A step didn't work";
     case "result": return "Result problem";
@@ -1272,6 +1294,7 @@ function Demonstrate(props: { recording: Recording | null; steps: SetupStep[]; l
             ? !isStopped && <p>{browserMessage}</p>
             // Clipboard access must be delegated explicitly or paste does nothing in the remote browser.
             : <iframe title="Virtual browser" src={props.liveViewUrl} allow="clipboard-read; clipboard-write" />}
+          {isRecording && props.recording?.liveViewSwitching && <div className="browser-switching" role="status">Opening the new window…</div>}
           {/* The recording service drops the live view once stopped, so the summary must not depend on it. */}
           {isStopped && <div className="demonstrate-finished browser-notice-over-screen">
             <div className="browser-notice-card">{count === 0
@@ -1443,8 +1466,8 @@ function Review(props: { steps: SetupStep[]; goal: string; organizing: boolean; 
 }
 
 function Test(props: {
-  steps: SetupStep[]; url: string; scheduleRecovery: boolean; emailRoutesAllowed: boolean; textAllowed: boolean; doneWhen: DoneWhen;
-  onDoneWhen(value: DoneWhen): void; onChooseEmail(): void; onAllowEmail(): void; onChangeCredentials(): void; run: RunState | null; busy: boolean; emailStatus: "waiting" | "routed" | "rejected" | "no_documents" | "timeout" | null; emailFrom: string | null; emailFiles: Array<{ name: string; url: string }>; canContinue: boolean;
+  steps: SetupStep[]; url: string; scheduleRecovery: boolean; emailRoutesAllowed: boolean; textAllowed: boolean; googleAllowed: boolean; doneWhen: DoneWhen;
+  onDoneWhen(value: DoneWhen): void; onChooseEmail(): void; onAllowEmail(): void; onChangeCredentials(): void; onConnectGoogle(): void; run: RunState | null; busy: boolean; emailStatus: "waiting" | "routed" | "rejected" | "no_documents" | "timeout" | null; emailFrom: string | null; emailFiles: Array<{ name: string; url: string }>; canContinue: boolean;
   onRun(): void; onStop(): void; onSchedule(): void; onBack(): void; onEditStep(id: string, description: string): void;
 }): JSX.Element {
   const [screenIndex, setScreenIndex] = useState<number | null>(null);
@@ -1463,7 +1486,7 @@ function Test(props: {
   const failureMessage = props.run?.failure?.message ?? props.run?.error;
   const criterionNotMet = props.run?.status === "failed" && failureMessage?.startsWith("Success criterion not met: ");
   const kind = criterionNotMet ? "check" : props.run?.failure?.kind;
-  const failedStep = (kind === "steps" || kind === "signin" || kind === "website" || kind === "unknown") && stopped !== null;
+  const failedStep = (kind === "steps" || kind === "signin" || kind === "google" || kind === "website" || kind === "unknown") && stopped !== null;
   const completedSteps = props.run?.status === "succeeded" || kind === "result" || kind === "check";
   const options = doneWhenOptions(props.steps, props.run ? { confirmation: props.run.confirmation, failureKind: kind, files: props.run.files } : null, props.doneWhen)
     .filter((option) => (option.action !== "email" || props.emailRoutesAllowed) && (props.textAllowed || option.doneWhen?.kind !== "text"));
@@ -1475,6 +1498,7 @@ function Test(props: {
     : userStopped ? `You stopped the test${stopped !== null ? ` at step ${stopped + 1}` : ""}`
     : kind === "service" ? "Reiterate couldn’t run the test"
     : kind === "signin" ? "The website didn’t accept the sign-in"
+    : kind === "google" ? "The agent needs a Google sign-in"
     : kind === "steps" && stopped !== null ? `Stuck at step ${stopped + 1}`
     : kind === "result" ? "Every step ran, but no file was downloaded"
     : criterionNotMet ? "The success criterion wasn’t met"
@@ -1493,6 +1517,7 @@ function Test(props: {
     : criterionNotMet ? failureMessage!.slice("Success criterion not met: ".length)
     : kind === "steps" ? "The steps before it worked. Rewrite the highlighted step below, then run the test again."
     : kind === "signin" ? "Check the saved sign-in details, then run the test again."
+    : kind === "google" ? "Connect the Google account this website uses, then run the test again."
     : kind === "result" ? "Choose how Reiterate knows the run worked under Done when."
     : passed && props.doneWhen.kind === "described" && props.run?.confirmation ? `Agent saw: ${props.run.confirmation}`
     : props.run?.status === "succeeded" && !emailRun && files.length === 0 ? "Reiterate doesn’t keep a file from this run, so workflows can’t use its output."
@@ -1529,7 +1554,7 @@ function Test(props: {
     <div className="workbench-grid">
       <TestBrowser run={props.run} url={props.url} passed={passed} serviceFailure={serviceFailure} screenIndex={screenIndex} onSelectScreen={setScreenIndex} />
       <aside className="test-rail" aria-label="Test steps"><header><h3>{props.run ? "Test result" : "Your steps"}</h3><span>{props.run ? `${completedSteps ? props.steps.length : userStopped && stopped !== null ? stopped + 1 : failedStep ? stopped! + 1 : 0} of ${props.steps.length} reached` : `${props.steps.length} steps`}</span></header>
-        <div className={`run-status ${failed && !userStopped ? "bad" : passed ? "good" : ""}`} role={failed && !userStopped ? "alert" : "status"}><small>{userStopped ? "Test stopped" : serviceFailure ? "Reiterate problem · not your steps" : kind === "steps" ? "Step needs clearer wording" : kind === "signin" ? "Sign-in problem" : kind === "result" ? "No file came back" : kind === "check" ? "Done-when check not met" : emailProblem ? props.emailStatus === "rejected" ? "Email not accepted" : "Email not received" : passed ? "Test passed" : running ? "Test running" : emailRun ? "Waiting for email" : failed ? "Test failed" : "Not tested yet"}</small><strong>{statusText}</strong><p>{props.run ? statusDetail : "Run the test to watch the agent work through these steps in a fresh browser."}</p>{!serviceFailure && !userStopped && props.run?.failure?.message && kind !== "result" && kind !== "check" && <blockquote><b>The agent said</b>{props.run.failure.message}</blockquote>}{emailRun && props.emailStatus === "rejected" && props.emailFrom && <button type="button" className="button button-primary" onClick={props.onAllowEmail} disabled={locked}>Accept emails from {props.emailFrom}</button>}{kind === "signin" && <button type="button" className="button button-quiet" onClick={props.onChangeCredentials} disabled={locked}>Change sign-in details</button>}</div>
+        <div className={`run-status ${failed && !userStopped ? "bad" : passed ? "good" : ""}`} role={failed && !userStopped ? "alert" : "status"}><small>{userStopped ? "Test stopped" : serviceFailure ? "Reiterate problem · not your steps" : kind === "steps" ? "Step needs clearer wording" : kind === "signin" ? "Sign-in problem" : kind === "google" ? "Google sign-in needed" : kind === "result" ? "No file came back" : kind === "check" ? "Done-when check not met" : emailProblem ? props.emailStatus === "rejected" ? "Email not accepted" : "Email not received" : passed ? "Test passed" : running ? "Test running" : emailRun ? "Waiting for email" : failed ? "Test failed" : "Not tested yet"}</small><strong>{statusText}</strong><p>{props.run ? statusDetail : "Run the test to watch the agent work through these steps in a fresh browser."}</p>{!serviceFailure && !userStopped && props.run?.failure?.message && kind !== "result" && kind !== "check" && <blockquote><b>The agent said</b>{props.run.failure.message}</blockquote>}{emailRun && props.emailStatus === "rejected" && props.emailFrom && <button type="button" className="button button-primary" onClick={props.onAllowEmail} disabled={locked}>Accept emails from {props.emailFrom}</button>}{kind === "signin" && <button type="button" className="button button-quiet" onClick={props.onChangeCredentials} disabled={locked}>Change sign-in details</button>}{kind === "google" && (props.googleAllowed ? <button type="button" className="button button-quiet" onClick={props.onConnectGoogle} disabled={locked}>Connect Google</button> : <p>Open Credentials → Connect Google for this agent.</p>)}</div>
         <div className="rail-tabs" role="tablist" aria-label="Test details" onKeyDown={moveTab}>
           <button type="button" role="tab" id="test-tab-activity" aria-controls="test-panel-activity" aria-selected={railTab === "activity"} tabIndex={railTab === "activity" ? 0 : -1} onClick={() => setRailTab("activity")}>Activity</button>
           <button type="button" role="tab" id="test-tab-steps" aria-controls="test-panel-steps" aria-selected={railTab === "steps"} tabIndex={railTab === "steps" ? 0 : -1} onClick={() => setRailTab("steps")}>Steps <span>{props.steps.length}</span></button>

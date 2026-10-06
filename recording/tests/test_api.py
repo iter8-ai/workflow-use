@@ -101,6 +101,7 @@ def test_create_returns_only_safe_live_view_response() -> None:
         "id": response.json()["id"],
         "status": "recording",
         "liveViewUrl": "https://browserbase.example/debug?token=secret",
+        "liveViewSwitching": False,
         "steps": [
             {
                 "id": response.json()["steps"][0]["id"],

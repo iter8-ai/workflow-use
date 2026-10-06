@@ -1346,6 +1346,7 @@ select {
 
 /* The live view has no download bar; this notice sits over the bottom of the demonstration browser. */
 .browser-frame { position: relative; }
+.browser-switching { position: absolute; inset: 0; z-index: 1; display: grid; place-items: center; padding: 24px; background: rgb(248 248 252 / 92%); color: #17233d; font-weight: 600; text-align: center; }
 .download-notice { position: absolute; left: 50%; bottom: 16px; z-index: 2; display: flex; align-items: center; gap: 8px; max-width: calc(100% - 32px); padding: 8px 14px; border: 1px solid #d9dbe7; border-radius: 999px; background: #ffffff; box-shadow: 0 4px 16px rgb(23 35 61 / 14%); color: #17233d; font-size: .88rem; font-weight: 600; transform: translateX(-50%); }
 .download-notice span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .download-notice small { color: #5f667c; font-weight: 500; }

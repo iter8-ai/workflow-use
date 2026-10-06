@@ -18,6 +18,7 @@ from .security import (
 
 EventSink = Callable[[dict[str, Any]], Awaitable[None]]
 logger = logging.getLogger(__name__)
+LIVE_VIEW_SWITCH_TIMEOUT_SECONDS = 15
 
 
 class BrowserSession(Protocol):
@@ -63,6 +64,7 @@ class PlaywrightRecordingSession:
         # Tabs opened during the demonstration (e.g. a "Continue with Google" window), oldest first, each with
         # its own live view. The person demonstrating sees the newest one still open.
         self._opened_tabs: list[tuple[Any, str]] = []
+        self._pending_tabs: dict[Any, asyncio.TimerHandle] = {}
         self._release = release
         self.context_id = context_id
         self._delete_context = delete_context
@@ -73,12 +75,28 @@ class PlaywrightRecordingSession:
         self._runtime_stopped = False
         self._released = False
 
+    @property
+    def live_view_switching(self) -> bool:
+        return bool(self._pending_tabs)
+
+    def open_tab(self, page: Any) -> None:
+        self._pending_tabs[page] = asyncio.get_running_loop().call_later(
+            LIVE_VIEW_SWITCH_TIMEOUT_SECONDS, self.finish_tab, page
+        )
+
+    def finish_tab(self, page: Any) -> None:
+        timer = self._pending_tabs.pop(page, None)
+        if timer is not None:
+            timer.cancel()
+
     def show_tab(self, page: Any, live_view_url: str) -> None:
+        self.finish_tab(page)
         self._opened_tabs = [(tab, url) for tab, url in self._opened_tabs if tab is not page]
         self._opened_tabs.append((page, live_view_url))
         self.live_view_url = live_view_url
 
     def forget_tab(self, page: Any) -> None:
+        self.finish_tab(page)
         self._opened_tabs = [(tab, url) for tab, url in self._opened_tabs if tab is not page]
         self.live_view_url = self._opened_tabs[-1][1] if self._opened_tabs else self._first_live_view_url
 
@@ -100,6 +118,8 @@ class PlaywrightRecordingSession:
             await self._delete_context(self.context_id)
 
     async def close(self) -> None:
+        for page in list(self._pending_tabs):
+            self.finish_tab(page)
         if self._browser_closed and self._runtime_stopped and (self._release is None or self._released):
             return
         if not self._browser_closed:
@@ -197,6 +217,8 @@ async def _show_opened_tab(session: PlaywrightRecordingSession, client: Any, ses
         # The demonstration continues in the tab already shown.
         if not page.is_closed():
             logger.warning("Could not show the opened tab", exc_info=True)
+    finally:
+        session.finish_tab(page)
 
 
 class BrowserbaseProvider:
@@ -277,6 +299,7 @@ class BrowserbaseProvider:
                 await _install_page_events(session, existing_page, on_event)
 
             def on_new_page(new_page: Any) -> None:
+                session.open_tab(new_page)
                 session.track(_install_page_events(session, new_page, on_event))
                 session.watch(_show_opened_tab(session, client, created.id, new_page))
 

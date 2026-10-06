@@ -123,6 +123,7 @@ class RecordingResponse(BaseModel):
     id: str
     status: Literal["recording", "stopped", "expired"]
     live_view_url: str | None = Field(serialization_alias="liveViewUrl")
+    live_view_switching: bool = Field(serialization_alias="liveViewSwitching")
     steps: list[SetupStep]
     expires_at: datetime = Field(serialization_alias="expiresAt")
     blocked_reason: str | None = Field(serialization_alias="blockedReason")

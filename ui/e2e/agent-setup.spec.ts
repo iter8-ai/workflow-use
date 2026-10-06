@@ -1099,6 +1099,66 @@ test("preserves the saved username when rewriting a failed sign-in instruction",
   expect(saved.at(-1).config.stages[0].prompt).not.toContain("into Email");
 });
 
+for (const mode of ["create", "edit"]) {
+  for (const outcome of ["connected", "cancel", "old-host"]) {
+    test(`${mode} Google failure handles ${outcome}`, async ({ page }) => {
+      await page.goto(`${baseUrl}/host?scenario=${mode === "edit" ? "edit-" : ""}google-${outcome}`);
+      const setup = page.frameLocator("iframe");
+      if (mode === "create") await completeToTest(setup);
+      await setup.getByRole("button", { name: mode === "edit" ? "Test changes" : "Run test" }).click();
+      const result = setup.locator(mode === "edit" ? ".edit-result-failed" : ".run-status");
+      await expect(result).toContainText("Google sign-in needed");
+      await expect(result).toContainText("The agent needs a Google sign-in");
+      await expect(result).toContainText("Connect the Google account this website uses, then run the test again.");
+      await expect(result).not.toContainText("Change sign-in details");
+      if (mode === "create") await expect(setup.locator(".test-step.failed")).toHaveCount(1);
+      if (outcome === "old-host") {
+        await expect(result).toContainText("Open Credentials → Connect Google for this agent.");
+        await expect(result.getByRole("button", { name: "Connect Google" })).toHaveCount(0);
+        return;
+      }
+      if (outcome === "connected") {
+        if (mode === "edit") await result.scrollIntoViewIfNeeded();
+        await page.screenshot({ path: `e2e-artifacts/google-failure-${mode}.png` });
+      }
+      await result.getByRole("button", { name: "Connect Google" }).click();
+      await expect.poll(() => page.evaluate(() => window.__googleRequests)).toEqual([{ agentId: "agent-1" }]);
+      if (outcome === "connected") {
+        if (mode === "create") {
+          await expect(setup.getByText("Changes require a new test.")).toBeVisible();
+          await expect(result).toContainText("Not tested yet");
+        } else {
+          await expect(setup.getByText("Changed since this test")).toBeVisible();
+          await expect(result).toHaveCount(0);
+        }
+      } else {
+        await expect(result).toContainText("Google sign-in needed");
+        await expect(setup.getByText(mode === "edit" ? "Changed since this test" : "Changes require a new test.")).toHaveCount(0);
+      }
+    });
+  }
+}
+
+for (const mode of ["create", "edit"]) {
+  test(`${mode} shows the opening-window overlay without removing the browser`, async ({ page }) => {
+    await page.goto(`${baseUrl}/host?scenario=${mode === "edit" ? "edit-" : ""}window-switch`);
+    const setup = page.frameLocator("iframe");
+    if (mode === "create") {
+      await setup.getByLabel("Agent name").fill("Download statement");
+      await setup.getByLabel("Website address").fill("https://portal.example.test/reports");
+      await setup.getByLabel("What should the agent do?").fill("Download the statement.");
+      await setup.getByRole("button", { name: "Continue to demonstration" }).click();
+    } else await setup.getByRole("button", { name: "Re-demonstrate", exact: true }).click();
+    const frame = setup.locator(mode === "edit" ? ".edit-recording" : ".demonstrate .browser-frame");
+    await expect(frame.getByRole("status")).toHaveText("Opening the new window…");
+    await expect(frame.locator("iframe[title='Virtual browser']")).toBeAttached();
+    if (mode === "create") await page.screenshot({ path: "e2e-artifacts/opening-window-overlay.png" });
+    await page.evaluate(() => { window.__liveViewSwitching = false; });
+    await expect(frame.getByRole("status")).toHaveCount(0);
+    await expect(frame.locator("iframe[title='Virtual browser']")).toBeAttached();
+  });
+}
+
 test("accepts a rejected export sender, reruns, and shows the routed file", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=email-flow`);
   const setup = page.frameLocator("iframe");
@@ -2676,6 +2736,8 @@ function hostPage(url: string): string {
   let stopPolls = 0;
   window.__savedAgents = [];
   window.__credentialRequests = [];
+  window.__googleRequests = [];
+  window.__liveViewSwitching = true;
   window.__startUrls = [];
   window.__renameRequests = [];
   window.__publishRequests = [];
@@ -2820,7 +2882,7 @@ function hostPage(url: string): string {
     const fail = (error) => event.source.postMessage({ type: "workflow-use:response", version: 1, id: request.id, error }, event.origin);
     if (request.method === "ready") {
       if (scenario === "delayed-ready") setTimeout(() => send({ schedule: true }), 300);
-      else send({ schedule: true, mode: edit ? "edit" : "create", credentials: !["sign-in-unsupported", "edit-credentials-unsupported"].includes(scenario), emailRoutes: !legacy, chooseSchedule: !legacy && scenario !== "no-text" });
+      else send({ schedule: true, mode: edit ? "edit" : "create", credentials: !["sign-in-unsupported", "edit-credentials-unsupported"].includes(scenario), google: !scenario.endsWith("old-host"), emailRoutes: !legacy, chooseSchedule: !legacy && scenario !== "no-text" });
     } else if (request.method === "loadAgent") {
       if (scenario === "edit-missing") { fail("This agent no longer exists. It may have been deleted."); return; }
       if (!window.__loadAvailable) { fail("Loading failed. Try again."); return; }
@@ -2839,7 +2901,8 @@ function hostPage(url: string): string {
       if (scenario === "edit-credentials-legacy-reordered") { savedCredentials = [...savedCredentials].reverse(); send({ saved: savedCredentials }); return; }
       savedCredentials = request.params.kinds;
       send({ saved: savedCredentials, ...(edit && scenario !== "edit-credentials-legacy-add" ? { changed: true } : {}) });
-    } else if (request.method === "startRecording") { window.__startUrls.push(request.params.url); if (edit ? recordingExists : recordingActive) { fail("Finish the current demonstration first."); return; } recordingActive = true; recordingExists = true; send({ id: "recording-1", status: "recording", liveViewUrl: "https://live.browserbase.com/session", steps: edit ? [] : steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
+    } else if (request.method === "connectGoogle") { window.__googleRequests.push(request.params); send({ connected: !scenario.endsWith("cancel") });
+    } else if (request.method === "startRecording") { window.__startUrls.push(request.params.url); if (edit ? recordingExists : recordingActive) { fail("Finish the current demonstration first."); return; } recordingActive = true; recordingExists = true; send({ id: "recording-1", status: "recording", liveViewUrl: "https://live.browserbase.com/session", liveViewSwitching: scenario.endsWith("window-switch"), steps: edit ? [] : steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
     else if (scenario === "organized" && (request.method === "getRecording" || request.method === "stopRecording")) {
       // Polls: one while recording (download started), then completed; stop starts organizing; the next read has stages.
       window.__organizedReads = (window.__organizedReads ?? 0) + 1;
@@ -2859,7 +2922,7 @@ function hostPage(url: string): string {
         steps: stopped && !organizing ? recorded.map((step, index) => ({ ...step, stage: organized[index][0], description: organized[index][1] })) : recorded,
         downloads: [{ id: "file", name: "statement-2026-09.csv", state: downloadState }], organizing, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null });
     }
-    else if (request.method === "getRecording" || request.method === "stopRecording") { if (request.method === "stopRecording") recordingActive = false; send({ id: "recording-1", status: request.method === "getRecording" && recordingActive ? "recording" : "stopped", liveViewUrl: request.method === "getRecording" && recordingActive ? "https://live.browserbase.com/session" : null, steps: edit ? (request.method === "stopRecording" ? redemonstrationSteps : []) : steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
+    else if (request.method === "getRecording" || request.method === "stopRecording") { if (request.method === "stopRecording") recordingActive = false; send({ id: "recording-1", status: request.method === "getRecording" && recordingActive ? "recording" : "stopped", liveViewUrl: request.method === "getRecording" && recordingActive ? "https://live.browserbase.com/session" : null, liveViewSwitching: scenario.endsWith("window-switch") && window.__liveViewSwitching, steps: edit ? (request.method === "stopRecording" ? redemonstrationSteps : []) : steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
     else if (request.method === "cancelRecording") { recordingActive = false; recordingExists = false; send(undefined); }
     else if (request.method === "saveAgent") { if (window.__savedSchedule || scenario === "rerun-save-rejection" && window.__savedAgents.length > 0) fail("This agent is scheduled. Edit it in agent settings."); else { window.__savedAgents.push(request.params); send({ id: "agent-1" }); } }
     else if (request.method === "testAgent") { testAttempts += 1; window.__testArguments.push(request.params.arguments); exportSentAt = Date.now(); if (scenario === "email-cutoff" && window.__testArguments.length > 1) setTimeout(() => send({ id: "run-" + window.__testArguments.length }), 1000); else send({ id: "run-" + window.__testArguments.length }); }
@@ -2880,6 +2943,7 @@ function hostPage(url: string): string {
       }
       if (activityScenario.startsWith("activity-")) { const frame = activityFrame(request.params.runId); if (frame === null) fail("The connection to Reiterate was lost."); else send(frame); return; }
       if (scenario === "edit-fail-evidence") send({ status: "failed", failure: { kind: "website", message: "The download button was missing." }, stoppedAtStep: 2, confirmation: "The reports list opened, but no file was downloaded.", screens: [{ ...screen, thought: "Earlier screen" }, screen] });
+      else if (scenario.includes("google-")) send({ status: "failed", failure: { kind: "google", message: "Google sign-in requires an account, but no Google credentials are available." }, stoppedAtStep: 2, screens: [screen] });
       else if (scenario.startsWith("edit-failure-label-")) {
         const kind = scenario.slice("edit-failure-label-".length);
         send({ status: "failed", failure: kind === "missing" ? null : { kind, message: "The test could not finish." } });
