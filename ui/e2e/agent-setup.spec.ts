@@ -1563,6 +1563,46 @@ test("turns a demonstrated form field into a saved sign-in field", async ({ page
   expect(JSON.stringify(await page.evaluate(() => window.__savedAgents))).toContain("type exactly $password into Statement month.");
 });
 
+test("keeps the instruction when a field with a recorded selector becomes a saved sign-in field and back", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=hidden-field-target`);
+  const setup = page.frameLocator("iframe");
+  await describeAndDemonstrate(setup);
+  const instruction = setup.getByLabel("Step 2 description");
+  const kind = setup.getByLabel("Step 2 field type");
+
+  await kind.selectOption("username");
+  await expect(instruction).toHaveValue("Enter Email");
+  await kind.selectOption("");
+  await expect(instruction).toHaveValue("Enter Email");
+  await kind.selectOption("username");
+  await expect(instruction).toHaveValue("Enter Email");
+  await setup.getByRole("button", { name: "Continue to test" }).click();
+  await expect(setup.getByRole("heading", { name: "Verify agent can follow the process" })).toBeVisible();
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await expect(setup.getByText("The agent completed every step")).toBeVisible();
+  const saved = JSON.stringify(await page.evaluate(() => window.__savedAgents));
+  expect(saved).toContain("Enter Email: type exactly $username into the sign-in field.");
+  expect(saved).not.toContain("saved username in input[");
+});
+
+test("edit: keeps the instruction when a field with a recorded selector switches to a saved sign-in field and back", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-hidden-field-target`);
+  const setup = page.frameLocator("iframe");
+  const instruction = setup.getByLabel("Step 2 description");
+  const kind = setup.getByLabel("Step 2 field type");
+
+  await kind.selectOption("username");
+  await expect(instruction).toHaveValue("Enter Email");
+  await kind.selectOption("");
+  await expect(instruction).toHaveValue("Enter Email");
+  await setup.getByRole("button", { name: "Test changes" }).click();
+  await expect(setup.getByText("Test completed")).toBeVisible();
+  await expect(setup.getByRole("alert").filter({ hasText: "Go to step" })).toHaveCount(0);
+  const prompt = (await page.evaluate(() => window.__savedAgents)).at(-1).config.stages[0].prompt;
+  expect(prompt).toContain("2. Enter Email: clear the field so it is empty.");
+  expect(prompt).not.toContain("input[");
+});
+
 test("does not test a sign-in agent when the host has no credential support", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=sign-in-unsupported`);
   const setup = page.frameLocator("iframe");
@@ -2118,6 +2158,98 @@ test("explains publish availability and moves primary emphasis after a passed te
   await expect(setup.getByLabel("Step 1 description")).toBeDisabled();
 });
 
+test("points a step error at the current step, goes to it, and clears it once the step is rewritten", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=selector-step`);
+  const setup = page.frameLocator("iframe");
+  await describeAndDemonstrate(setup);
+
+  await setup.getByRole("button", { name: "Continue to test" }).click();
+  const alert = setup.getByRole("alert").filter({ hasText: "Go to step" });
+  await expect(alert).toHaveText("Step 3: Rewrite the instruction using what the control shows on screen, not a selector or screen coordinates.Go to step");
+  await expect(setup.getByRole("heading", { name: "Review and complete the setup" })).toBeVisible();
+  const instruction = setup.getByLabel("Step 3 description");
+  await expect(instruction).toHaveAttribute("aria-invalid", "true");
+  await expect(instruction).toHaveAccessibleDescription(/^Step 3: Rewrite the instruction/);
+  await expect(setup.locator(".review-step.step-invalid")).toHaveCount(1);
+  await expect(setup.getByLabel("Step 2 description")).not.toHaveAttribute("aria-invalid", "true");
+
+  await alert.getByRole("button", { name: "Go to step" }).click();
+  await expect(instruction).toBeFocused();
+  await expect(instruction).toBeInViewport();
+
+  await instruction.fill("Click Export");
+  await expect(alert).toHaveCount(0);
+  await expect(instruction).not.toHaveAttribute("aria-invalid", "true");
+  await expect(setup.locator(".step-invalid")).toHaveCount(0);
+  await setup.getByRole("button", { name: "Continue to test" }).click();
+  await expect(setup.getByRole("heading", { name: "Verify agent can follow the process" })).toBeVisible();
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await expect(setup.getByText("The agent completed every step")).toBeVisible();
+  const prompt = (await page.evaluate(() => window.__savedAgents)).at(-1).config.stages[0].prompt;
+  expect(prompt).toContain("2. Click the account selector.");
+  expect(prompt).not.toContain("#account");
+});
+
+test("removing the step a validation error is about clears the error and focuses the next step", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=selector-step`);
+  const setup = page.frameLocator("iframe");
+  await describeAndDemonstrate(setup);
+  await setup.getByRole("button", { name: "Continue to test" }).click();
+  await expect(setup.getByRole("alert").filter({ hasText: "Go to step" })).toBeVisible();
+  await setup.getByRole("button", { name: "Remove step 3", exact: true }).click();
+  await expect(setup.getByRole("alert")).toHaveCount(0);
+  await expect(setup.getByLabel("Step 3 description")).toHaveValue("Download the statement");
+  await expect(setup.getByLabel("Step 3 description")).toBeFocused();
+  await expect(setup.locator("[aria-invalid=\"true\"]")).toHaveCount(0);
+});
+
+test("sends a step error found on Test back to that step in Review", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=step-failure`);
+  const setup = page.frameLocator("iframe");
+  await completeToTest(setup);
+  await setup.getByRole("button", { name: "Run test" }).click();
+  await expect(setup.getByText("Stuck at step 2")).toBeVisible();
+  await setup.getByLabel("Step 2 instruction").fill("Click #export > button");
+  await setup.getByRole("button", { name: "Run test again" }).click();
+  const alert = setup.getByRole("alert").filter({ hasText: "Go to step" });
+  await expect(alert).toHaveText("Step 2: Rewrite the instruction using what the control shows on screen, not a selector or screen coordinates.Go to step");
+  expect(await page.evaluate(() => window.__testArguments)).toHaveLength(1);
+
+  await alert.getByRole("button", { name: "Go to step" }).click();
+  await expect(setup.getByRole("heading", { name: "Review and complete the setup" })).toBeVisible();
+  const instruction = setup.getByLabel("Step 2 description");
+  await expect(instruction).toBeFocused();
+  await expect(instruction).toHaveValue("Click #export > button");
+  await expect(instruction).toHaveAttribute("aria-invalid", "true");
+});
+
+test("edit: names the current step for a validation error, goes to it, and clears it when the step is removed", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-selector-step`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByRole("button", { name: "Test changes" }).click();
+  const alert = setup.getByRole("alert").filter({ hasText: "Go to step" });
+  await expect(alert).toHaveText("Step 3: Rewrite the instruction using what the control shows on screen, not a selector or screen coordinates.Go to step");
+  expect(await page.evaluate(() => window.__savedAgents)).toEqual([]);
+  const instruction = setup.getByLabel("Step 3 description");
+  await expect(instruction).toHaveAttribute("aria-invalid", "true");
+  await expect(instruction).toHaveAccessibleDescription(/^Step 3: Rewrite the instruction/);
+  await expect(setup.locator(".edit-step.step-invalid")).toHaveCount(1);
+
+  await alert.getByRole("button", { name: "Go to step" }).click();
+  await expect(instruction).toBeFocused();
+  await expect(instruction).toBeInViewport();
+
+  await setup.getByRole("button", { name: "Remove step 3", exact: true }).click();
+  await expect(alert).toHaveCount(0);
+  await expect(setup.getByLabel("Step 3 description")).toHaveValue("Download the statement");
+  await expect(setup.getByLabel("Step 3 description")).toBeFocused();
+  await setup.getByRole("button", { name: "Test changes" }).click();
+  await expect(setup.getByText("Test completed")).toBeVisible();
+  const prompt = (await page.evaluate(() => window.__savedAgents)).at(-1).config.stages[0].prompt;
+  expect(prompt).toContain("2. Click the account selector.");
+  expect(prompt).not.toContain("#account");
+});
+
 test("inserts an empty focused instruction and blocks testing until it is filled", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=edit`);
   const setup = page.frameLocator("iframe");
@@ -2127,10 +2259,19 @@ test("inserts an empty focused instruction and blocks testing until it is filled
   await expect(instruction).toBeFocused();
   await expect(instruction).toHaveAttribute("placeholder", "Describe the action");
   await setup.getByRole("button", { name: "Test changes" }).click();
-  await expect(setup.getByRole("alert")).toHaveText("Add an instruction for step 3 before testing.");
+  const alert = setup.getByRole("alert");
+  await expect(alert).toHaveText("Step 3: Add an instruction for this step.Go to step");
+  await expect(instruction).toHaveAttribute("aria-invalid", "true");
+  await expect(instruction).toHaveAccessibleDescription("Step 3: Add an instruction for this step.");
+  await expect(setup.locator(".edit-step.step-invalid")).toHaveCount(1);
   expect(await page.evaluate(() => window.__savedAgents)).toEqual([]);
   expect(await page.evaluate(() => window.__testArguments)).toEqual([]);
+  await alert.getByRole("button", { name: "Go to step" }).click();
+  await expect(instruction).toBeFocused();
+  await expect(instruction).toBeInViewport();
   await instruction.fill("Open the downloaded file");
+  await expect(alert).toHaveCount(0);
+  await expect(instruction).not.toHaveAttribute("aria-invalid", "true");
   await setup.getByRole("button", { name: "Test changes" }).click();
   await expect(setup.getByText("Test completed")).toBeVisible();
 });
@@ -3029,10 +3170,19 @@ function hostPage(url: string, scenario: string | null): string {
   window.__loadAvailable = scenario !== "edit-load-error";
   const edit = scenario.startsWith("edit");
   const staged = scenario === "edit-staged";
+  // A legitimate "selector" label with a recorded selector target, then an instruction written as a selector.
+  const selectorSteps = [
+    { id: "account", type: "click", description: "Click the account selector", target: "#account > button" },
+    { id: "4c793770-6a98-4bc5-b4f9-7fb4d4bcc847", type: "click", description: "Click #export > button", target: "Export" },
+  ];
+  // A form field the recorder kept only as a selector; the instruction names it.
+  const hiddenFieldSteps = [{ id: "email-field", type: "input", description: "Enter Email", target: "input[name=email]", value: "reports@example.test" }];
   const editSteps = scenario === "edit-date" ? [
     { id: "to-date", type: "date", description: "Enter the To date", target: "To", date: { value: "2026-09-06", format: "parts", rule: null }, parts: [{ id: "to-day", type: "input", description: "Enter the To day", target: "day", value: "06" }, { id: "to-month", type: "input", description: "Enter the To month", target: "month", value: "09" }, { id: "to-year", type: "input", description: "Enter the To year", target: "year", value: "2026" }] },
   ] : [
     { id: "open-reports", type: "click", description: "Open the reports section", target: "Reports", expectedOutcome: "The reports list is visible", ...(staged ? { stage: "Open reports" } : {}) },
+    ...(scenario === "edit-selector-step" ? selectorSteps : []),
+    ...(scenario === "edit-hidden-field-target" ? hiddenFieldSteps : []),
     { id: "download", type: "click", description: "Download the statement", target: "Download statement", ...(staged ? { stage: "Download" } : {}) },
   ];
   const redemonstrationSteps = [{ id: "download-refreshed", type: "click", description: "Download the refreshed statement", target: "Download statement" }];
@@ -3064,6 +3214,8 @@ function hostPage(url: string, scenario: string | null): string {
       { id: "choose-month", type: "input", description: "Fill in Statement month", target: "Statement month", value: "September 2026" },
       { id: "choose-format", type: "select_change", description: "Choose PDF in Format", target: "Format", value: "PDF" },
     ] : []),
+    ...(scenario === "selector-step" ? selectorSteps : []),
+    ...(scenario === "hidden-field-target" ? hiddenFieldSteps : []),
     ...(scenario === "select-failure" ? [{ id: "choose-format", type: "select_change", description: "Choose PDF in Format", target: "Format", value: "PDF" }] : []),
     ...(scenario === "many-steps" ? Array.from({ length: 60 }, (_, index) => ({ id: "scroll-" + index, type: "click", description: "Recorded action " + (index + 1), target: "Item " + (index + 1) })) : []),
     ...(["ten-steps", "fixed-dates"].includes(scenario) ? Array.from({ length: 8 }, (_, index) => ({ id: "filter-" + index, type: "click", description: "Apply report filter " + (index + 1), target: "Filter " + (index + 1), expectedOutcome: index % 2 ? "The filtered list is visible" : null })) : []),

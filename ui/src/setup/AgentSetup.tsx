@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { applyOrganizedSteps, compileAgent, credentialKinds, dateRuleChoices, dateRuleLabel, doneWhenOptions, draftChanges, findUnambiguousEmailStep, formatDate, groupSteps, mergeDateSteps, openQuestions, replaceStepsFrom, requiredCredentials, resolveDateRule, type CredentialKind, type DateRule, type DoneWhen, type SetupDraft, type SetupStep } from "./compiler";
+import { applyOrganizedSteps, compileAgent, credentialKinds, dateRuleChoices, dateRuleLabel, doneWhenOptions, draftChanges, findUnambiguousEmailStep, formatDate, groupSteps, mergeDateSteps, openQuestions, replaceStepsFrom, requiredCredentials, resolveDateRule, StepValidationError, usableTarget, type CredentialKind, type DateRule, type DoneWhen, type SetupDraft, type SetupStep } from "./compiler";
 import { browserbaseLiveViewUrl, createHostBridge, HostRequestTimeoutError, type EditAgent as EditAgentData, type HostBridge, type RecordedDownload, type Recording } from "./host";
 import { HelpTip } from "./HelpTip";
 import { RunScreen, RunView } from "./RunView";
@@ -65,6 +65,9 @@ export default function AgentSetup() {
   const [connecting, setConnecting] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [stepError, setStepError] = useState<StepValidationError | null>(null);
+  const [stepFocus, setStepFocus] = useState<string | null>(null);
+  const stepFieldRefs = useRef<Record<string, HTMLInputElement | HTMLTextAreaElement | null>>({});
   const [notice, setNotice] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
   const [confirmClose, setConfirmClose] = useState(false);
@@ -72,6 +75,8 @@ export default function AgentSetup() {
   const draft = useMemo<SetupDraft>(() => ({ name, url, goal, steps, inputs: [], doneWhen }), [name, url, goal, steps, doneWhen]);
   const liveViewUrl = browserbaseLiveViewUrl(recording?.liveViewUrl ?? null);
   const canContinue = testRun?.status === "succeeded" && (doneWhen.kind !== "email" || emailStatus === "routed") && testRun.revision === revision && !busy;
+  // The number is read from the current order, so it stays right if steps move.
+  const stepErrorIndex = stepError === null ? -1 : steps.findIndex((step) => step.id === stepError.stepId);
 
   // A new stage replaces the button that opened it, so focus would fall back to the page. Start on the new stage's heading.
   const contentRef = useRef<HTMLElement>(null);
@@ -84,6 +89,13 @@ export default function AgentSetup() {
     heading.tabIndex = -1;
     heading.focus({ preventScroll: true });
   }, [screen]);
+
+  // Runs after the heading focus above, so going back to Review for a step lands on that step.
+  useEffect(() => {
+    if (stepFocus === null) return;
+    setStepFocus(null);
+    focusStepInstruction(stepFieldRefs.current, stepFocus);
+  }, [stepFocus]);
 
   useEffect(() => {
     const previousTitle = document.title;
@@ -190,7 +202,10 @@ export default function AgentSetup() {
       void bridge.request("getRecording", { id: recording.id }).then((next) => {
         if (!active) return;
         setRecording(next);
-        if (next.organizing !== true) setSteps((current) => mergeDateSteps(applyOrganizedSteps(current, recorded, next.steps)));
+        if (next.organizing !== true) {
+          setSteps((current) => mergeDateSteps(applyOrganizedSteps(current, recorded, next.steps)));
+          setStepError(null);
+        }
       }).catch(() => {
         // The recorded steps are already usable; organizing is only a readability improvement.
         if (active) setRecording((current) => current === null ? null : { ...current, organizing: false });
@@ -287,6 +302,17 @@ export default function AgentSetup() {
     invalidateTest();
   }
 
+  // A step's validation message is stale once the steps change; the next check reports a current one.
+  function changeSteps(next: SetupStep[] | ((current: SetupStep[]) => SetupStep[])): void {
+    setSteps(next);
+    setStepError(null);
+  }
+
+  function showError(value: unknown): void {
+    if (value instanceof StepValidationError) setStepError(value);
+    else setError(errorMessage(value));
+  }
+
   async function startRecording(): Promise<void> {
     if (bridge === undefined || bridge === null) {
       return;
@@ -314,7 +340,7 @@ export default function AgentSetup() {
         },
       });
       setRecording(next);
-      setSteps(mergeDateSteps(next.steps));
+      changeSteps(mergeDateSteps(next.steps));
       setScreen("demonstrate");
     } catch (requestError) {
       setError(errorMessage(requestError));
@@ -332,7 +358,7 @@ export default function AgentSetup() {
     try {
       const next = await bridge.request("stopRecording", { id: recording.id });
       setRecording(next);
-      setSteps(mergeDateSteps(next.steps));
+      changeSteps(mergeDateSteps(next.steps));
     } catch (requestError) {
       setError(errorMessage(requestError));
     } finally {
@@ -361,17 +387,18 @@ export default function AgentSetup() {
   }
 
   function updateStep(id: string, updates: Partial<SetupStep>): void {
-    setSteps((current) => current.map((step) => step.id === id ? updateStepFields(step, updates) : step));
+    changeSteps((current) => current.map((step) => step.id === id ? updateStepFields(step, updates) : step));
     invalidateTest();
   }
 
   function removeStep(id: string): void {
-    setSteps((current) => current.filter((step) => step.id !== id));
+    changeSteps((current) => current.filter((step) => step.id !== id));
     invalidateTest();
   }
 
   function continueToTest(): void {
     setError(null);
+    setStepError(null);
     try {
       // Done when is edited on Test; validate it when saving/running, so users can return to correct it.
       compileAgent({ ...draft, doneWhen: { kind: "file" } }, otpSource);
@@ -382,7 +409,7 @@ export default function AgentSetup() {
       setRecording((current) => current?.organizing === true ? { ...current, organizing: false } : current);
       setScreen("test");
     } catch (compileError) {
-      setError(errorMessage(compileError));
+      showError(compileError);
     }
   }
 
@@ -441,12 +468,13 @@ export default function AgentSetup() {
       return;
     }
     setError(null);
+    setStepError(null);
     setNotice(null);
     let config: ReturnType<typeof compileAgent>;
     try {
       config = compileAgent({ ...draft, steps: nextSteps, doneWhen: nextDoneWhen }, otpSource);
     } catch (compileError) {
-      setError(errorMessage(compileError));
+      showError(compileError);
       return;
     }
     setBusy(true);
@@ -469,7 +497,8 @@ export default function AgentSetup() {
       const started = await bridge.request("testAgent", { agentId: saved.id, arguments: {} });
       setTestRun({ id: started.id, status: "running", files: [], revision: nextRevision, screens: [], startedAt });
     } catch (requestError) {
-      setError(errorMessage(requestError));
+      // The second compile can still find a step problem once the saved one-time code source is known.
+      showError(requestError);
     } finally {
       setBusy(false);
     }
@@ -501,7 +530,7 @@ export default function AgentSetup() {
       const nextSteps = steps.map((step, index) => index === emailStepIndex
         ? { ...step, value: route.address, description: step.description.replace(step.value ?? "", route.address),
           expectedOutcome: step.expectedOutcome ? step.expectedOutcome.split(step.value!).join(route.address) : step.expectedOutcome } : step);
-      setSteps(nextSteps);
+      changeSteps(nextSteps);
       setDoneWhen(nextDoneWhen);
       invalidateTest();
       await runTest(nextDoneWhen, nextSteps, revision + 1);
@@ -521,7 +550,7 @@ export default function AgentSetup() {
   }
 
   function editTestStep(id: string, description: string): void {
-    setSteps((current) => current.map((step): SetupStep => {
+    changeSteps((current) => current.map((step): SetupStep => {
       if (step.id !== id) return step;
       if (step.type === "click") {
         return { ...step, description, target: /^Click .+/.test(description) ? description.slice(6) : null };
@@ -602,7 +631,7 @@ export default function AgentSetup() {
       if (recording !== null) await bridge.request("cancelRecording", { id: recording.id });
       setScreen("describe");
       setRecording(null);
-      setSteps([]);
+      changeSteps([]);
       setDoneWhen({ kind: "file" });
       setEmailStatus(null);
       setEmailFrom(null);
@@ -683,10 +712,11 @@ export default function AgentSetup() {
         <section className="setup-content" ref={contentRef} aria-busy={busy}>
           {connecting && <p className="setup-status" role="status">Connecting to Reiterate</p>}
           {error !== null && <div className="setup-error" role="alert"><span>{error}</span><button type="button" className="button button-quiet" onClick={() => setError(null)}>Dismiss</button></div>}
+          {stepError !== null && stepErrorIndex >= 0 && <div className="setup-error" role="alert"><span id="setup-step-error">Step {stepErrorIndex + 1}: {stepError.message}</span><button type="button" className="button button-quiet" onClick={() => { setScreen("review"); setStepFocus(stepError.stepId); }}>Go to step</button></div>}
           {notice !== null && <p className="setup-notice" role="status">{notice}</p>}
           {screen === "describe" && <Describe name={name} url={url} goal={goal} busy={busy || connecting} onName={(value) => setDraftField(setName, value)} onUrl={(value) => setDraftField(setUrl, value)} onGoal={(value) => setDraftField(setGoal, value)} onContinue={() => void startRecording()} />}
           {screen === "demonstrate" && <Demonstrate recording={recording} steps={steps} liveViewUrl={liveViewUrl} busy={busy} onStop={() => void stopRecording()} onReview={continueToReview} onReset={() => void reset()} />}
-          {screen === "review" && <Review steps={steps} goal={goal} organizing={recording?.organizing === true} busy={busy} credentialsAllowed={credentialsAllowed} savedCredentials={savedCredentials} onRequestOtp={() => void requestReviewOtp()} onUpdateStep={updateStep} onRemoveStep={removeStep} onMergeSteps={(ids) => { setSteps((current) => combineDateSteps(current, ids)); invalidateTest(); }} onUndoMergedStep={(id) => { setSteps((current) => undoDateMerge(current, id)); invalidateTest(); }} onMoveStep={(index, delta) => { setSteps((current) => moveStep(current, index, delta)); invalidateTest(); }} onBack={() => setScreen("demonstrate")} onContinue={continueToTest} onInsert={() => { const id = `inserted-${Date.now()}`; setSteps((current) => [...current, { id, type: "agent", description: "" }]); invalidateTest(); }} />}
+          {screen === "review" && <Review steps={steps} goal={goal} organizing={recording?.organizing === true} busy={busy} credentialsAllowed={credentialsAllowed} savedCredentials={savedCredentials} fieldRefs={stepFieldRefs} stepError={stepError !== null && stepErrorIndex >= 0 ? { stepId: stepError.stepId, messageId: "setup-step-error" } : undefined} onRequestOtp={() => void requestReviewOtp()} onUpdateStep={updateStep} onRemoveStep={removeStep} onMergeSteps={(ids) => { changeSteps((current) => combineDateSteps(current, ids)); invalidateTest(); }} onUndoMergedStep={(id) => { changeSteps((current) => undoDateMerge(current, id)); invalidateTest(); }} onMoveStep={(index, delta) => { changeSteps((current) => moveStep(current, index, delta)); invalidateTest(); }} onBack={() => setScreen("demonstrate")} onContinue={continueToTest} onInsert={() => { const id = `inserted-${Date.now()}`; changeSteps((current) => [...current, { id, type: "agent", description: "" }]); invalidateTest(); }} />}
           {screen === "test" && <Test steps={steps} url={url} scheduleRecovery={scheduleRecovery} emailRoutesAllowed={emailRoutesAllowed} textAllowed={chooseScheduleAllowed} googleAllowed={googleAllowed} doneWhen={doneWhen} emailStatus={emailStatus} emailFrom={emailFrom} emailFiles={emailFiles} canContinue={canContinue} onDoneWhen={chooseDoneWhen} onChooseEmail={() => void chooseEmailDoneWhen()} onAllowEmail={() => void allowEmailSender()} onChangeCredentials={() => void changeCredentials()} onConnectGoogle={() => void connectGoogle()} run={testRun} busy={busy} onRun={() => void runTest()} onStop={() => void stopTest()} onSchedule={() => void schedule()} onBack={() => setScreen("review")} onEditStep={editTestStep} />}
           {screen === "schedule" && !scheduleSaved && <div className="setup-panel"><div className="stage-title"><h2>Schedule</h2><p>Your test passed. Scheduled runs repeat the tested steps.</p></div><p>Finish setup to run manually, or choose a daily schedule.</p>{scheduleAllowed && <><label className="result-check"><input type="checkbox" aria-label="Schedule daily" checked={cron !== ""} disabled={busy || scheduleRecovery} onChange={(event) => setCron(event.target.checked ? localTimeToUtcCron(dailyTime) : "")} />Schedule daily</label>{cron !== "" && <label>Time of day<input type="time" aria-label="Time of day" value={dailyTime} disabled={busy || scheduleRecovery} onChange={(event) => { setDailyTime(event.target.value); if (event.target.value) setCron(localTimeToUtcCron(event.target.value)); }} /><span className="field-note">Your local time. The schedule is stored in UTC.</span></label>}</>}<div className="setup-actions"><button className="button button-quiet" type="button" onClick={() => setScreen("test")} disabled={busy || scheduleRecovery}>Back to test</button><button className="button button-primary" type="button" onClick={() => void saveInlineSchedule()} disabled={!canContinue || busy || (cron !== "" && dailyTime === "")}>{cron.trim() ? "Schedule agent" : "Finish setup"}</button></div></div>}
           {scheduleSaved && <div className="setup-panel"><div className="stage-title"><h2>Your agent is ready</h2><p>{cron.trim() ? "The schedule is saved. It will repeat the tested workflow." : "Run this agent manually whenever you need it."}</p></div><div className="setup-actions"><button className="button button-primary" type="button" onClick={() => void close()} disabled={busy}>Open agent</button></div></div>}
@@ -716,6 +746,7 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
   const [fromStep, setFromStep] = useState(0);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [stepError, setStepError] = useState<StepValidationError | null>(null);
   const [conflict, setConflict] = useState<{ updatedBy: string | null; updatedAt: string | null } | null>(null);
   const [publishOpen, setPublishOpen] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
@@ -738,7 +769,7 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
   const dialogOpen = publishOpen || conflict !== null || confirmClose || screenOpen;
 
   const load = async (): Promise<void> => {
-    setBusy(true); setError(null);
+    setBusy(true); setError(null); setStepError(null);
     try {
       const loaded = await bridge.request("loadAgent", {});
       setAgent(loaded);
@@ -768,7 +799,10 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
     const timer = window.setTimeout(() => void bridge.request("getRecording", { id: recording.id }).then((next) => {
       if (!active) return;
       setRecording(next);
-      if (next.organizing !== true) setDraft((current) => current === null ? current : { ...current, steps: mergeDateSteps(applyOrganizedSteps(current.steps, recorded, next.steps)) });
+      if (next.organizing !== true) {
+        setDraft((current) => current === null ? current : { ...current, steps: mergeDateSteps(applyOrganizedSteps(current.steps, recorded, next.steps)) });
+        setStepError(null);
+      }
     }).catch(() => { if (active) setRecording((current) => current === null ? null : { ...current, organizing: false }); }), 1500);
     return () => { active = false; window.clearTimeout(timer); };
   }, [bridge, recording]);
@@ -863,7 +897,8 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
   const openQuestionCount = openDateQuestionCount + openOtpQuestionCount;
   const publishHelp = openQuestionCount > 0 ? "Answer all open questions before testing." : agent.internal ? "Managed by Operations. Publishing changes is disabled." : !changed ? "Make a change to publish." : !succeeded ? "Test your changes before publishing." : !checked ? "Confirm you checked the result." : "Ready to publish your changes.";
   const selectedFromStep = Math.min(fromStep, Math.max(0, draft.steps.length - 1));
-  const resetTest = (): void => { setTestRun(null); setChecked(false); setNotice(null); setError(null); };
+  const resetTest = (): void => { setTestRun(null); setChecked(false); setNotice(null); setError(null); setStepError(null); };
+  const stepErrorIndex = stepError === null ? -1 : draft.steps.findIndex((step) => step.id === stepError.stepId);
   const update = (next: Partial<SetupDraft>): void => { setDraft((current) => current === null ? current : { ...current, ...next }); resetTest(); };
   const updateStage = (index: number, next: Record<string, unknown>): void => { setStages((current) => current.map((stage, i) => i === index && isObject(stage) ? { ...stage, ...next } : stage)); resetTest(); };
   const instructions = raw ? stages.filter(isObject).filter((stage) => stage.type === "agent").map((stage) => String(stage.prompt ?? "")).join("\n") : JSON.stringify(draft.steps);
@@ -925,9 +960,7 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
       setStageLimitErrors(errors);
       if (Object.values(errors).some(Boolean)) return;
     }
-    const emptyStep = raw ? -1 : draft.steps.findIndex((step) => !step.description.trim());
-    if (emptyStep !== -1) { setError(`Add an instruction for step ${emptyStep + 1} before testing.`); return; }
-    setBusy(true); setOperation("test"); setError(null); setTestRun(null); setChecked(false);
+    setBusy(true); setOperation("test"); setError(null); setStepError(null); setTestRun(null); setChecked(false);
     // The test runs the steps shown now; a late reorganization would no longer match it.
     setRecording((current) => current?.organizing === true ? { ...current, organizing: false } : current);
     try {
@@ -935,7 +968,7 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
       await bridge.request("saveDraft", { draft, config });
       const started = await bridge.request("testAgent", { agentId: agent.agentId, arguments: {} });
       setTestRun({ id: started.id, status: "running" }); setChecked(false);
-    } catch (e) { setError(errorMessage(e)); }
+    } catch (e) { if (e instanceof StepValidationError) setStepError(e); else setError(errorMessage(e)); }
     finally { setBusy(false); setOperation(null); }
   };
   const stopTest = async (): Promise<void> => {
@@ -1092,6 +1125,7 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
     <section className="edit-layout" aria-busy={busy}>
       {agent.internal && <p className="edit-notice"><b>Read-only internal agent</b><br />Managed by Operations. Publishing changes is disabled.</p>}
       {error && <div className="edit-result edit-result-failed" role="alert">{error}</div>}
+      {stepError !== null && stepErrorIndex >= 0 && <div className="edit-result edit-result-failed" role="alert"><span id="edit-step-error">Step {stepErrorIndex + 1}: {stepError.message}</span><button className="text-button" onClick={() => focusStepInstruction(fieldRefs.current, stepError.stepId)}>Go to step</button></div>}
       {notice && <p className="edit-result edit-result-succeeded" role="status">{notice}</p>}
       {shownRun && <section className="edit-test" ref={testViewRef} aria-label="Test run"><div className="workbench-grid">
         <TestBrowser run={shownRun} url={draft.url} passed={shownRun.status === "succeeded"} serviceFailure={shownRun.failure?.kind === "service"} screenIndex={screenIndex} onSelectScreen={setScreenIndex} />
@@ -1104,7 +1138,7 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
           </div> : null; })}
           {stages.some((stage) => !isObject(stage) || stage.type !== "agent") && <p className="raw-preserved">Then: {stages.filter((stage) => !isObject(stage) || stage.type !== "agent").map((stage) => preservedStageLabel(isObject(stage) ? stage : null)).join(" · ")} — kept as is</p>}
         </section> : <section className="edit-card edit-instructions"><h2>Steps</h2><p className="field-note expected-outcome-help"><HelpTip label="Expected outcome">The agent checks this before moving on. Leave empty unless a step is easy to get wrong.</HelpTip></p>
-          <StepEditor variant="edit" steps={draft.steps} goal={draft.goal} busy={readOnly} credentialsAllowed={credentialsAllowed} savedCredentials={agent.credentials?.saved ?? []} fieldRefs={fieldRefs} onRequestOtp={() => void requestEditOtp()} onUpdateStep={(id, updates) => update({ steps: draft.steps.map((step) => step.id === id ? updateStepFields(step, updates) : step) })} onRemoveStep={(id) => update({ steps: draft.steps.filter((step) => step.id !== id) })} onMergeSteps={(ids) => update({ steps: combineDateSteps(draft.steps, ids) })} onUndoMergedStep={(id) => update({ steps: undoDateMerge(draft.steps, id) })} onMoveStep={(index, delta) => update({ steps: moveStep(draft.steps, index, delta) })} onRenameStage={(index, name) => update({ steps: renameStageAt(draft.steps, index, name) })} onInsert={insertStep} />
+          <StepEditor variant="edit" steps={draft.steps} goal={draft.goal} busy={readOnly} credentialsAllowed={credentialsAllowed} savedCredentials={agent.credentials?.saved ?? []} fieldRefs={fieldRefs} stepError={stepError !== null && stepErrorIndex >= 0 ? { stepId: stepError.stepId, messageId: "edit-step-error" } : undefined} onRequestOtp={() => void requestEditOtp()} onUpdateStep={(id, updates) => update({ steps: draft.steps.map((step) => step.id === id ? updateStepFields(step, updates) : step) })} onRemoveStep={(id) => update({ steps: draft.steps.filter((step) => step.id !== id) })} onMergeSteps={(ids) => update({ steps: combineDateSteps(draft.steps, ids) })} onUndoMergedStep={(id) => update({ steps: undoDateMerge(draft.steps, id) })} onMoveStep={(index, delta) => update({ steps: moveStep(draft.steps, index, delta) })} onRenameStage={(index, name) => update({ steps: renameStageAt(draft.steps, index, name) })} onInsert={insertStep} />
           <div className="redemo-controls">
             <div className="edit-actions"><label>Re-demonstrate from step<select aria-label="Re-demonstrate from step" value={selectedFromStep} disabled={readOnly || draft.steps.length === 0} onChange={(e) => setFromStep(Number(e.target.value))}>{draft.steps.map((_, index) => <option key={index} value={index}>{index + 1}</option>)}</select></label>
               <button className="button button-quiet" disabled={readOnly} onClick={() => void startRecording()}>Re-demonstrate</button>
@@ -1173,6 +1207,13 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
 }
 
 function validStepLimit(value: string): boolean { return value.trim() !== "" && Number.isInteger(Number(value)) && Number(value) >= 1 && Number(value) <= 128; }
+
+/** Show the step a validation message is about: bring its instruction into view and focus it. */
+function focusStepInstruction(fields: Record<string, HTMLInputElement | HTMLTextAreaElement | null>, stepId: string): void {
+  const field = fields[`step:${stepId}:description`];
+  field?.scrollIntoView({ block: "center" });
+  field?.focus({ preventScroll: true });
+}
 
 function updateStepFields(step: SetupStep, updates: Partial<SetupStep>): SetupStep {
   const next = { ...step, ...updates };
@@ -1358,6 +1399,8 @@ type StepEditorProps = {
   onContinue?(): void;
   onBack?(): void;
   fieldRefs?: { current: Record<string, HTMLInputElement | HTMLTextAreaElement | null> };
+  /** The step a shown validation message is about, and the id of that message. */
+  stepError?: { stepId: string; messageId: string };
 };
 
 function StepEditor(props: StepEditorProps): JSX.Element {
@@ -1390,10 +1433,10 @@ function StepEditor(props: StepEditorProps): JSX.Element {
     if (value) props.onUpdateStep(stepId, { date: { ...props.steps.find((step) => step.id === stepId)!.date!, rule: { kind: "described", text: value } } });
   };
   const setFieldKind = (step: SetupStep, kind: CredentialKind | ""): void => {
-    const field = step.target ?? "the field";
-    props.onUpdateStep(step.id, kind === ""
-      ? { type: "input", value: "", description: `Fill in ${field}` }
-      : { type: "credential", value: kind, description: `Enter the saved ${credentialLabel(kind)} in ${field}` });
+    // A recorded selector is not a field name, so the instruction the user wrote stays as it is.
+    const field = step.target == null ? "the field" : usableTarget(step);
+    const description = field === undefined ? {} : { description: kind === "" ? `Fill in ${field}` : `Enter the saved ${credentialLabel(kind)} in ${field}` };
+    props.onUpdateStep(step.id, kind === "" ? { type: "input", value: "", ...description } : { type: "credential", value: kind, ...description });
   };
   const toggleSelected = (id: string): void => setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
   return <>
@@ -1452,8 +1495,9 @@ function StepEditorRow(props: StepEditorProps & { step: SetupStep; index: number
     radios[next]?.focus();
   };
   const answer = (rule: DateRule): void => props.onUpdateStep(props.step.id, { date: { ...props.step.date!, rule } });
+  const invalid = props.stepError?.stepId === props.step.id;
   const content = <>
-    <label className="step-instruction"><span className="step-number-prefix" aria-hidden="true">{props.index + 1}</span><span className={props.variant === "review" ? "visually-hidden" : "edit-field-label"}>Instruction</span><textarea ref={(field) => { if (props.fieldRefs) { props.fieldRefs.current[`step:${props.step.id}:description`] = field; props.fieldRefs.current[`removed:${props.step.id}`] = field; } }} rows={1} placeholder="Describe the action" aria-label={`Step ${props.index + 1} description`} value={props.step.description} disabled={props.busy} onChange={(event) => props.onUpdateStep(props.step.id, { description: event.target.value })} /></label>
+    <label className="step-instruction"><span className="step-number-prefix" aria-hidden="true">{props.index + 1}</span><span className={props.variant === "review" ? "visually-hidden" : "edit-field-label"}>Instruction</span><textarea ref={(field) => { if (props.fieldRefs) { props.fieldRefs.current[`step:${props.step.id}:description`] = field; props.fieldRefs.current[`removed:${props.step.id}`] = field; } }} rows={1} placeholder="Describe the action" aria-label={`Step ${props.index + 1} description`} aria-invalid={invalid || undefined} aria-describedby={invalid ? props.stepError?.messageId : undefined} value={props.step.description} disabled={props.busy} onChange={(event) => props.onUpdateStep(props.step.id, { description: event.target.value })} /></label>
     {props.step.type === "date" && <div className="date-preview"><span>{selectedRule === null ? "Not answered" : selectedChoice?.label ?? dateRuleLabel(selectedRule, new Date(), props.step.date?.format ?? "parts")}</span><b>→</b><span>{selectedValue}</span>{selectedRule !== null && <button type="button" className="text-button" disabled={props.busy} onClick={() => props.onUpdateStep(props.step.id, { date: { ...props.step.date!, rule: null } })}>Change answer</button>}</div>}
     {props.variant === "review" && <span id={`step-${props.step.id}-expected-outcome-help`} className="visually-hidden">The agent checks this before moving on. Leave empty unless a step is easy to get wrong.</span>}
     {props.variant === "review" ? props.expectedOutcomeOpen ? <label className="review-expected-outcome"><span className="edit-field-label">Expected outcome (optional)</span><textarea ref={(field) => { if (props.fieldRefs) props.fieldRefs.current[`step:${props.step.id}:outcome`] = field; }} rows={1} placeholder="What should the agent see after this step? (optional)" aria-label={`Step ${props.index + 1} expected outcome`} aria-describedby={`step-${props.step.id}-expected-outcome-help`} value={props.step.expectedOutcome ?? ""} disabled={props.busy} onChange={(event) => props.onUpdateStep(props.step.id, { expectedOutcome: event.target.value || undefined })} /></label> : <button type="button" className="expected-outcome-disclosure" title="The agent checks this before moving on. Leave empty unless a step is easy to get wrong." aria-describedby={`step-${props.step.id}-expected-outcome-help`} disabled={props.busy} onClick={props.onExpectedOutcomeOpen}>Add expected outcome</button> : <label><span className="edit-field-label">Expected outcome (optional)</span><textarea ref={(field) => { if (props.fieldRefs) props.fieldRefs.current[`step:${props.step.id}:outcome`] = field; }} rows={1} placeholder="What should the agent see after this step? (optional)" aria-label={`Step ${props.index + 1} expected outcome`} value={props.step.expectedOutcome ?? ""} disabled={props.busy} onChange={(event) => props.onUpdateStep(props.step.id, { expectedOutcome: event.target.value || undefined })} /></label>}
@@ -1465,11 +1509,11 @@ function StepEditorRow(props: StepEditorProps & { step: SetupStep; index: number
   </>;
   const mergeCandidate = props.step.type === "input" && isDateMergeCandidate(props.steps, props.index);
   const mergeNote = props.step.type === "date" && props.step.uiMerged === true && props.step.parts !== undefined && <p className="merge-note">Combined from {props.step.parts.length} recorded steps · <button type="button" className="text-button" onClick={() => props.onUndoMergedStep(props.step.id)} disabled={props.busy}>Undo</button></p>;
-  if (props.variant === "review") return <li className={`review-step${props.step.type === "download" ? " review-step-download" : ""}`}><div>{content}{mergeNote}</div><div className="edit-step-controls"><button type="button" className="icon-button" aria-label={`Move step ${props.index + 1} up`} disabled={props.busy || props.index === 0} onClick={() => props.onMoveStep?.(props.index, -1)}><EditIcon name="up" /></button><button type="button" className="icon-button" aria-label={`Move step ${props.index + 1} down`} disabled={props.busy || props.index === props.steps.length - 1} onClick={() => props.onMoveStep?.(props.index, 1)}><EditIcon name="down" /></button><button type="button" className="icon-button" aria-label={`Remove step ${props.index + 1}`} disabled={props.busy} onClick={() => props.onRemoveStep(props.step.id)}><EditIcon name="close" /></button></div>{mergeCandidate && <input type="checkbox" aria-label={`Select step ${props.index + 1} for date merge`} checked={props.selected} disabled={props.busy} onChange={() => props.onToggleSelected(props.step.id)} />}</li>;
-  return <div className="edit-step"><div>{content}{mergeNote}</div><div className="edit-step-controls"><button className="icon-button" aria-label={`Move step ${props.index + 1} up`} disabled={props.busy || props.index === 0} onClick={() => props.onMoveStep?.(props.index, -1)}><EditIcon name="up" /></button><button className="icon-button" aria-label={`Move step ${props.index + 1} down`} disabled={props.busy || props.index === props.steps.length - 1} onClick={() => props.onMoveStep?.(props.index, 1)}><EditIcon name="down" /></button><button className="icon-button" aria-label={`Remove step ${props.index + 1}`} disabled={props.busy} onClick={() => props.onRemoveStep(props.step.id)}><EditIcon name="close" /></button></div>{mergeCandidate && <input type="checkbox" aria-label={`Select step ${props.index + 1} for date merge`} checked={props.selected} disabled={props.busy} onChange={() => props.onToggleSelected(props.step.id)} />}</div>;
+  if (props.variant === "review") return <li className={`review-step${props.step.type === "download" ? " review-step-download" : ""}${invalid ? " step-invalid" : ""}`}><div>{content}{mergeNote}</div><div className="edit-step-controls"><button type="button" className="icon-button" aria-label={`Move step ${props.index + 1} up`} disabled={props.busy || props.index === 0} onClick={() => props.onMoveStep?.(props.index, -1)}><EditIcon name="up" /></button><button type="button" className="icon-button" aria-label={`Move step ${props.index + 1} down`} disabled={props.busy || props.index === props.steps.length - 1} onClick={() => props.onMoveStep?.(props.index, 1)}><EditIcon name="down" /></button><button type="button" className="icon-button" aria-label={`Remove step ${props.index + 1}`} disabled={props.busy} onClick={() => props.onRemoveStep(props.step.id)}><EditIcon name="close" /></button></div>{mergeCandidate && <input type="checkbox" aria-label={`Select step ${props.index + 1} for date merge`} checked={props.selected} disabled={props.busy} onChange={() => props.onToggleSelected(props.step.id)} />}</li>;
+  return <div className={`edit-step${invalid ? " step-invalid" : ""}`}><div>{content}{mergeNote}</div><div className="edit-step-controls"><button className="icon-button" aria-label={`Move step ${props.index + 1} up`} disabled={props.busy || props.index === 0} onClick={() => props.onMoveStep?.(props.index, -1)}><EditIcon name="up" /></button><button className="icon-button" aria-label={`Move step ${props.index + 1} down`} disabled={props.busy || props.index === props.steps.length - 1} onClick={() => props.onMoveStep?.(props.index, 1)}><EditIcon name="down" /></button><button className="icon-button" aria-label={`Remove step ${props.index + 1}`} disabled={props.busy} onClick={() => props.onRemoveStep(props.step.id)}><EditIcon name="close" /></button></div>{mergeCandidate && <input type="checkbox" aria-label={`Select step ${props.index + 1} for date merge`} checked={props.selected} disabled={props.busy} onChange={() => props.onToggleSelected(props.step.id)} />}</div>;
 }
 
-function Review(props: { steps: SetupStep[]; goal: string; organizing: boolean; busy: boolean; credentialsAllowed: boolean; savedCredentials: CredentialKind[]; onRequestOtp(): void; onUpdateStep(id: string, updates: Partial<SetupStep>): void; onRemoveStep(id: string): void; onMergeSteps(ids: string[]): void; onUndoMergedStep(id: string): void; onMoveStep(index: number, delta: number): void; onBack(): void; onContinue(): void; onInsert(): void }): JSX.Element {
+function Review(props: { steps: SetupStep[]; goal: string; organizing: boolean; busy: boolean; credentialsAllowed: boolean; savedCredentials: CredentialKind[]; fieldRefs: StepEditorProps["fieldRefs"]; stepError: StepEditorProps["stepError"]; onRequestOtp(): void; onUpdateStep(id: string, updates: Partial<SetupStep>): void; onRemoveStep(id: string): void; onMergeSteps(ids: string[]): void; onUndoMergedStep(id: string): void; onMoveStep(index: number, delta: number): void; onBack(): void; onContinue(): void; onInsert(): void }): JSX.Element {
   const renameStage = (index: number, name: string): void => { const group = groupSteps(props.steps)[groupSteps(props.steps).findIndex((item) => item.steps.some(({ index: itemIndex }) => itemIndex === index))]; group?.steps.forEach(({ step }) => props.onUpdateStep(step.id, { stage: name })); };
   return <div className="setup-panel review-panel"><div className="stage-title"><h2>Review and complete the setup</h2><p>Make each instruction clear. Typed text and choices are repeated on every run; sign-in fields use details you save in Reiterate.</p></div>{props.organizing && <p className="setup-notice organizing-notice" role="status"><span className="edit-spinner" aria-hidden="true" />Grouping your steps into stages and making them easier to read. You can edit while this finishes.</p>}<StepEditor variant="review" {...props} onRenameStage={renameStage} onInsert={props.onInsert} /></div>;
 }
