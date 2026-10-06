@@ -1420,6 +1420,10 @@ input.edit-stage:focus { border-color: #cfc5f2; outline: none; text-transform: n
 .edit-test-side { display: flex; min-width: 0; min-height: 0; flex-direction: column; gap: 16px; }
 .edit-test-side .test-rail { flex: 1 1 0px; min-height: 160px; }
 .edit-test-side .edit-publish { position: static; }
+/* A watched run: the agent name heads the page; the result card sits under the activity like Test & publish. */
+.run-agent .edit-title h1 { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #17182b; font-size: 18px; font-weight: 500; letter-spacing: -.01em; }
+.run-agent .run-read-error { color: #922e3d; }
+.run-agent .run-load-error { max-width: 640px; }
 @media (max-width: 900px) {
   .edit-test { min-height: 0; }
   .edit-test .test-rail { flex: none; height: 360px; }

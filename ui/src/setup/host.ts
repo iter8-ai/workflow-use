@@ -64,8 +64,17 @@ export type EditAgent = {
   credentials?: { saved: CredentialKind[]; otpSource?: "authenticator" | "email" };
 };
 
+/** An existing run the host lets this page watch; the host binds both ids and refuses any other. */
+export type WatchedRun = {
+  agentId: string;
+  runId: string;
+  name: string;
+  url: string;
+  run: TestRun;
+};
+
 type RequestMap = {
-  ready: { params: Record<string, never>; result: { schedule: boolean; credentials?: boolean; google?: boolean; emailRoutes?: boolean; chooseSchedule?: boolean; mode?: "create" | "edit" } };
+  ready: { params: Record<string, never>; result: { schedule: boolean; credentials?: boolean; google?: boolean; emailRoutes?: boolean; chooseSchedule?: boolean; mode?: "create" | "edit" | "run" } };
   connectGoogle: { params: { agentId: string }; result: { connected: boolean } };
   // The host collects and stores the values; only the saved kinds come back.
   requestCredentials: { params: { kinds: CredentialKind[]; replace?: boolean }; result: { saved: CredentialKind[]; changed?: boolean; otpSource?: "authenticator" | "email" } };
@@ -75,6 +84,7 @@ type RequestMap = {
   cancelRecording: { params: { id: string }; result: undefined };
   saveAgent: { params: { draft: SetupDraft; config: unknown; agentId?: string }; result: { id: string } };
   loadAgent: { params: Record<string, never>; result: EditAgent };
+  loadRun: { params: Record<string, never>; result: WatchedRun };
   renameAgent: { params: { name: string }; result: null };
   saveDraft: { params: { draft: SetupDraft; config: unknown }; result: { draftId: string } };
   testAgent: { params: { agentId: string; arguments: Record<string, never> }; result: { id: string } };

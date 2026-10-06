@@ -261,3 +261,23 @@ test("says the activity may be incomplete when the final update could not be rea
   assert.match(html, /may be incomplete/);
   assert.doesNotMatch(rail({ id: "run-1", status: "succeeded", activity: activity({ revision: 4 }) }), /may be incomplete/);
 });
+
+test("names a watched run a run in the browser and activity notices", () => {
+  const notices = [
+    running({ liveViewUrl: liveUrl }),
+    running({ activity: activity({ browser: "unknown" }) }),
+    { ...running({ activity: activity() }), connectionLost: true },
+    running({ activity: activity({ browser: "closing" }) }),
+    running({ activity: activity({ browser: "closed" }) }),
+    { id: "run-1", status: "succeeded" as const, activity: activity({ browser: "closed", snapshot: null }), screens: [] },
+    { id: "run-1", status: "succeeded" as const, screens: [] },
+    { id: "run-1", status: "failed" as const, failure: { kind: "stopped" as const, message: "" }, screens: [{ image: firstScreen }] },
+  ];
+  for (const run of notices) {
+    const html = renderToStaticMarkup(<TestBrowser subject="run" run={run} url="https://portal.example.com" passed={run.status === "succeeded"} />);
+    assert.doesNotMatch(html.replace(/<[^>]+>/g, " "), /\btest\b/i, JSON.stringify(run));
+  }
+  assert.match(renderToStaticMarkup(<TestBrowser subject="run" run={running()} url="https://portal.example.test" passed={false} />), /No live view for this run/);
+  assert.match(renderToStaticMarkup(<ActivityLog subject="run" run={running()} />), /isn’t available for this run/);
+  assert.match(browser(running()), /No live view for this test/);
+});

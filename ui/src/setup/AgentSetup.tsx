@@ -2,7 +2,8 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type K
 import { applyOrganizedSteps, compileAgent, credentialKinds, dateRuleChoices, dateRuleLabel, doneWhenOptions, draftChanges, findUnambiguousEmailStep, formatDate, groupSteps, mergeDateSteps, openQuestions, replaceStepsFrom, requiredCredentials, resolveDateRule, type CredentialKind, type DateRule, type DoneWhen, type SetupDraft, type SetupStep } from "./compiler";
 import { browserbaseLiveViewUrl, createHostBridge, HostRequestTimeoutError, type EditAgent as EditAgentData, type HostBridge, type RecordedDownload, type Recording } from "./host";
 import { HelpTip } from "./HelpTip";
-import { applyTestRunUpdate, type WorkbenchRun } from "./testRun";
+import { RunScreen } from "./RunView";
+import { applyTestRunUpdate, failureLabel, safeFileUrl, type WorkbenchRun } from "./testRun";
 import { ActivityLog, TestBrowser } from "./TestWorkbench";
 import "./setup.css";
 
@@ -58,7 +59,7 @@ export default function AgentSetup() {
   const [googleAllowed, setGoogleAllowed] = useState(false);
   const [savedCredentials, setSavedCredentials] = useState<CredentialKind[]>([]);
   const [otpSource, setOtpSource] = useState<"authenticator" | "email" | undefined>();
-  const [mode, setMode] = useState<"create" | "edit">("create");
+  const [mode, setMode] = useState<"create" | "edit" | "run">("create");
   const [connecting, setConnecting] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -648,6 +649,11 @@ export default function AgentSetup() {
   }
 
   if (mode === "edit") return <EditScreen bridge={bridge} credentialsAllowed={credentialsAllowed} googleAllowed={googleAllowed} />;
+  if (mode === "run") return <RunScreen bridge={bridge} />;
+  // The host decides the mode; until it answers, a run page does not flash the setup steps.
+  if (connecting && new URLSearchParams(window.location.search).get("mode") === "run") {
+    return <main className="setup-unavailable"><p>Connecting to Reiterate</p></main>;
+  }
 
   return (
     <main className={`agent-setup setup-flow${screen === "demonstrate" ? " agent-setup-demonstrating" : screen === "test" ? " agent-setup-testing" : ""}`}>
@@ -1029,7 +1035,7 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
     {testRun && testRun.status !== "running" && <div className={`edit-result edit-result-${succeeded ? "succeeded" : testRun.failure?.kind === "stopped" ? "stopped" : "failed"}`} role={succeeded || testRun.failure?.kind === "stopped" ? "status" : "alert"}>
       <b>{succeeded ? "Test completed" : testRun.failure?.kind === "stopped" ? "Test stopped" : "Test failed"}</b>
       {!succeeded && <>
-        <b>{editFailureLabel(testRun.failure?.kind)}</b>
+        <b>{failureLabel(testRun.failure?.kind)}</b>
         {testRun.failure?.kind === "google" && <><h3>The agent needs a Google sign-in</h3><p>Connect the Google account this website uses, then run the test again.</p>{googleAllowed ? <button className="button button-quiet" disabled={busy} onClick={() => void connectGoogle()}>Connect Google</button> : <p>Open Credentials → Connect Google for this agent.</p>}</>}
         {(testRun.failure?.message || testRun.error) && testRun.failure?.kind !== "google" && <p>{testRun.failure?.message || testRun.error}</p>}
       </>}
@@ -1166,19 +1172,6 @@ function EditIcon({ name }: { name: "back" | "up" | "down" | "close" }): JSX.Ele
   return <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none"><path d={path} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>;
 }
 
-function editFailureLabel(kind: string | null | undefined): string {
-  switch (kind) {
-    case "stopped": return "Stopped by you";
-    case "signin": return "Sign-in problem";
-    case "google": return "Google sign-in needed";
-    case "website": return "Website problem";
-    case "steps": return "A step didn't work";
-    case "result": return "Result problem";
-    case "check": return "Completion check failed";
-    case "service": return "Reiterate service problem";
-    default: return "Cause unknown";
-  }
-}
 function isObject(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null; }
 function combineDateSteps(steps: SetupStep[], ids: string[]): SetupStep[] {
   const selected = steps.filter((step) => ids.includes(step.id));
@@ -1579,11 +1572,6 @@ function lastMonthRewrite(description: string): string | null {
   const day = Number(match[1]);
   const last = new Date(Date.UTC(Number(match[3]), month + 1, 0)).getUTCDate();
   return day === 1 ? "Click the first day of last month" : day === last ? "Click the last day of last month" : null;
-}
-
-function safeFileUrl(value: string): string | null {
-  try { const url = new URL(value); return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : null; }
-  catch { return null; }
 }
 
 // "portal.example.com" means https://portal.example.com; anything with a scheme is left for startUrlError to judge.

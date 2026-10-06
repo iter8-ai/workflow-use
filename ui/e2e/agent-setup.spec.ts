@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { expect, test, type FrameLocator } from "@playwright/test";
+import { expect, test, type FrameLocator, type Page } from "@playwright/test";
 
 const baseUrl = process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:4173";
 const clockStart = new Date("2026-10-04T09:00:00Z");
@@ -11,7 +11,7 @@ test.beforeEach(async ({ page }) => {
   await page.route(/\/host\?scenario=/, async (route) => {
     await route.fulfill({
       contentType: "text/html",
-      body: hostPage(baseUrl),
+      body: hostPage(baseUrl, new URL(route.request().url()).searchParams.get("scenario")),
     });
   });
 });
@@ -2715,15 +2715,166 @@ for (const scenario of ["stop-test", "edit-stop-test"]) {
   });
 }
 
-function hostPage(url: string): string {
+const watchRequests = ["ready", "loadRun", "getTestRun", "close"];
+
+async function expectOnlyWatchRequests(page: Page): Promise<void> {
+  const methods = await page.evaluate(() => window.__requestMethods);
+  expect(methods.filter((method: string) => !watchRequests.includes(method))).toEqual([]);
+  const reads: Array<{ agentId: string; runId: string }> = await page.evaluate(() => window.__runReads);
+  expect(reads.filter((read) => read.agentId !== "agent-1" || read.runId !== "run-7")).toEqual([]);
+  expect(await page.evaluate(() => window.__stopRequests)).toEqual([]);
+}
+
+test("watches an existing run to its result in the setup's browser and activity, using only read requests", async ({ page }) => {
+  await page.clock.install({ time: clockStart });
+  await page.goto(`${baseUrl}/host?scenario=run-activity-success`);
+  // Polls advance only with runFor, one status check per two seconds.
+  await page.clock.pauseAt(clockPaused);
+  const run = page.frameLocator("iframe");
+  const browser = run.getByRole("region", { name: "Agent browser", exact: true });
+  const activity = run.getByRole("log", { name: "Agent activity" });
+
+  await expect(run.getByRole("heading", { name: "Monthly statement", level: 1 })).toBeVisible();
+  await expect(run.getByRole("navigation", { name: "Agent setup progress" })).toHaveCount(0);
+  await expect(browser.getByText("Opening the virtual browser.")).toBeVisible();
+  await page.clock.runFor(2_000);
+  await expect(browser.getByRole("img", { name: "Latest screen of the agent’s browser" })).toBeVisible();
+  await expect(browser.getByText("Live · view only")).toBeVisible();
+  await expect(activity.getByText("Browser opened")).toBeVisible();
+  await page.clock.runFor(2_000);
+  await expect(activity.getByText("Type text")).toBeVisible();
+  await expect(activity.getByText("Working")).toBeVisible();
+  await expect(run.getByText("Closing this page leaves the run going.")).toBeVisible();
+  await page.screenshot({ path: "e2e-artifacts/run-watch-live.png" });
+  await page.clock.runFor(2_000);
+  await expect(browser.getByText("Agent is closing the browser")).toBeVisible();
+  await page.clock.runFor(2_000);
+  await expect(browser.getByText("Agent closed the browser")).toBeVisible();
+  await expect(browser.getByText("Reiterate is saving the result of this run.")).toBeVisible();
+  await expect(browser.getByText("Last screen", { exact: true })).toBeVisible();
+  await page.clock.runFor(2_000);
+  await expect(run.getByText("Run completed")).toBeVisible();
+  await expect(browser.getByText("Final screen", { exact: true })).toBeVisible();
+  await expect(browser.getByText("The page when the run completed.")).toBeVisible();
+  await expect(run.getByRole("link", { name: "statement-run-7.pdf" })).toHaveAttribute("href", "https://files.example.test/statement-run-7.pdf");
+  await expect(activity.getByText("Browser closed")).toBeVisible();
+  await expect(activity.getByText("Working")).toHaveCount(0);
+  await expect(run.locator("iframe")).toHaveCount(0);
+  await page.screenshot({ path: "e2e-artifacts/run-watch-finished.png" });
+
+  const requests = await page.evaluate(() => window.__requestMethods.length);
+  await page.clock.runFor(20_000);
+  expect(await page.evaluate(() => window.__requestMethods.length)).toBe(requests);
+  await expect(run.getByRole("button", { name: /stop|test|publish|schedule|save|sign-in|demonstrat/i })).toHaveCount(0);
+  await run.getByRole("button", { name: "Back to web agents" }).click();
+  await expect.poll(() => page.evaluate(() => window.__closeRequests)).toEqual([{}]);
+  await expectOnlyWatchRequests(page);
+});
+
+test("reloading a watched run resumes watching the same run without changing it", async ({ page }) => {
+  await page.clock.install({ time: clockStart });
+  await page.goto(`${baseUrl}/host?scenario=run-activity-success`);
+  await page.clock.pauseAt(clockPaused);
+  const run = page.frameLocator("iframe");
+  const browser = run.getByRole("region", { name: "Agent browser", exact: true });
+  await expect(browser.getByText("Opening the virtual browser.")).toBeVisible();
+  await page.clock.runFor(2_000);
+  await expect(browser.getByRole("img", { name: "Latest screen of the agent’s browser" })).toBeVisible();
+
+  await page.frames()[1]!.goto(page.frames()[1]!.url());
+  await expect(run.getByRole("heading", { name: "Monthly statement", level: 1 })).toBeVisible();
+  await expect(run.getByRole("log", { name: "Agent activity" }).getByText("Type text")).toBeVisible();
+  expect(await page.evaluate(() => window.__requestMethods.filter((method: string) => method === "loadRun"))).toHaveLength(2);
+  expect(await page.evaluate(() => window.__closeRequests)).toEqual([]);
+  await expectOnlyWatchRequests(page);
+});
+
+test("shows why a watched run failed, with its last screen and blocked action", async ({ page }) => {
+  await page.clock.install({ time: clockStart });
+  await page.goto(`${baseUrl}/host?scenario=run-activity-failure`);
+  await page.clock.pauseAt(clockPaused);
+  const run = page.frameLocator("iframe");
+  await expect(run.getByRole("region", { name: "Agent browser", exact: true }).getByText("Opening the virtual browser.")).toBeVisible();
+  for (let poll = 0; poll < 5; poll += 1) await page.clock.runFor(2_000);
+  const result = run.getByRole("alert").filter({ hasText: "Run failed" });
+  await expect(result).toContainText("A step didn't work");
+  await expect(result).toContainText("The Export button was missing.");
+  await expect(result).toContainText("Stopped at step 2");
+  await expect(run.getByRole("region", { name: "Agent browser", exact: true }).getByText("Final screen", { exact: true })).toBeVisible();
+  await expect(run.getByRole("log", { name: "Agent activity" }).getByText("Blocked", { exact: true })).toBeVisible();
+  await page.screenshot({ path: "e2e-artifacts/run-watch-failed.png" });
+  await expectOnlyWatchRequests(page);
+});
+
+test("reports a lost browser in a watched run without claiming the agent closed it", async ({ page }) => {
+  await page.clock.install({ time: clockStart });
+  await page.goto(`${baseUrl}/host?scenario=run-activity-lost`);
+  await page.clock.pauseAt(clockPaused);
+  const run = page.frameLocator("iframe");
+  const browser = run.getByRole("region", { name: "Agent browser", exact: true });
+  await expect(browser.getByText("Opening the virtual browser.")).toBeVisible();
+  for (let poll = 0; poll < 3; poll += 1) await page.clock.runFor(2_000);
+  await expect(browser.getByText("Browser connection lost")).toBeVisible();
+  await expect(browser.getByText("Its state is unknown. The run keeps running, and its result appears here when it finishes.")).toBeVisible();
+  await expect(browser.getByText("Agent closed the browser")).toHaveCount(0);
+  await expectOnlyWatchRequests(page);
+});
+
+test("says why a watched run's updates fail while it reconnects, then recovers", async ({ page }) => {
+  await page.clock.install({ time: clockStart });
+  await page.goto(`${baseUrl}/host?scenario=run-activity-poll-lost`);
+  await page.clock.pauseAt(clockPaused);
+  const run = page.frameLocator("iframe");
+  const browser = run.getByRole("region", { name: "Agent browser", exact: true });
+  await expect(browser.getByText("Opening the virtual browser.")).toBeVisible();
+  for (let poll = 0; poll < 3; poll += 1) await page.clock.runFor(2_000);
+  await expect(browser.getByText("Browser connection lost")).toBeVisible();
+  await expect(run.getByText("Reconnecting to the run…")).toBeVisible();
+  await expect(run.getByText("The latest update couldn’t be read: The connection to Reiterate was lost.")).toBeVisible();
+  await page.screenshot({ path: "e2e-artifacts/run-watch-reconnecting.png" });
+  for (let poll = 0; poll < 5; poll += 1) await page.clock.runFor(2_000);
+  await expect(browser.getByRole("img", { name: "Latest screen of the agent’s browser" })).toBeVisible();
+  await expect(run.getByText(/couldn’t be read/)).toHaveCount(0);
+  await expectOnlyWatchRequests(page);
+});
+
+test("opens a finished run without reading it again", async ({ page }) => {
+  await page.clock.install({ time: clockStart });
+  await page.goto(`${baseUrl}/host?scenario=run-finished`);
+  await page.clock.pauseAt(clockPaused);
+  const run = page.frameLocator("iframe");
+  await expect(run.getByText("Run completed")).toBeVisible();
+  await expect(run.getByText("Download started: statement-run-7.pdf")).toBeVisible();
+  await page.clock.runFor(20_000);
+  expect(await page.evaluate(() => window.__requestMethods)).toEqual(["ready", "loadRun"]);
+});
+
+test("explains a run that no longer exists and lets the user retry or leave", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=run-missing`);
+  const run = page.frameLocator("iframe");
+  const problem = run.getByRole("alert").filter({ hasText: "The run couldn’t be opened" });
+  await expect(problem).toContainText("This run no longer exists. It may have been deleted.");
+  await page.screenshot({ path: "e2e-artifacts/run-watch-missing.png" });
+  await problem.getByRole("button", { name: "Try again" }).click();
+  await expect.poll(() => page.evaluate(() => window.__requestMethods.filter((method: string) => method === "loadRun").length)).toBe(2);
+  await problem.getByRole("button", { name: "Back to web agents" }).click();
+  await expect.poll(() => page.evaluate(() => window.__closeRequests)).toEqual([{}]);
+  await expectOnlyWatchRequests(page);
+});
+
+function hostPage(url: string, scenario: string | null): string {
   const encodedOrigin = encodeURIComponent(url);
+  // Like the Reiterate host, a run page names only its mode; the host keeps the agent and run ids.
+  const mode = scenario?.startsWith("run-") ? "&mode=run" : "";
   return `<!doctype html>
-<html><body><iframe src="${url}/?parentOrigin=${encodedOrigin}" title="Agent setup"></iframe>
+<html><body><iframe src="${url}/?parentOrigin=${encodedOrigin}${mode}" title="Agent setup"></iframe>
 <style>html,body,iframe{margin:0;width:100%;height:100%;border:0}body{overflow:hidden}</style>
 <script>
   const scenario = new URLSearchParams(location.search).get("scenario");
   const legacy = scenario === "legacy" || scenario === "legacy-lost-schedule-reply";
   window.__requestIds = [];
+  window.__requestMethods = [];
+  window.__runReads = [];
   window.__testArguments = [];
   window.__chooseScheduleCalls = [];
   window.__createdRoutes = [];
@@ -2752,7 +2903,9 @@ function hostPage(url: string): string {
   const screen = { image: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6S8sAAAAASUVORK5CYII=", thought: "I looked for the export button." };
   // Thought shapes as the web agent stores them: reasoning summaries, proposed actions, the final JSON outcome.
   // Activity scenarios replay one run frame per status poll; a new run starts over. Screens are drawn PNGs of a fake portal.
-  const activityScenario = scenario.replace(/^edit-/, "");
+  const activityScenario = scenario.replace(/^(edit|run)-/, "");
+  // Run scenarios stand in for the host watching agent-1's existing run-7; it answers only for that run.
+  const watch = scenario.startsWith("run-");
   const drawnScreens = {};
   let activityRun = null;
   let activityPolls = 0;
@@ -2882,11 +3035,16 @@ function hostPage(url: string): string {
     const request = event.data;
     if (request?.type !== "workflow-use:request") return;
     window.__requestIds.push(request.id);
+    window.__requestMethods.push(request.method);
     const send = (result) => event.source.postMessage({ type: "workflow-use:response", version: 1, id: request.id, result }, event.origin);
     const fail = (error) => event.source.postMessage({ type: "workflow-use:response", version: 1, id: request.id, error }, event.origin);
     if (request.method === "ready") {
       if (scenario === "delayed-ready") setTimeout(() => send({ schedule: true }), 300);
-      else send({ schedule: true, mode: edit ? "edit" : "create", credentials: !["sign-in-unsupported", "edit-credentials-unsupported"].includes(scenario), google: !scenario.endsWith("old-host"), emailRoutes: !legacy, chooseSchedule: !legacy && scenario !== "no-text" });
+      else send({ schedule: true, mode: watch ? "run" : edit ? "edit" : "create", credentials: !["sign-in-unsupported", "edit-credentials-unsupported"].includes(scenario), google: !scenario.endsWith("old-host"), emailRoutes: !legacy, chooseSchedule: !legacy && scenario !== "no-text" });
+    } else if (request.method === "loadRun") {
+      if (scenario === "run-missing") { fail("This run no longer exists. It may have been deleted."); return; }
+      const finished = { status: "succeeded", files: [{ name: "statement-run-7.pdf", url: "https://files.example.test/statement-run-7.pdf" }], screens: [{ image: portalScreen("Monthly statements (run-7)") }], confirmation: "Download started: statement-run-7.pdf", activity: { revision: 6, browser: "closed", snapshot: null, items: [{ sequence: 1, kind: "lifecycle", status: "completed", text: "Browser opened" }, { sequence: 2, kind: "lifecycle", status: "completed", text: "Browser closed" }] } };
+      send({ agentId: "agent-1", runId: "run-7", name: "Monthly statement", url: "https://portal.example.test/reports", run: scenario === "run-finished" ? finished : activityFrame("run-7") });
     } else if (request.method === "loadAgent") {
       if (scenario === "edit-missing") { fail("This agent no longer exists. It may have been deleted."); return; }
       if (!window.__loadAvailable) { fail("Loading failed. Try again."); return; }
@@ -2938,6 +3096,10 @@ function hostPage(url: string): string {
       send(null);
     }
     else if (request.method === "getTestRun") {
+      if (watch) {
+        window.__runReads.push(request.params);
+        if (request.params.agentId !== "agent-1" || request.params.runId !== "run-7") { fail("This page watches a different run."); return; }
+      }
       if (scenario === "stop-test" || scenario === "edit-stop-test") {
         const activity = { revision: 1, browser: "live", snapshot: { image: portalScreen("Reports"), sequence: 1 }, items: [{ sequence: 1, kind: "lifecycle", status: "completed", text: "Browser opened" }] };
         if (!window.__stopRequests.some((item) => item.runId === request.params.runId)) send({ status: "running", activity });

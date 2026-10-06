@@ -31,6 +31,51 @@ export function groupActivityItems(items: ReadonlyArray<ActivityItem>, running: 
 
 const pngImage = /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/;
 
+/** A short name for why a run stopped, from the host's failure kind. */
+export function failureLabel(kind: string | null | undefined): string {
+  switch (kind) {
+    case "stopped": return "Stopped by you";
+    case "signin": return "Sign-in problem";
+    case "google": return "Google sign-in needed";
+    case "website": return "Website problem";
+    case "steps": return "A step didn't work";
+    case "result": return "Result problem";
+    case "check": return "Completion check failed";
+    case "service": return "Reiterate service problem";
+    default: return "Cause unknown";
+  }
+}
+
+export function safeFileUrl(value: string): string | null {
+  try { const url = new URL(value); return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : null; }
+  catch { return null; }
+}
+
+/**
+ * Reads a run `intervalMs` after the previous read settles, so at most one read is in flight, until a read reports
+ * the run finished. The returned function stops reading; a read that settles after it is ignored.
+ */
+export function pollRun(read: () => Promise<TestRun>, onRead: (next: TestRun) => void, onError: (error: unknown) => void, intervalMs = 2_000): () => void {
+  let active = true;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const poll = (): void => {
+    void read().then((next) => {
+      if (!active) return;
+      onRead(next);
+      if (next.status === "running") timer = setTimeout(poll, intervalMs);
+    }, (error: unknown) => {
+      if (!active) return;
+      onError(error);
+      timer = setTimeout(poll, intervalMs);
+    });
+  };
+  timer = setTimeout(poll, intervalMs);
+  return () => {
+    active = false;
+    clearTimeout(timer);
+  };
+}
+
 /**
  * Applies a status reply to the run it was requested for. A reply for another run, or an activity revision older
  * than the one shown, is dropped, so a late reply cannot bring back a closed browser or an earlier run's screen.
