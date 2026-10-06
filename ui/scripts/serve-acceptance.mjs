@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, lstatSync, readlinkSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,21 +10,24 @@ import { createServer } from "vite";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const uiRoot = dirname(scriptDir);
 const specPath = join(uiRoot, "e2e", "agent-setup.spec.ts");
-const startupSource = sourceIdentity();
-const { sha, trackedDirty } = startupSource;
-let sourceChanged = false;
 const expectedSha = process.env.EXPECTED_SHA;
-
 if (expectedSha !== undefined && !/^[0-9a-f]{40}$/i.test(expectedSha)) fail("EXPECTED_SHA must be a full 40-character git SHA");
+const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd: uiRoot }).toString().trim();
+const startupSource = sourceIdentity();
+const { sha, trackedDirty, untrackedDirty } = startupSource;
+let sourceChanged = false;
 if (expectedSha !== undefined && expectedSha.toLowerCase() !== sha.toLowerCase()) fail("EXPECTED_SHA does not match HEAD");
 if (expectedSha !== undefined && trackedDirty) fail("candidate has tracked changes");
+if (expectedSha !== undefined && untrackedDirty) fail("candidate has nonignored untracked files");
 
 const requestedPort = parsePort(process.argv.slice(2));
 const hostPage = loadHostPage();
-const vite = await createServer({
+let vite;
+const httpServer = createHttpServer((request, response) => acceptanceMiddleware(request, response, () => vite.middlewares(request, response)));
+vite = await createServer({
   root: uiRoot,
   configFile: join(uiRoot, "vite.config.ts"),
-  server: { middlewareMode: true },
+  server: { middlewareMode: true, hmr: { server: httpServer } },
 });
 
 const acceptanceMiddleware = (request, response, next) => {
@@ -35,7 +38,7 @@ const acceptanceMiddleware = (request, response, next) => {
   if (sourceChanged) return sendJson(response, 409, { error: "source changed; restart the acceptance launcher" });
   const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
   if (requestUrl.pathname === "/__acceptance") {
-    return sendJson(response, 200, { sha, trackedDirty, port: actualPort(), boundary: "fake-fixture-evidence" });
+    return sendJson(response, 200, { sha, trackedDirty, untrackedDirty, port: actualPort(), boundary: "fake-fixture-evidence" });
   }
   if (requestUrl.pathname === "/host") {
     const scenario = requestUrl.searchParams.get("scenario");
@@ -52,14 +55,12 @@ const acceptanceMiddleware = (request, response, next) => {
   }
   next();
 };
-const httpServer = createHttpServer((request, response) => acceptanceMiddleware(request, response, () => vite.middlewares(request, response)));
-
 try {
   await new Promise((resolve, reject) => httpServer.once("error", reject).listen(requestedPort, "127.0.0.1", resolve));
   const url = loopbackUrl();
   const readyHost = await (await fetch(`${url}/host?scenario=success`)).text();
   if (!readyHost.includes("fake-fixture-evidence")) throw new Error("acceptance host route did not become ready");
-  process.stdout.write(`${JSON.stringify({ url, sha, trackedDirty, port: actualPort() })}\n`);
+  process.stdout.write(`${JSON.stringify({ url, sha, trackedDirty, untrackedDirty, port: actualPort() })}\n`);
 } catch (error) {
   await vite.close().catch(() => {});
   httpServer.close();
@@ -71,6 +72,10 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
   process.once(signal, async () => {
     if (closing) return;
     closing = true;
+    const sockets = [...vite.ws.clients].map((client) => client.socket);
+    const closed = sockets.map((socket) => new Promise((resolve) => socket.once("close", resolve)));
+    for (const socket of sockets) socket.close(1001);
+    await Promise.all(closed);
     await vite.close();
     await new Promise((resolve) => httpServer.close(resolve));
     process.exit(0);
@@ -82,8 +87,15 @@ function sourceIdentity() {
   const sha = git(["rev-parse", "HEAD"]).toString().trim();
   const status = git(["status", "--porcelain", "--untracked-files=no"]);
   const diff = git(["diff", "--no-ext-diff", "--no-textconv", "--no-relative", "--binary", "HEAD"]);
-  const fingerprint = createHash("sha256").update(sha).update(status).update(diff).digest("hex");
-  return { sha, trackedDirty: status.toString().trim() !== "", fingerprint };
+  const untracked = execFileSync("git", ["ls-files", "--others", "--exclude-standard", "-z"], { cwd: repoRoot }).toString().split("\0").filter(Boolean);
+  const hash = createHash("sha256").update(sha).update(status).update(diff);
+  for (const path of untracked) {
+    const fullPath = join(repoRoot, path);
+    hash.update(path).update("\0");
+    hash.update(lstatSync(fullPath).isSymbolicLink() ? readlinkSync(fullPath) : readFileSync(fullPath));
+    hash.update("\0");
+  }
+  return { sha, trackedDirty: status.toString().trim() !== "", untrackedDirty: untracked.length !== 0, fingerprint: hash.digest("hex") };
 }
 
 function loadHostPage() {
