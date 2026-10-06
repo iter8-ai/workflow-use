@@ -4,6 +4,7 @@ import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { createServer } from "node:http";
+import { createInterface } from "node:readline";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -27,25 +28,25 @@ async function start(env: NodeJS.ProcessEnv = {}, args: string[] = [], root = cw
   }));
   assert.ok(child.stdout);
   assert.ok(child.stderr);
+  const lines = createInterface({ input: child.stdout });
   const receipt = await new Promise<Receipt>((resolve, reject) => {
     const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("launcher readiness timeout")); }, 15_000);
     child.once("error", (error) => { clearTimeout(timer); reject(error); });
     child.once("exit", (code) => { clearTimeout(timer); reject(new Error(`launcher exited before ready: ${code}`)); });
-    let text = "";
-    child.stdout?.on("data", (chunk: Buffer) => {
-      text += chunk.toString();
-      if (!text.includes("\n")) return;
-      clearTimeout(timer);
+    lines.on("line", (line) => {
       try {
-        const value: unknown = JSON.parse(text.split("\n")[0] ?? "");
+        const value: unknown = JSON.parse(line);
         assert.ok(typeof value === "object" && value !== null);
         assert.ok("url" in value && typeof value.url === "string");
         assert.ok("sha" in value && typeof value.sha === "string");
         assert.ok("trackedDirty" in value && typeof value.trackedDirty === "boolean");
         assert.ok("untrackedDirty" in value && typeof value.untrackedDirty === "boolean");
         assert.ok("port" in value && typeof value.port === "number");
+        clearTimeout(timer);
+        lines.close();
+        child.stdout?.resume();
         resolve({ url: value.url, sha: value.sha, trackedDirty: value.trackedDirty, untrackedDirty: value.untrackedDirty, port: value.port });
-      } catch (error) { child.kill("SIGKILL"); reject(error); }
+      } catch { return; }
     });
     child.stderr?.resume();
   });
@@ -102,6 +103,23 @@ async function connect(url: string) {
 afterEach(async () => { await Promise.all([...children].map(cleanup)); });
 
 describe("serve-acceptance public CLI", { timeout: 30_000 }, () => {
+  it("becomes ready after Vite logs stale dependency-cache re-optimization", async (t) => {
+    const { ui, git, launch } = await fixture(t);
+    await git("init");
+    await git("add", ".");
+    await git("-c", "user.name=Acceptance test", "-c", "user.email=acceptance@example.invalid", "-c", "commit.gpgsign=false", "commit", "-m", "Acceptance fixture");
+    const cache = join(ui, ".vite", "deps");
+    await mkdir(cache, { recursive: true });
+    await writeFile(join(cache, "_metadata.json"), JSON.stringify({
+      hash: "stale", lockfileHash: "stale", configHash: "stale", browserHash: "stale", optimized: {}, chunks: {},
+    }));
+    const { receipt } = await launch();
+    assert.equal(receipt.sha, (await git("rev-parse", "HEAD")).trim());
+    const response = await fetch(`${receipt.url}/__acceptance`);
+    assert.equal(response.status, 200);
+    assert.equal((await response.json() as Receipt).port, receipt.port);
+  });
+
   it("serves the real UI, boundary-fake host, provenance, and audit DOM", async () => {
     const { receipt } = await start();
     assert.match(receipt.url, /^http:\/\/127\.0\.0\.1:\d+$/);
