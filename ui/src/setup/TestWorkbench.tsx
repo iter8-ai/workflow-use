@@ -30,11 +30,15 @@ const barLabels: Record<BrowserView, string> = {
   ended: "Browser closed",
 };
 
+/** What the workbench is showing: a setup test, or an agent run someone watches without taking part. */
+export type WorkbenchSubject = "test" | "run";
+
 /**
  * The agent's browser, drawn from the run's own screenshots. The provider's viewer is never embedded here, so its
  * disconnect page cannot appear when the browser closes or the connection drops.
  */
-export function TestBrowser(props: { run: WorkbenchRun | null; url: string; passed: boolean; serviceFailure?: boolean; screenIndex?: number | null; onSelectScreen?(index: number): void }): JSX.Element {
+export function TestBrowser(props: { run: WorkbenchRun | null; url: string; passed: boolean; serviceFailure?: boolean; screenIndex?: number | null; onSelectScreen?(index: number): void; subject?: WorkbenchSubject }): JSX.Element {
+  const subject = props.subject ?? "test";
   const view = browserView(props.run);
   const screens = props.run?.screens ?? [];
   const index = props.screenIndex == null ? screens.length - 1 : Math.min(props.screenIndex, screens.length - 1);
@@ -45,8 +49,8 @@ export function TestBrowser(props: { run: WorkbenchRun | null; url: string; pass
   return <section className="test-browser" aria-label="Agent browser">
     <div className="test-browser-bar"><span aria-hidden="true">● ● ●</span><div>{props.run ? props.url : "about:blank"}</div><b>{view === "ended" && !closed ? "Run finished" : barLabels[view]}</b></div>
     {view === "live" ? <div className="browser-snapshot"><img src={snapshot!} alt="Latest screen of the agent’s browser" /></div>
-      : view === "ended" && screen ? <><img src={screen.image} alt="Agent browser screen" /><ScreenBar passed={props.passed} stopped={props.run?.failure?.kind === "stopped"} index={index} count={screens.length} onSelect={(next) => props.onSelectScreen?.(Math.max(0, Math.min(screens.length - 1, next)))} /></>
-      : <BrowserNotice view={view} closed={closed} reconnecting={props.run?.connectionLost === true} lastScreen={snapshot} serviceFailure={props.serviceFailure === true} />}
+      : view === "ended" && screen ? <><img src={screen.image} alt="Agent browser screen" /><ScreenBar subject={subject} passed={props.passed} stopped={props.run?.failure?.kind === "stopped"} index={index} count={screens.length} onSelect={(next) => props.onSelectScreen?.(Math.max(0, Math.min(screens.length - 1, next)))} /></>
+      : <BrowserNotice subject={subject} view={view} closed={closed} reconnecting={props.run?.connectionLost === true} lastScreen={snapshot} serviceFailure={props.serviceFailure === true} />}
   </section>;
 }
 
@@ -54,11 +58,11 @@ export function TestBrowser(props: { run: WorkbenchRun | null; url: string; pass
  * Pages through a finished run's screenshots. The labels are fixed: a screen's recorded note can hold the agent's
  * private reasoning, so it is never shown.
  */
-function ScreenBar(props: { passed: boolean; stopped: boolean; index: number; count: number; onSelect(index: number): void }): JSX.Element {
+function ScreenBar(props: { subject: WorkbenchSubject; passed: boolean; stopped: boolean; index: number; count: number; onSelect(index: number): void }): JSX.Element {
   const final = props.index === props.count - 1;
   return <div className="test-caption">
     <span className={`caption-kind${final ? (props.passed ? " good" : props.stopped ? "" : " bad") : ""}`}>{final ? "Final screen" : "Earlier screen"}</span>
-    <p className="caption-summary">{!final ? "A page the agent saw earlier in this run." : props.passed ? "The page when the test passed." : props.stopped ? "The page when you stopped the test." : "The page when the test stopped."}</p>
+    <p className="caption-summary">{!final ? "A page the agent saw earlier in this run." : props.subject === "run" ? (props.passed ? "The page when the run completed." : "The page when the run stopped.") : props.passed ? "The page when the test passed." : props.stopped ? "The page when you stopped the test." : "The page when the test stopped."}</p>
     <div className="caption-pager" role="group" aria-label="Screens">
       <button type="button" className="icon-button" aria-label="Previous screen" onClick={() => props.onSelect(props.index - 1)} disabled={props.index <= 0}><Chevron direction="left" /></button>
       <span>{props.index + 1} / {props.count}</span>
@@ -71,17 +75,18 @@ function Chevron(props: { direction: "left" | "right" }): JSX.Element {
   return <svg aria-hidden="true" viewBox="0 0 16 16" width="16" height="16"><path d={props.direction === "left" ? "M10 3 5 8l5 5" : "M6 3l5 5-5 5"} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>;
 }
 
-function BrowserNotice(props: { view: BrowserView; closed: boolean; reconnecting: boolean; lastScreen: string | null; serviceFailure: boolean }): JSX.Element {
+function BrowserNotice(props: { subject: WorkbenchSubject; view: BrowserView; closed: boolean; reconnecting: boolean; lastScreen: string | null; serviceFailure: boolean }): JSX.Element {
+  const subject = props.subject;
   const [title, detail] = props.view === "idle" ? ["Run the test to watch the agent.", "The agent’s browser appears here while it works through your steps."]
-    : props.view === "unavailable" ? ["No live view for this test", "The test keeps running. Its result appears here when it finishes."]
+    : props.view === "unavailable" ? [`No live view for this ${subject}`, `The ${subject} keeps running. Its result appears here when it finishes.`]
     : props.view === "opening" ? ["Opening the virtual browser.", "The first screen appears as soon as the website loads."]
-    : props.view === "closing" ? ["Agent is closing the browser", "Reiterate is saving the result of this test."]
-    : props.view === "closed" ? ["Agent closed the browser", "Reiterate is saving the result of this test."]
-    : props.view === "lost" && props.reconnecting ? ["Browser connection lost", "Reconnecting. The test keeps running, and its result appears here when it finishes."]
-    : props.view === "lost" ? ["Browser connection lost", "Its state is unknown. The test keeps running, and its result appears here when it finishes."]
+    : props.view === "closing" ? ["Agent is closing the browser", `Reiterate is saving the result of this ${subject}.`]
+    : props.view === "closed" ? ["Agent closed the browser", `Reiterate is saving the result of this ${subject}.`]
+    : props.view === "lost" && props.reconnecting ? ["Browser connection lost", `Reconnecting. The ${subject} keeps running, and its result appears here when it finishes.`]
+    : props.view === "lost" ? ["Browser connection lost", `Its state is unknown. The ${subject} keeps running, and its result appears here when it finishes.`]
     : props.serviceFailure ? ["The agent has not opened the website.", "Nothing ran in this browser."]
-    : props.closed ? ["Agent closed the browser", "The test has finished."]
-    : ["The test has finished", "No screen was kept from this run."];
+    : props.closed ? ["Agent closed the browser", `The ${subject} has finished.`]
+    : [`The ${subject} has finished`, "No screen was kept from this run."];
   const working = props.view === "opening" || props.view === "closing" || props.view === "closed" || props.view === "lost";
   // The last screen stays behind the notice, dimmed and labelled, so it never passes for a live view.
   const lastScreen = props.view === "idle" || props.view === "opening" ? null : props.lastScreen;
@@ -109,8 +114,9 @@ const statusLabels: Record<TestActivity["items"][number]["status"], string | nul
  * What the agent did, as the web agent labels it: stages, browser actions and browser events, oldest first. The
  * agent's own notes are never shown here, and an entry of an unknown kind or status is left out.
  */
-export function ActivityLog(props: { run: WorkbenchRun | null }): JSX.Element {
+export function ActivityLog(props: { run: WorkbenchRun | null; subject?: WorkbenchSubject }): JSX.Element {
   const run = props.run;
+  const subject = props.subject ?? "test";
   const running = run?.status === "running";
   const activityItems = run?.activity?.items ?? [];
   const groupedItems = groupActivityItems(activityItems, running).filter((item) => knownKinds.includes(item.kind) && Object.prototype.hasOwnProperty.call(statusLabels, item.status));
@@ -130,7 +136,7 @@ export function ActivityLog(props: { run: WorkbenchRun | null }): JSX.Element {
   };
   return <div className="activity-log" ref={listRef} onScroll={onScroll} tabIndex={0} role="log" aria-label="Agent activity">
     {run === null ? <p className="activity-empty">What the agent does appears here while it tests your steps.</p>
-      : run.activity === undefined ? <p className="activity-empty">{running ? "Live activity isn’t available for this test. The result appears when it finishes." : "Live activity isn’t available for this test."}</p>
+      : run.activity === undefined ? <p className="activity-empty">{running ? `Live activity isn’t available for this ${subject}. The result appears when it finishes.` : `Live activity isn’t available for this ${subject}.`}</p>
       : <ol className="activity-list">
         {groupedItems.map((item) => {
           const label = run.failure?.kind === "stopped" && item.kind === "lifecycle" && item.text === "Stopped by user" ? null : statusLabels[item.status];

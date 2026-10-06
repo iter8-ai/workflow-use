@@ -18,7 +18,7 @@ The host application owns the agent list, authentication, saved-agent settings, 
 
 Open-ended training chat, a formula editor, advanced output naming, and additional scheduling controls are not part of the authoring flow. Existing host settings remain available after setup.
 
-For demonstrated sign-in, follow the [README setup and sign-in guidance](../README.md).
+For demonstrated sign-in, follow the [README setup and sign-in guidance](../README.md). For sign-in handling and the rules for keeping credential values out of the setup page and recorded steps, see [Sign-in details in the host contract](agent-setup-host.md#sign-in-details).
 
 ## Acceptance checks
 
