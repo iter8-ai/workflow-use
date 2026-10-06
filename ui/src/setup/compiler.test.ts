@@ -262,8 +262,8 @@ test("treats a qualified bare tag as a locator, visible or recorded", () => {
   assert.doesNotThrow(() => compileAgent(benign));
 });
 
-test("treats any qualified element name as a locator, and a stage written as a selector as actionable", () => {
-  for (const locator of ["css: fieldset", "selector: article", "css=tbody", "selector: my-widget", "xpath: section"]) {
+test("treats qualified elements and descendants as locators in instructions, targets and stages", () => {
+  for (const locator of ["css: fieldset", "selector: article", "css=tbody", "selector: my-widget", "xpath: section", "css: div button", "selector: article button", "css: my-widget input"]) {
     const visible = baseDraft();
     visible.steps[0] = { ...visible.steps[0]!, description: `Click ${locator}` };
     assert.throws(() => compileAgent(visible), (error: unknown) => error instanceof Error && error.name === "StepValidationError" && /what the control shows on screen/.test(error.message), locator);
@@ -273,6 +273,10 @@ test("treats any qualified element name as a locator, and a stage written as a s
     const prompt = (compileAgent(hidden).stages[0] as { prompt: string }).prompt;
     assert.match(prompt, /1\. Click Submit\.$/, locator);
     assert.equal(doneWhenOptions(hidden.steps, null, { kind: "file" }).some((option) => option.doneWhen?.kind === "clicked"), false, locator);
+
+    hidden.steps[0] = { ...hidden.steps[0]!, stage: locator };
+    assert.throws(() => compileAgent(hidden), (error: unknown) => error instanceof Error && error.name === "StepValidationError"
+      && (error as Error & { stepId?: unknown }).stepId === "submit" && /stage name/i.test(error.message) && !error.message.includes(locator), locator);
   }
 
   const stage = baseDraft();
@@ -289,6 +293,18 @@ test("treats any qualified element name as a locator, and a stage written as a s
   const prompt = (compileAgent(benign).stages[0] as { prompt: string }).prompt;
   assert.match(prompt, /Selector: Main menu:\n1\. Click CSS: Dark\./);
   assert.match(prompt, /Settings > Users:\n3\. Click Details\./);
+});
+
+test("a qualified descendant target cannot name a date field or change its range side", () => {
+  const step: SetupStep = { id: "to-date", type: "date", description: "Enter To date", target: "css: from-button input", date: { value: "2026-10-23", format: "%Y-%m-%d", rule: null } };
+  const draft = { ...baseDraft(), steps: [step] };
+  assert.match(openQuestions(draft, "2026-10-05")[0]!.text, /into To date\./);
+  assert.deepEqual(dateRuleChoices(step, "Download last month's bookings", "2026-10-05")[0]?.rule, { kind: "end_of_last_month" });
+  const prompt = (compileAgent({ ...draft, steps: [{ ...step, date: { ...step.date!, rule: { kind: "fixed" } } }] }).stages[0] as { prompt: string }).prompt;
+  assert.match(prompt, /1\. Set To date to exactly "2026-10-23"\./);
+  assert.ok(!prompt.includes("css: from-button input"), prompt);
+  const merged = mergeDateSteps([{ id: "return-input", type: "input", description: "Enter Return date", target: "css: div button", value: "23.10.2026" }])[0]!;
+  assert.equal(merged.description, "Enter the Return date");
 });
 
 test("keeps a date field's visible name when its recorded target is a selector", () => {

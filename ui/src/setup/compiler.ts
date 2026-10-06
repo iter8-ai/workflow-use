@@ -494,13 +494,14 @@ const codeNearbyPattern = /\b(?:otp|passcode|(?:verification|security|access|aut
 const htmlTag = String.raw`(?:a|button|div|span|input|label|li|ul|ol|nav|form|select|option|table|tr|td|th|section|header|footer|main|aside|p|img|svg|textarea|h[1-6])`;
 // Every HTML element name, for a locator that names only the element.
 const htmlElement = String.raw`(?:a|abbr|address|area|article|aside|audio|b|base|bdi|bdo|blockquote|body|br|button|canvas|caption|cite|code|col|colgroup|data|datalist|dd|del|details|dfn|dialog|div|dl|dt|em|embed|fieldset|figcaption|figure|footer|form|h[1-6]|head|header|hgroup|hr|html|i|iframe|img|input|ins|kbd|label|legend|li|link|main|map|mark|menu|meta|meter|nav|noscript|object|ol|optgroup|option|output|p|picture|pre|progress|q|rp|rt|ruby|s|samp|script|search|section|select|slot|small|source|span|strong|style|sub|summary|sup|svg|table|tbody|td|template|textarea|tfoot|th|thead|time|title|tr|track|u|ul|var|video|wbr)`;
+const qualifiedElement = String.raw`(?:${htmlElement}|[a-z][a-z\d]*-[a-z\d-]*)`;
 const idOrClass = String.raw`(?:${htmlTag})?(?:[#.][a-z_-][\w-]*)+`;
 const coordinate = String.raw`-?\d+(?:\.\d+)?(?:px)?`;
 const rawReplayPatterns = [
   // An explicit locator: css: #submit, selector=.submit, xpath: //button
   /\b(?:css|selector|xpath)\s*[:=]\s*["']?(?:[#.][a-z_-]|\/|\[|\*|[a-z][\w-]*[#.[][\w@-])/i,
   // ... or naming a lowercase element: css: fieldset, selector: my-widget (but not "CSS: Dark" or "selector: a list opens")
-  new RegExp(String.raw`\b(?:css|CSS|selector|Selector|SELECTOR|xpath|XPath|XPATH)\s*[:=]\s*["']?(?:${htmlElement}|[a-z][a-z\d]*-[a-z\d-]*)(?![\w-])(?!\s+[A-Za-z])`),
+  new RegExp(String.raw`\b(?:css|CSS|selector|Selector|SELECTOR|xpath|XPath|XPATH)\s*[:=]\s*["']?(?:${qualifiedElement}(?![\w-])\s+)*${qualifiedElement}(?![\w-])(?!\s+[A-Za-z])`),
   // CSS attribute selector: [name="email"], [data-testid=export]
   /\[\s*[a-z_][\w:-]*\s*[~|^$*]?=\s*(?:"[^"]*"|'[^']*'|[^\]\s]+)\s*(?:[is]\s*)?\]/i,
   // Ids and classes joined by a combinator or a space: #reports > button, nav > .item, .toolbar .btn-primary
