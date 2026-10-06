@@ -549,7 +549,7 @@ test("keeps keyboard focus on the demonstration's next action and shows what was
   await expect(setup.locator(".credential-warning")).toHaveCount(0);
   await expect(setup.getByRole("complementary", { name: "Captured demonstration steps" })).toContainText("Sign in here if the site asks.");
   // Google's default number challenge in the Gmail app can't be repeated later; steer users to an authenticator code.
-  await expect(setup.getByRole("complementary", { name: "Captured demonstration steps" })).toContainText("When Google asks you to confirm on your phone or tap a number in the Gmail app, choose Try another way and enter the code from your authenticator app.");
+  await expect(setup.getByRole("complementary", { name: "Captured demonstration steps" })).toContainText("When Google asks you to confirm on your phone or tap a number in the Gmail app, choose More ways to verify (or Try another way) and enter the code from your authenticator app.");
   await expect(setup.getByRole("link", { name: "Add an authenticator app to your Google Account" })).toHaveAttribute("href", "https://myaccount.google.com/two-step-verification/authenticator");
   await expect(setup.getByRole("link", { name: "Add an authenticator app to your Google Account" })).toHaveAttribute("target", "_blank");
   await expect(setup.getByLabel("Recorded steps list").locator("ol")).toHaveCSS("list-style-type", "decimal");

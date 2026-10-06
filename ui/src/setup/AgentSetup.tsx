@@ -1317,7 +1317,7 @@ function Demonstrate(props: { recording: Recording | null; steps: SetupStep[]; l
             {count === 0 ? <p>Actions will appear here while you demonstrate.</p> : <ol>{props.steps.map((step) => <li key={step.id} className={step.type === "download" ? "captured-download" : undefined}>{step.description}</li>)}</ol>}
           </div>
           <p className="captured-steps-note"><svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14"><rect x="5" y="11" width="14" height="9" rx="2" fill="none" stroke="currentColor" strokeWidth="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg><span>{demonstrateSignInNote}</span></p>
-          <p className="captured-steps-note google-verify-note"><span>Signing in with Google? <a href={googleAuthenticatorSetupUrl} target="_blank" rel="noopener noreferrer">Add an authenticator app to your Google Account</a> first. When Google asks you to confirm on your phone or tap a number in the Gmail app, choose Try another way and enter the code from your authenticator app.</span></p>
+          <p className="captured-steps-note google-verify-note"><span>Signing in with Google? <a href={googleAuthenticatorSetupUrl} target="_blank" rel="noopener noreferrer">Add an authenticator app to your Google Account</a> first. When Google asks you to confirm on your phone or tap a number in the Gmail app, choose More ways to verify (or Try another way) and enter the code from your authenticator app.</span></p>
         </aside>
       </div>
     </div>
