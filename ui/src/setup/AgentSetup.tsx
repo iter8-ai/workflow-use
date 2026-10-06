@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { applyOrganizedSteps, compileAgent, credentialKinds, dateRuleChoices, dateRuleLabel, doneWhenOptions, draftChanges, findUnambiguousEmailStep, formatDate, groupSteps, mergeDateSteps, openQuestions, replaceStepsFrom, requiredCredentials, resolveDateRule, type CredentialKind, type DateRule, type DoneWhen, type SetupDraft, type SetupStep } from "./compiler";
+import { applyOrganizedSteps, compileAgent, compileEditAgent, credentialKinds, dateRuleChoices, dateRuleLabel, doneWhenOptions, draftChanges, findUnambiguousEmailStep, formatDate, groupSteps, mergeDateSteps, openQuestions, replaceStepsFrom, requiredCredentials, resolveDateRule, type CredentialKind, type DateRule, type DoneWhen, type SetupDraft, type SetupStep } from "./compiler";
 import { browserbaseLiveViewUrl, createHostBridge, HostRequestTimeoutError, type EditAgent as EditAgentData, type HostBridge, type RecordedDownload, type Recording } from "./host";
 import { HelpTip } from "./HelpTip";
 import { RunScreen, RunView } from "./RunView";
@@ -713,6 +713,12 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
   const testShownRef = useRef(shownRun !== null);
   const [checked, setChecked] = useState(false);
   const [recording, setRecording] = useState<Recording | null>(null);
+  // The demonstration whose steps are in the draft. Any other held demonstration is still running or being discarded.
+  const [appliedRecordingId, setAppliedRecordingId] = useState<string | null>(null);
+  // A written-instructions agent whose instructions a new demonstration replaced in this draft.
+  const [demonstrated, setDemonstrated] = useState(false);
+  const [demoAction, setDemoAction] = useState<"start" | "finish" | "cancel" | null>(null);
+  const [demoProblem, setDemoProblem] = useState<string | null>(null);
   const [fromStep, setFromStep] = useState(0);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -728,6 +734,10 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
   const [renameError, setRenameError] = useState<string | null>(null);
   const modalRef = useRef<HTMLDivElement>(null);
   const recordingRef = useRef<Recording | null>(null);
+  // Set synchronously so a second click, or a poll reply, cannot slip in before the button re-renders disabled.
+  const demoActionRef = useRef(false);
+  const mountedRef = useRef(true);
+  const demoBrowserRef = useRef<HTMLDivElement>(null);
   const dialogTriggerRef = useRef<HTMLElement | null>(null);
   const insertedStepRef = useRef<HTMLTextAreaElement | null>(null);
   const [insertedStepId, setInsertedStepId] = useState<string | null>(null);
@@ -746,6 +756,8 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
       setDraft({ name: loaded.name, url: loaded.url, goal: loaded.goal, steps: mergeDateSteps(loaded.steps ?? []), inputs: [] });
       setStages(loaded.stages);
       setStageLimitInputs({}); setStageLimitErrors({});
+      // The host closes any demonstration when it loads the agent.
+      showRecording(null); setAppliedRecordingId(null); setDemonstrated(false); setDemoProblem(null);
       setCredentialsChanged(false); setCredentialError(null);
       setTestRun(null); setLastRun(null); setChecked(false); setConflict(null); setPublishOpen(false);
     } catch (requestError) { setError(errorMessage(requestError)); }
@@ -754,15 +766,38 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
   // load is intentionally called once for the host-bound agent.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { void load(); }, []);
+  // Long written instructions push the demonstration browser below the fold; bring it into view once it opens.
+  useEffect(() => {
+    if (recording?.status === "recording") demoBrowserRef.current?.scrollIntoView({ block: "nearest" });
+  }, [recording?.id, recording?.status]);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
   useEffect(() => {
     if (recording?.status !== "recording") return;
-    const timer = window.setInterval(() => void bridge.request("getRecording", { id: recording.id }).then(setRecording).catch((e) => setError(errorMessage(e))), 1500);
-    return () => window.clearInterval(timer);
+    const id = recording.id;
+    let active = true;
+    let reading = false;
+    const poll = (): void => {
+      if (reading || demoActionRef.current) return;
+      reading = true;
+      void bridge.request("getRecording", { id }).then((next) => {
+        // A reply read before Finish, Cancel or a newer demonstration must not bring that session back.
+        if (!active || demoActionRef.current || recordingRef.current?.id !== id || recordingRef.current.status !== "recording") return;
+        if (next.status === "expired") void closeDemonstration(next, "The demonstration expired before it was finished.");
+        else showRecording(next);
+      }).catch((e) => { if (active && !demoActionRef.current) setError(errorMessage(e)); }).finally(() => { reading = false; });
+    };
+    const timer = window.setInterval(poll, 1500);
+    return () => { active = false; window.clearInterval(timer); };
+  // closeDemonstration only uses state setters and refs.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bridge, recording?.id, recording?.status]);
-  // A re-demonstration's steps are organized like a new one. They replace the old steps as soon as the
+  // A new demonstration's steps are organized like a new one. They replace the old steps as soon as the
   // demonstration stops; stages and clearer wording follow when ready, unless those steps were edited meanwhile.
   useEffect(() => {
-    if (recording?.status !== "stopped" || recording.organizing !== true) return;
+    if (recording?.status !== "stopped" || recording.organizing !== true || recording.id !== appliedRecordingId) return;
     let active = true;
     const recorded = recording.steps;
     const timer = window.setTimeout(() => void bridge.request("getRecording", { id: recording.id }).then((next) => {
@@ -771,7 +806,7 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
       if (next.organizing !== true) setDraft((current) => current === null ? current : { ...current, steps: mergeDateSteps(applyOrganizedSteps(current.steps, recorded, next.steps)) });
     }).catch(() => { if (active) setRecording((current) => current === null ? null : { ...current, organizing: false }); }), 1500);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [bridge, recording]);
+  }, [appliedRecordingId, bridge, recording]);
   useEffect(() => {
     if (testRun?.status !== "running" || agent === null) return;
     let active = true;
@@ -837,6 +872,24 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
     (fieldRefs.current[key] ?? changesHeadingRef.current)?.focus();
   }, [draft, stages, stageLimitInputs]);
 
+  function showRecording(next: Recording | null): void {
+    recordingRef.current = next;
+    setRecording(next);
+  }
+  // Closes a demonstration on the host without touching the draft: on Cancel, or when it cannot be used. Until the
+  // host confirms, the demonstration stays on screen with Cancel demonstration, so a failure can be retried.
+  async function closeDemonstration(target: Recording, problem: string | null): Promise<void> {
+    demoActionRef.current = true; setDemoAction("cancel"); setBusy(true); setError(null); setNotice(null);
+    if (problem !== null) setDemoProblem(`${problem} Your instructions are unchanged. Start a new demonstration to try again.`);
+    showRecording(target);
+    try {
+      await bridge.request("cancelRecording", { id: target.id });
+      if (recordingRef.current?.id === target.id) showRecording(null);
+      if (problem === null) setNotice("Demonstration canceled. Your instructions are unchanged.");
+    } catch (e) { setError(`The demonstration could not be closed. ${errorMessage(e)} Select Cancel demonstration to try again.`); }
+    finally { demoActionRef.current = false; setDemoAction(null); setBusy(false); }
+  }
+
   if (agent === null || draft === null) return <main className="agent-setup edit-agent">
     <header className="setup-header edit-header"><h1>Edit web agent</h1></header>
     <section className="edit-layout">
@@ -848,7 +901,13 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
   </main>;
   const live: SetupDraft = { name: agent.name, url: agent.url, goal: agent.goal, steps: mergeDateSteps(agent.steps ?? []), inputs: [] };
   const raw = agent.steps === null || agent.steps.length === 0;
-  const changes = [...draftChanges(draft, live), ...(raw ? rawStageChanges(stages, agent.stages) : [])];
+  // Written instructions stay editable as text until a new demonstration replaces them with steps.
+  const rawView = raw && !demonstrated;
+  // The agent's other stages, which a demonstration keeps around its new instructions.
+  const keptStages = agent.stages.some((stage) => isObject(stage) && stage.type === "agent") ? agent.stages.filter((stage) => !isObject(stage) || stage.type !== "agent") : [];
+  const changes = raw && demonstrated
+    ? [...draftChanges({ ...draft, steps: [] }, live), { key: "demonstration", label: "Instructions", from: "Written agent instructions", to: `New demonstration, ${draft.steps.length} ${draft.steps.length === 1 ? "step" : "steps"}` }]
+    : [...draftChanges(draft, live), ...(raw ? rawStageChanges(stages, agent.stages) : [])];
   const totalChanges = changes.length + Number(credentialsChanged);
   const changed = totalChanges > 0;
   const changeCount = `${totalChanges} unpublished ${totalChanges === 1 ? "change" : "changes"}`;
@@ -856,17 +915,19 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
   const nextRunTime = agent.nextRunAt ? formatNextRun(agent.nextRunAt) : null;
   const succeeded = testRun?.status === "succeeded";
   const recordingActive = recording?.status === "recording";
-  const readOnly = agent.internal || busy || dialogOpen || recordingActive || testRun?.status === "running";
-  const canPublish = !agent.internal && changed && checked && succeeded && !recordingActive;
+  // Running, or finished without usable steps and not yet closed on the host.
+  const demonstrating = recording !== null && recording.id !== appliedRecordingId;
+  const readOnly = agent.internal || busy || dialogOpen || demonstrating || testRun?.status === "running";
+  const canPublish = !agent.internal && changed && checked && succeeded && !demonstrating;
   const openDateQuestionCount = openQuestions(draft, new Date()).length;
   const openOtpQuestionCount = credentialsAllowed ? draft.steps.filter((step) => step.type === "credential" && step.value === "otp" && !agent.credentials?.saved.includes("otp")).length : 0;
   const openQuestionCount = openDateQuestionCount + openOtpQuestionCount;
-  const publishHelp = openQuestionCount > 0 ? "Answer all open questions before testing." : agent.internal ? "Managed by Operations. Publishing changes is disabled." : !changed ? "Make a change to publish." : !succeeded ? "Test your changes before publishing." : !checked ? "Confirm you checked the result." : "Ready to publish your changes.";
+  const publishHelp = agent.internal ? "Managed by Operations. Publishing changes is disabled." : demonstrating ? "Finish or cancel the demonstration before testing." : openQuestionCount > 0 ? "Answer all open questions before testing." : !changed ? "Make a change to publish." : !succeeded ? "Test your changes before publishing." : !checked ? "Confirm you checked the result." : "Ready to publish your changes.";
   const selectedFromStep = Math.min(fromStep, Math.max(0, draft.steps.length - 1));
   const resetTest = (): void => { setTestRun(null); setChecked(false); setNotice(null); setError(null); };
   const update = (next: Partial<SetupDraft>): void => { setDraft((current) => current === null ? current : { ...current, ...next }); resetTest(); };
   const updateStage = (index: number, next: Record<string, unknown>): void => { setStages((current) => current.map((stage, i) => i === index && isObject(stage) ? { ...stage, ...next } : stage)); resetTest(); };
-  const instructions = raw ? stages.filter(isObject).filter((stage) => stage.type === "agent").map((stage) => String(stage.prompt ?? "")).join("\n") : JSON.stringify(draft.steps);
+  const instructions = rawView ? stages.filter(isObject).filter((stage) => stage.type === "agent").map((stage) => String(stage.prompt ?? "")).join("\n") : JSON.stringify(draft.steps);
   const placeholders: string[] = instructions.match(/\$(username|password|otp)\b/g) ?? [];
   const signInKinds = credentialKinds.filter((kind) => agent.credentials?.saved.includes(kind) || requiredCredentials(draft.steps).includes(kind) || placeholders.includes(`$${kind}`));
   const changeCredentials = async (): Promise<void> => {
@@ -920,18 +981,18 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
     finally { setRenaming(false); }
   };
   const test = async (): Promise<void> => {
-    if (raw) {
+    if (rawView) {
       const errors = Object.fromEntries(Object.entries(stageLimitInputs).map(([index, value]) => [index, !validStepLimit(value)]));
       setStageLimitErrors(errors);
       if (Object.values(errors).some(Boolean)) return;
     }
-    const emptyStep = raw ? -1 : draft.steps.findIndex((step) => !step.description.trim());
+    const emptyStep = rawView ? -1 : draft.steps.findIndex((step) => !step.description.trim());
     if (emptyStep !== -1) { setError(`Add an instruction for step ${emptyStep + 1} before testing.`); return; }
     setBusy(true); setOperation("test"); setError(null); setTestRun(null); setChecked(false);
     // The test runs the steps shown now; a late reorganization would no longer match it.
     setRecording((current) => current?.organizing === true ? { ...current, organizing: false } : current);
     try {
-      const config = raw ? { url: draft.url, prompt: "", options: { version: 1, engine: "computer" }, stages, parameters: {} } : compileAgent(draft, agent.credentials?.otpSource);
+      const config = rawView ? { url: draft.url, prompt: "", options: { version: 1, engine: "computer" }, stages, parameters: {} } : compileEditAgent(draft, agent.stages, agent.credentials?.otpSource);
       await bridge.request("saveDraft", { draft, config });
       const started = await bridge.request("testAgent", { agentId: agent.agentId, arguments: {} });
       setTestRun({ id: started.id, status: "running" }); setChecked(false);
@@ -961,24 +1022,69 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
     } catch (e) { setError(errorMessage(e)); }
     finally { setBusy(false); setOperation(null); }
   };
-  const startRecording = async (): Promise<void> => {
-    setBusy(true); setError(null); setNotice(null); setTestRun(null); setChecked(false);
+  const startDemonstration = async (): Promise<void> => {
+    if (demoActionRef.current) return;
+    demoActionRef.current = true; setDemoAction("start");
+    setBusy(true); setError(null); setNotice(null); setDemoProblem(null);
     try {
-      if (recording !== null) await bridge.request("cancelRecording", { id: recording.id });
-      setRecording(await bridge.request("startRecording", { url: draft.url }));
+      // The host holds one demonstration at a time; the previous one's steps are already in the draft.
+      const previous = recordingRef.current;
+      if (previous !== null) {
+        await bridge.request("cancelRecording", { id: previous.id });
+        showRecording(null); setAppliedRecordingId(null);
+      }
+      const started = await bridge.request("startRecording", { url: draft.url }, {
+        onLateResult: (late) => { if (isRecording(late)) void bridge.request("cancelRecording", { id: late.id }).catch(() => undefined); },
+      });
+      if (!mountedRef.current) { void bridge.request("cancelRecording", { id: started.id }).catch(() => undefined); return; }
+      showRecording(started);
     }
-    catch (e) { setError(errorMessage(e)); }
-    finally { setBusy(false); }
+    catch (e) { setError(`The demonstration could not start. ${errorMessage(e)}`); }
+    finally { demoActionRef.current = false; setDemoAction(null); setBusy(false); }
   };
-  const stopRecording = async (): Promise<void> => {
-    if (recording === null) return;
-    setBusy(true);
-    try { const stopped = await bridge.request("stopRecording", { id: recording.id }); setRecording(stopped); if (stopped.steps.length > 0) update({ steps: replaceStepsFrom(draft.steps, selectedFromStep, mergeDateSteps(draft.steps.some((step) => step.stage != null) ? stopped.steps.map((step) => ({ ...step, stage: step.stage ?? "" })) : stopped.steps)) }); }
-    catch (e) { setError(errorMessage(e)); }
-    finally { setBusy(false); }
+  const finishDemonstration = async (): Promise<void> => {
+    const current = recordingRef.current;
+    if (current?.status !== "recording" || demoActionRef.current) return;
+    demoActionRef.current = true; setDemoAction("finish"); setBusy(true); setError(null);
+    let stopped: Recording;
+    try { stopped = await bridge.request("stopRecording", { id: current.id }); }
+    catch (e) {
+      setError(`The demonstration could not be finished. ${errorMessage(e)} Try again, or cancel the demonstration.`);
+      demoActionRef.current = false; setDemoAction(null); setBusy(false);
+      return;
+    }
+    demoActionRef.current = false; setDemoAction(null); setBusy(false);
+    if (recordingRef.current?.id !== current.id) return;
+    // Only a stopped demonstration can replace the instructions; one still recording stays open for another try.
+    if (stopped.status !== "stopped" && stopped.status !== "expired") {
+      setError("The demonstration has not stopped yet. Select Finish demonstration to try again, or cancel it.");
+      return;
+    }
+    const problem = stopped.status === "expired" ? "The demonstration expired before it was finished."
+      : stopped.blockedReason ? `This demonstration can't be used: ${stopped.blockedReason}`
+      : stopped.steps.length === 0 ? "The demonstration did not capture any steps." : null;
+    if (problem !== null) { await closeDemonstration(stopped, problem); return; }
+    showRecording(stopped); setAppliedRecordingId(stopped.id);
+    if (rawView) {
+      setDemonstrated(true);
+      update({ steps: mergeDateSteps(stopped.steps) });
+    } else {
+      update({ steps: replaceStepsFrom(draft.steps, selectedFromStep, mergeDateSteps(draft.steps.some((step) => step.stage != null) ? stopped.steps.map((step) => ({ ...step, stage: step.stage ?? "" })) : stopped.steps)) });
+    }
+    setNotice("The new demonstration is in the draft. Test it before publishing.");
   };
   const revert = (key: string): void => {
     revertFocusRef.current = key;
+    if (key === "demonstration") {
+      // Back to the live written instructions and action limits; the draft is not saved.
+      revertFocusRef.current = `stage:${Math.max(0, agent.stages.findIndex((stage) => isObject(stage) && stage.type === "agent"))}:prompt`;
+      setDemonstrated(false);
+      // A late reorganization of the reverted demonstration must not bring its steps back.
+      if (recordingRef.current?.organizing === true) showRecording({ ...recordingRef.current, organizing: false });
+      setStages(agent.stages); setStageLimitInputs({}); setStageLimitErrors({});
+      update({ steps: [] });
+      return;
+    }
     if (raw && key.startsWith("stage:")) {
       const [, stageIndex, field] = key.split(":");
       const index = Number(stageIndex);
@@ -1032,7 +1138,7 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
     finally { setBusy(false); }
   };
   const requestClose = (trigger: HTMLElement): void => {
-    if (changed || draft.name.trim() !== agent.name.trim() || renaming || busy || testRun?.status === "running" || recordingActive) {
+    if (changed || draft.name.trim() !== agent.name.trim() || renaming || busy || testRun?.status === "running" || demonstrating) {
       dialogTriggerRef.current = trigger; setConfirmClose(true);
     } else void close();
   };
@@ -1041,6 +1147,24 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
     setInsertedStepId(id);
     update({ steps: [...draft.steps, { id, type: "agent", description: "" }] });
   };
+
+  const demonstrationControls = <div className="redemo-controls">
+    {demonstrating ? <div className="edit-actions">
+      {recordingActive && <button className="button button-primary" disabled={busy} aria-busy={demoAction === "finish"} onClick={() => void finishDemonstration()}>{demoAction === "finish" ? "Finishing…" : "Finish demonstration"}</button>}
+      <button className="button button-quiet" disabled={busy} aria-busy={demoAction === "cancel"} onClick={() => void closeDemonstration(recording, null)}>{demoAction === "cancel" ? "Canceling…" : "Cancel demonstration"}</button>
+    </div> : <div className="edit-actions">
+      {!rawView && <label>Replace from step<select aria-label="Replace from step" value={selectedFromStep} disabled={readOnly || draft.steps.length === 0} onChange={(e) => setFromStep(Number(e.target.value))}>{draft.steps.map((_, index) => <option key={index} value={index}>{index + 1}</option>)}</select></label>}
+      <button className="button button-quiet" disabled={readOnly} aria-busy={demoAction === "start"} onClick={() => void startDemonstration()}>{demoAction === "start" ? "Opening the browser…" : "New demonstration"}</button>
+    </div>}
+    <p>{recordingActive ? `Do the task in the browser below, then finish. ${rawView ? "The written instructions" : "Your steps"} stay as they are until then.`
+      : demonstrating ? "Closing the demonstration. Your instructions are unchanged."
+      : rawView ? "Demonstrate the task in a browser. Its steps replace these written instructions; nothing is published until you test and publish."
+      : `Replaces step ${selectedFromStep + 1} and every later step with a new demonstration.`}</p>
+    {demoProblem && <p className="edit-result edit-result-failed" role="alert">{demoProblem}</p>}
+    {recordingActive && recording.blockedReason && <p className="edit-result edit-result-failed" role="alert">Cannot continue: {recording.blockedReason}</p>}
+    {recordingActive && <div className="browser-frame edit-recording" ref={demoBrowserRef}>{browserbaseLiveViewUrl(recording.liveViewUrl) ? <iframe title="Virtual browser" src={browserbaseLiveViewUrl(recording.liveViewUrl)!} allow="clipboard-read; clipboard-write" /> : <p role="status">Opening the virtual browser…</p>}{recording.liveViewSwitching && <div className="browser-switching" role="status">Opening the new window…</div>}</div>}
+    {recordingActive && <DownloadNotice downloads={recording.downloads ?? []} />}
+  </div>;
 
   // While a test is on screen its action sits under the activity, beside the browser, so it never falls below the workbench.
   const publishCard = <section className="edit-card edit-publish"><h2 ref={publishHeadingRef} tabIndex={-1}>Test &amp; publish</h2><p>Scheduled runs continue using the live version until you publish.</p>
@@ -1060,7 +1184,7 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
     </div>}
     <div className="edit-actions">
       {testRun?.status === "running" && <button className="button button-quiet" disabled={testRun.stopping || busy} aria-busy={testRun.stopping === true} onClick={() => void stopTest()}>{testRun.stopping ? "Stopping…" : "Stop test"}</button>}
-      <button className={`button ${succeeded ? "button-quiet" : "button-primary"}`} aria-describedby={openQuestionCount > 0 ? "edit-question-reason" : undefined} aria-busy={operation === "test"} disabled={busy || agent.internal || testRun?.status === "running" || recordingActive || openQuestionCount > 0} onClick={() => void test()}>{operation === "test" ? "Starting test…" : testRun?.status === "failed" ? "Run test again" : succeeded ? "Test again" : "Test changes"}</button>
+      <button className={`button ${succeeded ? "button-quiet" : "button-primary"}`} aria-describedby={openQuestionCount > 0 ? "edit-question-reason" : undefined} aria-busy={operation === "test"} disabled={busy || agent.internal || testRun?.status === "running" || demonstrating || openQuestionCount > 0} onClick={() => void test()}>{operation === "test" ? "Starting test…" : testRun?.status === "failed" ? "Run test again" : succeeded ? "Test again" : "Test changes"}</button>
       {succeeded && <label className="result-check"><input aria-label="I checked the result" type="checkbox" checked={checked} disabled={readOnly} onChange={(e) => setChecked(e.target.checked)} /> I checked the result</label>}
       <button className={`button ${succeeded ? "button-primary" : "button-quiet"}`} aria-describedby="edit-publish-help" aria-busy={operation === "publish"} disabled={!canPublish || busy} onClick={(e) => { dialogTriggerRef.current = e.currentTarget; setPublishOpen(true); }}>{operation === "publish" ? "Publishing…" : "Publish changes"}</button>
     </div>
@@ -1073,7 +1197,7 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
       <div className="edit-heading">
         <h1 className="visually-hidden">Edit web agent</h1>
         <div className="edit-title">
-          <label className="edit-name"><span className="visually-hidden">Agent name</span><input value={draft.name} title="Rename agent" size={Math.max(12, draft.name.length)} disabled={agent.internal || renaming || busy} aria-invalid={renameError !== null} aria-describedby={renameError ? "edit-name-help rename-error" : "edit-name-help"}
+          <label className="edit-name"><span className="visually-hidden">Agent name</span><input value={draft.name} title="Rename agent" size={Math.max(12, draft.name.length)} disabled={agent.internal || renaming || busy || demonstrating} aria-invalid={renameError !== null} aria-describedby={renameError ? "edit-name-help rename-error" : "edit-name-help"}
             onChange={(e) => { setDraft({ ...draft, name: e.target.value }); setRenameSaved(false); setNotice(null); }}
             onBlur={(e) => void rename(e.target.value)}
             onKeyDown={(e) => {
@@ -1098,24 +1222,16 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
         <div className="edit-test-side"><aside className="test-rail" aria-label="Test activity"><header><h3>Agent activity</h3><span>{testRun === null ? "Changed since this test" : shownRun.status === "running" ? "Running" : succeeded ? "Passed" : "Stopped"}</span></header><ActivityLog run={shownRun} /></aside>{publishCard}</div>
       </div></section>}
       <div className="edit-grid"><div className="edit-main">
-        {raw ? <section className="edit-card edit-instructions"><h2>Instructions</h2>
+        {rawView ? <section className="edit-card edit-instructions"><h2>Instructions</h2>
           {stages.map((stage, index) => { const item = isObject(stage) ? stage : null; return item?.type === "agent" ? <div className="raw-stage" key={index}>
             <label>Agent instructions<textarea ref={(field) => { fieldRefs.current[`stage:${index}:prompt`] = field; }} aria-label="Agent instructions" value={String(item.prompt ?? "")} disabled={readOnly} onChange={(e) => updateStage(index, { prompt: e.target.value })} /></label>
           </div> : null; })}
           {stages.some((stage) => !isObject(stage) || stage.type !== "agent") && <p className="raw-preserved">Then: {stages.filter((stage) => !isObject(stage) || stage.type !== "agent").map((stage) => preservedStageLabel(isObject(stage) ? stage : null)).join(" · ")} — kept as is</p>}
+          {demonstrationControls}
         </section> : <section className="edit-card edit-instructions"><h2>Steps</h2><p className="field-note expected-outcome-help"><HelpTip label="Expected outcome">The agent checks this before moving on. Leave empty unless a step is easy to get wrong.</HelpTip></p>
           <StepEditor variant="edit" steps={draft.steps} goal={draft.goal} busy={readOnly} credentialsAllowed={credentialsAllowed} savedCredentials={agent.credentials?.saved ?? []} fieldRefs={fieldRefs} onRequestOtp={() => void requestEditOtp()} onUpdateStep={(id, updates) => update({ steps: draft.steps.map((step) => step.id === id ? updateStepFields(step, updates) : step) })} onRemoveStep={(id) => update({ steps: draft.steps.filter((step) => step.id !== id) })} onMergeSteps={(ids) => update({ steps: combineDateSteps(draft.steps, ids) })} onUndoMergedStep={(id) => update({ steps: undoDateMerge(draft.steps, id) })} onMoveStep={(index, delta) => update({ steps: moveStep(draft.steps, index, delta) })} onRenameStage={(index, name) => update({ steps: renameStageAt(draft.steps, index, name) })} onInsert={insertStep} />
-          <div className="redemo-controls">
-            <div className="edit-actions"><label>Re-demonstrate from step<select aria-label="Re-demonstrate from step" value={selectedFromStep} disabled={readOnly || draft.steps.length === 0} onChange={(e) => setFromStep(Number(e.target.value))}>{draft.steps.map((_, index) => <option key={index} value={index}>{index + 1}</option>)}</select></label>
-              <button className="button button-quiet" disabled={readOnly} onClick={() => void startRecording()}>Re-demonstrate</button>
-              {recordingActive && <button className="button button-primary" disabled={busy} onClick={() => void stopRecording()}>Finish re-demonstration</button>}
-            </div>
-            <p>Replaces step {selectedFromStep + 1} and every later step with a new demonstration.</p>
-          </div>
-          {recording?.blockedReason && <p className="edit-result edit-result-failed" role="alert">Cannot continue: {recording.blockedReason}</p>}
-          {recording?.status === "expired" && <p className="edit-result edit-result-failed" role="alert">Demonstration expired. Re-demonstrate again.</p>}
-          {recordingActive && <div className="browser-frame edit-recording">{browserbaseLiveViewUrl(recording.liveViewUrl) ? <iframe title="Virtual browser" src={browserbaseLiveViewUrl(recording.liveViewUrl)!} allow="clipboard-read; clipboard-write" /> : <p>Opening the virtual browser.</p>}{recording.liveViewSwitching && <div className="browser-switching" role="status">Opening the new window…</div>}</div>}
-          {recordingActive && <DownloadNotice downloads={recording.downloads ?? []} />}
+          {raw && demonstrated && keptStages.length > 0 && <p className="raw-preserved">Then: {keptStages.map((stage) => preservedStageLabel(isObject(stage) ? stage : null)).join(" · ")} — kept as is</p>}
+          {demonstrationControls}
         </section>}
       </div><aside className="edit-rail">
         <section className="edit-card edit-credentials" aria-labelledby="edit-credentials-title"><h2 id="edit-credentials-title">Sign-in details</h2>
@@ -1136,7 +1252,7 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
         <section className="edit-card edit-details"><h2>Details</h2>
           <label>Website address<input ref={(field) => { fieldRefs.current.url = field; }} aria-label="Website address" value={draft.url} disabled={readOnly} onChange={(e) => update({ url: e.target.value })} /></label>
           <label>Goal<span id="edit-goal-help" className="field-note">What the agent should produce each run. Used to suggest the answers in the review and the success check.</span><textarea ref={(field) => { fieldRefs.current.goal = field; }} rows={3} aria-label="Goal" aria-describedby="edit-goal-help" value={draft.goal} disabled={readOnly} onChange={(e) => update({ goal: e.target.value })} /></label>
-          {raw && stages.map((stage, index) => { const item = isObject(stage) ? stage : null; return item?.type === "agent" ? <div className="raw-limit" key={index}>
+          {rawView && stages.map((stage, index) => { const item = isObject(stage) ? stage : null; return item?.type === "agent" ? <div className="raw-limit" key={index}>
             <label>Maximum actions<input ref={(field) => { fieldRefs.current[`stage:${index}:step_limit`] = field; }} aria-label="Maximum actions" type="text" inputMode="numeric" value={stageLimitInputs[index] ?? String(item.step_limit ?? 1)} disabled={readOnly} aria-invalid={stageLimitErrors[index] ?? false} aria-describedby={`stage-limit-help-${index}${stageLimitErrors[index] ? ` stage-limit-error-${index}` : ""}`}
               onChange={(e) => {
                 const value = e.target.value;
@@ -1156,7 +1272,7 @@ function EditScreen({ bridge, credentialsAllowed, googleAllowed }: { bridge: Hos
       <h2 id="edit-screen-title">Final screen</h2><button className="button button-quiet" onClick={() => setScreenOpen(false)}>Close screenshot</button><img src={lastScreen.image} alt="Final screen" />
     </div></div>}
     {confirmClose && <div className="close-confirmation" role="dialog" aria-modal="true" aria-labelledby="close-edit-title" aria-describedby="close-edit-description"><div className="close-confirmation-card" ref={modalRef} tabIndex={-1}>
-      <h2 id="close-edit-title">Discard your changes?</h2><p id="close-edit-description">Your unpublished changes and any active test or re-demonstration will be left behind.</p>
+      <h2 id="close-edit-title">Discard your changes?</h2><p id="close-edit-description">Your unpublished changes and any active test or demonstration will be left behind.</p>
       <div className="edit-actions"><button className="button button-quiet" onClick={() => setConfirmClose(false)} disabled={busy}>Keep editing</button><button className="button button-danger" onClick={() => void close()} disabled={busy}>Discard changes</button></div>
     </div></div>}
     {publishOpen && <div className="edit-modal" role="dialog" aria-modal="true" aria-labelledby="publish-edit-title" aria-describedby="publish-edit-description"><div className="edit-modal-card" ref={modalRef} tabIndex={-1}>

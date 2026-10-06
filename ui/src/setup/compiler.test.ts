@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { applyOrganizedSteps, compileAgent, dateRuleChoices, dateRuleLabel, doneWhenOptions, draftChanges, findUnambiguousEmailStep, groupSteps, mergeDateSteps, openQuestions, replaceStepsFrom, requiredCredentials, resolveDateRule, type SetupDraft, type SetupStep } from "./compiler";
+import { applyOrganizedSteps, compileAgent, compileEditAgent, dateRuleChoices, dateRuleLabel, doneWhenOptions, draftChanges, findUnambiguousEmailStep, groupSteps, mergeDateSteps, openQuestions, replaceStepsFrom, requiredCredentials, resolveDateRule, type SetupDraft, type SetupStep } from "./compiler";
 
 const baseDraft = (): SetupDraft => ({
   name: "Download monthly statement",
@@ -734,5 +734,46 @@ test("validates date values, formats, relative ranges, and described answers", (
     const draft = baseDraft();
     draft.steps = [{ ...baseDate, ...change }];
     assert.throws(() => compileAgent(draft), message);
+  }
+});
+
+test("keeps a stage name the user changed while the demonstration was being organized", () => {
+  const recorded: SetupStep[] = [
+    { id: "reports", type: "click", description: "Click Reports", target: "Reports" },
+    { id: "export", type: "click", description: "Click Export", target: "Export" },
+  ];
+  // An edit re-demonstration marks recorded steps with an empty stage; the user then named the first one.
+  const current: SetupStep[] = [{ ...recorded[0]!, stage: "Monthly report" }, { ...recorded[1]!, stage: "" }];
+  const organized: SetupStep[] = [
+    { ...recorded[0]!, stage: "Open reports", description: "Open Reports" },
+    { ...recorded[1]!, stage: "Download", description: "Export the statement" },
+  ];
+  assert.deepEqual(applyOrganizedSteps(current, recorded, organized).map(({ stage, description }) => ({ stage, description })), [
+    { stage: "Monthly report", description: "Open Reports" },
+    { stage: "Download", description: "Export the statement" },
+  ]);
+});
+
+test("an edit draft replaces only the agent instructions and keeps the agent's other stages in place", () => {
+  const draft: SetupDraft = { name: "Reports", url: "https://portal.example.test/reports", goal: "Download the report.", steps: [{ id: "open", type: "click", description: "Open the reports section", target: "Reports" }], inputs: [] };
+  const compiled = compileAgent(draft);
+  const agentStage = compiled.stages[0];
+  const legacy = { type: "agent", prompt: "Old written instructions", step_limit: 16 };
+  const cases: Array<{ live: unknown[]; stages: unknown[] }> = [
+    // A written-instructions agent with a wait and a download.
+    { live: [legacy, { type: "sleep", sleep_ms: 5000 }, { type: "download" }], stages: [agentStage, { type: "sleep", sleep_ms: 5000 }, { type: "download" }] },
+    // A structured agent reloaded after publish with a reload tail.
+    { live: [{ ...legacy, prompt: "Previously compiled" }, { type: "download" }, { type: "sleep", sleep_ms: 5000 }, { type: "reload" }], stages: [agentStage, { type: "download" }, { type: "sleep", sleep_ms: 5000 }, { type: "reload" }] },
+    // Stages before the first agent stay first; later legacy agent prompts are not copied.
+    { live: [{ type: "reload" }, legacy, { ...legacy, prompt: "Second old prompt" }, { type: "download" }], stages: [{ type: "reload" }, agentStage, { type: "download" }] },
+    // Nothing else to keep, or no agent stage to replace: the compiled default.
+    { live: [legacy], stages: compiled.stages },
+    { live: [{ type: "download" }], stages: compiled.stages },
+  ];
+  for (const { live, stages } of cases) {
+    const config = compileEditAgent(draft, live);
+    assert.deepEqual(config.stages, stages);
+    assert.equal(config.prompt, compiled.prompt);
+    assert.doesNotMatch(JSON.stringify(config), /Old written instructions|Second old prompt|Previously compiled/);
   }
 });

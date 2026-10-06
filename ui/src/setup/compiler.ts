@@ -429,7 +429,9 @@ export function applyOrganizedSteps(current: SetupStep[], recorded: SetupStep[],
     const was = before.get(step.id);
     const next = after.get(step.id);
     if (was === undefined || next === undefined) return step;
-    return { ...step, stage: next.stage ?? step.stage, description: step.description === was.description ? next.description : step.description };
+    // An empty stage is how an edit re-demonstration marks recorded steps; any other change is the user's.
+    const stageEdited = (step.stage ?? "") !== (was.stage ?? "");
+    return { ...step, stage: stageEdited ? step.stage : next.stage ?? step.stage, description: step.description === was.description ? next.description : step.description };
   });
   const result = [...updated];
   for (const next of organized.filter((step) => step.type === "date" && step.parts?.length)) {
@@ -515,6 +517,20 @@ export function compileAgent(draft: SetupDraft, otpSource?: "authenticator" | "e
     ],
     parameters: {},
   };
+}
+
+/**
+ * Compiles an edited agent's steps into its existing stage list: the first agent stage becomes the compiled
+ * instructions, other agent stages (stale instructions) are dropped, and every other stage stays where it was.
+ * Without an agent stage to replace, or with nothing else to keep, the compiled default applies.
+ */
+export function compileEditAgent(draft: SetupDraft, liveStages: unknown[], otpSource?: "authenticator" | "email"): Omit<CompiledAgent, "stages"> & { stages: unknown[] } {
+  const compiled = compileAgent(draft, otpSource);
+  const isAgent = (stage: unknown): boolean => typeof stage === "object" && stage !== null && (stage as { type?: unknown }).type === "agent";
+  const first = liveStages.findIndex(isAgent);
+  if (first === -1 || liveStages.every(isAgent)) return compiled;
+  const instructions = compiled.stages.filter(isAgent);
+  return { ...compiled, stages: liveStages.flatMap((stage, index) => index === first ? instructions : isAgent(stage) ? [] : [stage]) };
 }
 
 function validateDraft(draft: SetupDraft, otpSource?: "authenticator" | "email"): void {

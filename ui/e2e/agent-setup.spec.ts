@@ -1152,7 +1152,7 @@ for (const mode of ["create", "edit"]) {
       await setup.getByLabel("Website address").fill("https://portal.example.test/reports");
       await setup.getByLabel("What should the agent do?").fill("Download the statement.");
       await setup.getByRole("button", { name: "Continue to demonstration" }).click();
-    } else await setup.getByRole("button", { name: "Re-demonstrate", exact: true }).click();
+    } else await setup.getByRole("button", { name: "New demonstration", exact: true }).click();
     const frame = setup.locator(mode === "edit" ? ".edit-recording" : ".demonstrate .browser-frame");
     await expect(frame.getByRole("status")).toHaveText("Opening the new window…");
     await expect(frame.locator("iframe[title='Virtual browser']")).toBeAttached();
@@ -2021,27 +2021,27 @@ test("keeps raw stages and internal agents safe", async ({ page }) => {
   await expect(internal.getByRole("button", { name: "Publish changes" })).toBeDisabled();
 });
 
-test("renames without creating a version and re-demonstrates from a selected step", async ({ page }) => {
+test("renames without creating a version and demonstrates again from a selected step", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=edit`);
   const setup = page.frameLocator("iframe");
   await expect(setup.getByRole("heading", { name: "Edit web agent" })).toBeVisible();
   await setup.getByLabel("Agent name").fill("Renamed report agent");
   await setup.getByLabel("Agent name").blur();
-  const redemonstrateFrom = setup.getByLabel("Re-demonstrate from step");
+  const redemonstrateFrom = setup.getByLabel("Replace from step");
   await redemonstrateFrom.selectOption({ value: "1" });
   await expect(redemonstrateFrom).toHaveValue("1");
-  await setup.getByRole("button", { name: "Re-demonstrate" }).click();
+  await setup.getByRole("button", { name: "New demonstration" }).click();
   await expect(setup.getByTitle("Virtual browser")).toBeVisible();
   await expect(setup.getByTitle("Virtual browser")).toHaveAttribute("src", "https://live.browserbase.com/session");
-  await setup.getByRole("button", { name: "Finish re-demonstration" }).click();
+  await setup.getByRole("button", { name: "Finish demonstration" }).click();
   await expect(setup.getByLabel("Step 1 description")).toHaveValue("Open the reports section");
   await expect(setup.getByLabel("Step 2 description")).toHaveValue("Download the refreshed statement");
   await expect.poll(() => page.evaluate(() => window.__renameRequests)).toEqual(["Renamed report agent"]);
   await expect.poll(() => page.evaluate(() => window.__publishRequests)).toEqual([]);
-  await expect(setup.getByRole("button", { name: "Re-demonstrate" })).toBeEnabled();
-  await setup.getByRole("button", { name: "Re-demonstrate" }).click();
+  await expect(setup.getByRole("button", { name: "New demonstration" })).toBeEnabled();
+  await setup.getByRole("button", { name: "New demonstration" }).click();
   await expect(setup.getByTitle("Virtual browser")).toBeVisible();
-  await setup.getByRole("button", { name: "Finish re-demonstration" }).click();
+  await setup.getByRole("button", { name: "Finish demonstration" }).click();
   await expect(setup.getByRole("alert")).toHaveCount(0);
 });
 
@@ -2065,7 +2065,7 @@ test("guards leaving edits and closes immediately without changes", async ({ pag
   await expect.poll(() => page.evaluate(() => window.__closeRequests)).toEqual([{ agentId: "agent-1" }]);
 });
 
-test("guards leaving a running test or re-demonstration with no draft changes", async ({ page }) => {
+test("guards leaving a running test or demonstration with no draft changes", async ({ page }) => {
   await page.goto(`${baseUrl}/host?scenario=edit-watch`);
   const setup = page.frameLocator("iframe");
   await setup.getByRole("button", { name: "Test changes" }).click();
@@ -2080,12 +2080,209 @@ test("guards leaving a running test or re-demonstration with no draft changes", 
   await setup.getByRole("button", { name: "Keep editing" }).click();
   expect(await page.evaluate(() => window.__closeRequests)).toEqual([]);
   await page.goto(`${baseUrl}/host?scenario=edit`);
-  await setup.getByRole("button", { name: "Re-demonstrate", exact: true }).click();
+  await setup.getByRole("button", { name: "New demonstration", exact: true }).click();
   await setup.getByRole("button", { name: "Back to web agents" }).click();
   await expect(setup.getByRole("dialog", { name: "Discard your changes?" })).toBeVisible();
   await setup.getByRole("button", { name: "Keep editing" }).click();
-  await expect(setup.getByRole("button", { name: "Finish re-demonstration" })).toBeVisible();
+  await expect(setup.getByRole("button", { name: "Finish demonstration" })).toBeVisible();
   expect(await page.evaluate(() => window.__closeRequests)).toEqual([]);
+});
+
+test("replaces written instructions with a new demonstration, tests it, and publishes the same agent", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(`${baseUrl}/host?scenario=edit-raw`);
+  const setup = page.frameLocator("iframe");
+  const instructions = setup.getByLabel("Agent instructions", { exact: true });
+  await expect(instructions).toHaveValue("Open reports");
+  await setup.getByRole("button", { name: "New demonstration" }).click();
+  await expect(setup.getByTitle("Virtual browser")).toHaveAttribute("src", "https://live.browserbase.com/session");
+  // The written instructions stay as they are, and nothing else can change, while the demonstration runs.
+  await expect(instructions).toHaveValue("Open reports");
+  await expect(instructions).toBeDisabled();
+  await expect(setup.getByLabel("Agent name")).toBeDisabled();
+  await expect(setup.getByLabel("Maximum actions", { exact: true })).toBeDisabled();
+  await expect(setup.getByRole("button", { name: "Test changes" })).toBeDisabled();
+  await expect(setup.getByRole("button", { name: "Publish changes" })).toBeDisabled();
+  await expect(setup.locator("#edit-publish-help")).toHaveText("Finish or cancel the demonstration before testing.");
+  expect(await page.evaluate(() => [window.__savedAgents, window.__publishRequests, window.__renameRequests])).toEqual([[], [], []]);
+
+  await setup.getByRole("button", { name: "Finish demonstration" }).click();
+  await expect(setup.getByRole("heading", { name: "Steps" })).toBeVisible();
+  await expect(setup.getByLabel("Step 1 description")).toHaveValue("Download the refreshed statement");
+  await expect(setup.getByLabel("Agent instructions", { exact: true })).toHaveCount(0);
+  await expect(setup.getByLabel("Maximum actions", { exact: true })).toHaveCount(0);
+  await expect(setup.getByTitle("Virtual browser")).toHaveCount(0);
+  await expect(setup.locator(".raw-preserved")).toHaveText("Then: Download stage · Sleep stage · 5 s · Reload stage — kept as is");
+  const rail = setup.locator(".edit-changes");
+  await expect(rail.locator(".change-item")).toHaveCount(1);
+  await expect(rail.getByText("Instructions", { exact: true })).toBeVisible();
+  await expect(rail).toContainText("New demonstration, 1 step");
+  await expect(setup.getByRole("button", { name: "Publish changes" })).toBeDisabled();
+
+  await setup.getByRole("button", { name: "Test changes" }).click();
+  await expect(setup.getByText("Test completed")).toBeVisible();
+  const saved = await page.evaluate(() => window.__savedAgents);
+  expect(saved).toHaveLength(1);
+  expect(saved[0].draft).toMatchObject({ name: "Monthly report agent", url: "https://portal.example.test/reports", goal: "Download the monthly report." });
+  expect(saved[0].draft.steps.map((step: { description: string }) => step.description)).toEqual(["Download the refreshed statement"]);
+  expect(saved[0].config.stages[0].prompt).toContain("Download the refreshed statement");
+  expect(saved[0].config.stages[0].prompt).not.toContain("Open reports");
+  // Only the instructions change: the agent's download, wait and reload stages stay in order.
+  expect(saved[0].config.stages.slice(1)).toEqual([{ type: "download" }, { type: "sleep", sleep_ms: 5000 }, { type: "reload" }]);
+  expect(await page.evaluate(() => window.__publishRequests)).toEqual([]);
+
+  await setup.getByLabel("I checked the result").check();
+  await setup.getByRole("button", { name: "Publish changes" }).click();
+  await setup.getByRole("button", { name: "Publish", exact: true }).click();
+  await expect(setup.getByRole("status").filter({ hasText: "Published v4." })).toBeVisible();
+  // Reloaded from the host: the same agent now edits as demonstrated steps.
+  await expect(setup.getByRole("heading", { name: "Steps" })).toBeVisible();
+  await expect(setup.getByLabel("Step 1 description")).toHaveValue("Download the refreshed statement");
+  await expect(setup.getByText("Live v4")).toBeVisible();
+  await expect(setup.getByLabel("Agent name")).toHaveValue("Monthly report agent");
+  await expect(setup.locator(".edit-changes")).toContainText("No changes yet.");
+  expect(await page.evaluate(() => window.__publishRequests)).toEqual([{ overwrite: false }]);
+});
+
+test("reverts a demonstration that replaced written instructions without saving", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-raw`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByLabel("Maximum actions", { exact: true }).fill("32");
+  await setup.getByRole("button", { name: "New demonstration" }).click();
+  await setup.getByRole("button", { name: "Finish demonstration" }).click();
+  await expect(setup.getByLabel("Step 1 description")).toHaveValue("Download the refreshed statement");
+  await setup.getByRole("button", { name: "Revert Instructions" }).click();
+  await expect(setup.getByRole("heading", { name: "Instructions" })).toBeVisible();
+  await expect(setup.getByLabel("Agent instructions", { exact: true })).toHaveValue("Open reports");
+  await expect(setup.getByLabel("Agent instructions", { exact: true })).toBeFocused();
+  await expect(setup.getByLabel("Maximum actions", { exact: true })).toHaveValue("16");
+  await expect(setup.locator(".edit-changes")).toContainText("No changes yet.");
+  await expect(setup.getByRole("button", { name: "New demonstration" })).toBeEnabled();
+  expect(await page.evaluate(() => [window.__savedAgents, window.__publishRequests])).toEqual([[], []]);
+});
+
+test("keeps edited written instructions and a checked test when a demonstration is canceled", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-raw`);
+  const setup = page.frameLocator("iframe");
+  const instructions = setup.getByLabel("Agent instructions", { exact: true });
+  await instructions.fill("Open reports and pick last month");
+  await setup.getByRole("button", { name: "Test changes" }).click();
+  await expect(setup.getByText("Test completed")).toBeVisible();
+  await setup.getByLabel("I checked the result").check();
+  await setup.getByRole("button", { name: "New demonstration" }).click();
+  await expect(setup.getByTitle("Virtual browser")).toBeVisible();
+  await expect(setup.getByLabel("I checked the result")).toBeDisabled();
+  await setup.getByRole("button", { name: "Cancel demonstration" }).click();
+  await expect(setup.getByRole("status").filter({ hasText: "Demonstration canceled. Your instructions are unchanged." })).toBeVisible();
+  await expect(setup.getByTitle("Virtual browser")).toHaveCount(0);
+  await expect(instructions).toHaveValue("Open reports and pick last month");
+  await expect(instructions).toBeEnabled();
+  await expect(setup.getByLabel("I checked the result")).toBeChecked();
+  await expect(setup.getByRole("button", { name: "Publish changes" })).toBeEnabled();
+  await expect(setup.locator(".edit-changes p").first()).toHaveText("1 unpublished change");
+});
+
+for (const { scenario, problem } of [
+  { scenario: "edit-raw-demo-empty", problem: "The demonstration did not capture any steps." },
+  { scenario: "edit-raw-demo-blocked", problem: "This demonstration can't be used: The website asked for a payment." },
+]) {
+  test(`keeps the written instructions when ${scenario.slice("edit-raw-demo-".length)} demonstration finishes`, async ({ page }) => {
+    await page.goto(`${baseUrl}/host?scenario=${scenario}`);
+    const setup = page.frameLocator("iframe");
+    await setup.getByRole("button", { name: "New demonstration" }).click();
+    await setup.getByRole("button", { name: "Finish demonstration" }).click();
+    await expect(setup.getByRole("alert")).toHaveText(`${problem} Your instructions are unchanged. Start a new demonstration to try again.`);
+    await expect(setup.getByRole("heading", { name: "Instructions" })).toBeVisible();
+    await expect(setup.getByLabel("Agent instructions", { exact: true })).toHaveValue("Open reports");
+    await expect(setup.locator(".edit-changes")).toContainText("No changes yet.");
+    // The host released the demonstration, so another one can start.
+    await setup.getByRole("button", { name: "New demonstration" }).click();
+    await expect(setup.getByTitle("Virtual browser")).toBeVisible();
+    await expect(setup.getByRole("alert")).toHaveCount(0);
+  });
+}
+
+test("keeps the written instructions and the demonstration open when Finish finds it still recording", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-raw-demo-still-recording`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByRole("button", { name: "New demonstration" }).click();
+  await setup.getByRole("button", { name: "Finish demonstration" }).click();
+  await expect(setup.getByRole("alert")).toHaveText("The demonstration has not stopped yet. Select Finish demonstration to try again, or cancel it.");
+  await expect(setup.getByLabel("Agent instructions", { exact: true })).toHaveValue("Open reports");
+  await expect(setup.getByTitle("Virtual browser")).toBeVisible();
+  await expect(setup.locator(".edit-changes")).toContainText("No changes yet.");
+  await setup.getByRole("button", { name: "Finish demonstration" }).click();
+  await expect(setup.getByLabel("Step 1 description")).toHaveValue("Download the refreshed statement");
+  await expect(setup.getByRole("alert")).toHaveCount(0);
+});
+
+test("keeps the written instructions when a demonstration expires while recording", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-raw-demo-expired`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByRole("button", { name: "New demonstration" }).click();
+  await expect(setup.getByRole("alert")).toHaveText("The demonstration expired before it was finished. Your instructions are unchanged. Start a new demonstration to try again.");
+  await expect(setup.getByTitle("Virtual browser")).toHaveCount(0);
+  await expect(setup.getByLabel("Agent instructions", { exact: true })).toHaveValue("Open reports");
+  await expect(setup.getByRole("button", { name: "New demonstration" })).toBeEnabled();
+  await expect(setup.getByRole("button", { name: "Test changes" })).toBeEnabled();
+});
+
+test("shows a retryable error when a demonstration cannot start", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-raw-demo-start-fail`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByLabel("Agent instructions", { exact: true }).fill("Open reports today");
+  await setup.getByRole("button", { name: "New demonstration" }).click();
+  await expect(setup.getByRole("alert")).toHaveText("The demonstration could not start. The browser could not be opened.");
+  await expect(setup.getByLabel("Agent instructions", { exact: true })).toHaveValue("Open reports today");
+  await expect(setup.getByLabel("Agent instructions", { exact: true })).toBeEnabled();
+  await setup.getByRole("button", { name: "New demonstration" }).click();
+  await expect(setup.getByTitle("Virtual browser")).toBeVisible();
+  await expect(setup.getByRole("alert")).toHaveCount(0);
+  expect(await page.evaluate(() => [window.__savedAgents, window.__renameRequests])).toEqual([[], []]);
+});
+
+test("keeps a demonstration whose cancellation failed until a retry succeeds", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-raw-demo-cancel-fail`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByRole("button", { name: "New demonstration" }).click();
+  await setup.getByRole("button", { name: "Cancel demonstration" }).click();
+  await expect(setup.getByRole("alert")).toHaveText("The demonstration could not be closed. The demonstration service did not respond. Select Cancel demonstration to try again.");
+  await expect(setup.getByTitle("Virtual browser")).toBeVisible();
+  await expect(setup.getByRole("button", { name: "Test changes" })).toBeDisabled();
+  await setup.getByRole("button", { name: "Cancel demonstration" }).click();
+  await expect(setup.getByRole("status").filter({ hasText: "Demonstration canceled." })).toBeVisible();
+  await expect(setup.getByTitle("Virtual browser")).toHaveCount(0);
+  await expect(setup.getByRole("button", { name: "Test changes" })).toBeEnabled();
+});
+
+test("ignores a recording status that answers after the demonstration finished", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-raw-demo-late-poll`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByRole("button", { name: "New demonstration" }).click();
+  // The first status read starts after 1.5 s and answers 2.5 s later, after Finish.
+  await page.waitForTimeout(1_700);
+  await setup.getByRole("button", { name: "Finish demonstration" }).click();
+  await expect(setup.getByLabel("Step 1 description")).toHaveValue("Download the refreshed statement");
+  await page.waitForTimeout(3_000);
+  await expect(setup.getByTitle("Virtual browser")).toHaveCount(0);
+  await expect(setup.getByRole("button", { name: "Finish demonstration" })).toHaveCount(0);
+  await expect(setup.getByRole("button", { name: "Test changes" })).toBeEnabled();
+});
+
+test("starts one demonstration for a double click and shows the browser's downloads", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-raw-demo-download`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByRole("button", { name: "New demonstration" }).dblclick();
+  await expect(setup.getByTitle("Virtual browser")).toBeVisible();
+  await expect(setup.getByRole("status").filter({ hasText: "Downloaded statement.pdf" })).toBeVisible();
+  await expect(setup.getByRole("alert")).toHaveCount(0);
+});
+
+test("keeps New demonstration unavailable for internal agents", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-internal`);
+  const setup = page.frameLocator("iframe");
+  await expect(setup.getByText("Read-only internal agent")).toBeVisible();
+  await expect(setup.getByRole("button", { name: "New demonstration" })).toBeDisabled();
 });
 
 test("explains publish availability and moves primary emphasis after a passed test", async ({ page }) => {
@@ -3021,6 +3218,9 @@ function hostPage(url: string, scenario: string | null): string {
     { ...screen, thought: '**Confirming the download**\\n\\nThe statement download started.\\n{"status":"completed","reason":"Opened Reports, kept the last-month filter, and downloaded the statement.","step":2,"confirmation":"Download started: statement.pdf"}' },
   ];
   let recordingExists = false;
+  let demoStarts = 0;
+  let demoCancels = 0;
+  window.__demoStops = 0;
   let publishedConflict = false;
   let testAttempts = 0;
   let editVersion = 3;
@@ -3114,7 +3314,7 @@ function hostPage(url: string, scenario: string | null): string {
       savedCredentials = request.params.kinds;
       send({ saved: savedCredentials, ...(edit && scenario !== "edit-credentials-legacy-add" ? { changed: true } : {}) });
     } else if (request.method === "connectGoogle") { window.__googleRequests.push(request.params); send({ connected: !scenario.endsWith("cancel") });
-    } else if (request.method === "startRecording") { window.__startUrls.push(request.params.url); if (edit ? recordingExists : recordingActive) { fail("Finish the current demonstration first."); return; } recordingActive = true; recordingExists = true; send({ id: "recording-1", status: "recording", liveViewUrl: "https://live.browserbase.com/session", liveViewSwitching: scenario.endsWith("window-switch"), steps: edit ? [] : steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
+    } else if (request.method === "startRecording") { window.__startUrls.push(request.params.url); demoStarts += 1; if (scenario === "edit-raw-demo-start-fail" && demoStarts === 1) { fail("The browser could not be opened."); return; } if (edit ? recordingExists : recordingActive) { fail("Finish the current demonstration first."); return; } recordingActive = true; recordingExists = true; send({ id: "recording-1", status: "recording", liveViewUrl: "https://live.browserbase.com/session", liveViewSwitching: scenario.endsWith("window-switch"), steps: edit ? [] : steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
     else if (scenario === "organized" && (request.method === "getRecording" || request.method === "stopRecording")) {
       // Polls: one while recording (download started), then completed; stop starts organizing; the next read has stages.
       window.__organizedReads = (window.__organizedReads ?? 0) + 1;
@@ -3134,8 +3334,20 @@ function hostPage(url: string, scenario: string | null): string {
         steps: stopped && !organizing ? recorded.map((step, index) => ({ ...step, stage: organized[index][0], description: organized[index][1] })) : recorded,
         downloads: [{ id: "file", name: "statement-2026-09.csv", state: downloadState }], organizing, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null });
     }
+    else if (edit && scenario.startsWith("edit-raw-demo-") && (request.method === "getRecording" || request.method === "stopRecording")) {
+      // Demonstration outcomes for a written-instructions agent: expired while recording, empty, blocked, or a status read that answers late.
+      // A first Finish whose reply says the browser is still recording must leave the demonstration open.
+      const stopping = request.method === "stopRecording" && !(scenario === "edit-raw-demo-still-recording" && ++window.__demoStops === 1);
+      if (stopping) recordingActive = false;
+      const status = scenario === "edit-raw-demo-expired" ? "expired" : !stopping && recordingActive ? "recording" : "stopped";
+      const reply = { id: "recording-1", status, liveViewUrl: status === "recording" ? "https://live.browserbase.com/session" : null,
+        steps: request.method === "stopRecording" && scenario !== "edit-raw-demo-empty" ? redemonstrationSteps : [], expiresAt: "2026-09-11T12:00:00Z",
+        blockedReason: stopping && scenario === "edit-raw-demo-blocked" ? "The website asked for a payment." : null,
+        downloads: scenario === "edit-raw-demo-download" ? [{ id: "file", name: "statement.pdf", state: "completed" }] : undefined };
+      if (scenario === "edit-raw-demo-late-poll" && !stopping) setTimeout(() => send(reply), 2500); else send(reply);
+    }
     else if (request.method === "getRecording" || request.method === "stopRecording") { if (request.method === "stopRecording") recordingActive = false; send({ id: "recording-1", status: request.method === "getRecording" && recordingActive ? "recording" : "stopped", liveViewUrl: request.method === "getRecording" && recordingActive ? "https://live.browserbase.com/session" : null, liveViewSwitching: scenario.endsWith("window-switch") && window.__liveViewSwitching, steps: edit ? (request.method === "stopRecording" ? redemonstrationSteps : []) : steps, expiresAt: "2026-09-11T12:00:00Z", blockedReason: null }); }
-    else if (request.method === "cancelRecording") { recordingActive = false; recordingExists = false; send(undefined); }
+    else if (request.method === "cancelRecording") { demoCancels += 1; if (scenario === "edit-raw-demo-cancel-fail" && demoCancels === 1) { fail("The demonstration service did not respond."); return; } recordingActive = false; recordingExists = false; send(undefined); }
     else if (request.method === "saveAgent") { if (window.__savedSchedule || scenario === "rerun-save-rejection" && window.__savedAgents.length > 0) fail("This agent is scheduled. Edit it in agent settings."); else { window.__savedAgents.push(request.params); send({ id: "agent-1" }); } }
     else if (request.method === "testAgent") { testAttempts += 1; window.__testArguments.push(request.params.arguments); exportSentAt = Date.now(); if (scenario === "email-cutoff" && window.__testArguments.length > 1) setTimeout(() => send({ id: "run-" + window.__testArguments.length }), 1000); else send({ id: "run-" + window.__testArguments.length }); }
     else if (request.method === "stopTest") {
