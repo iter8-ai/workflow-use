@@ -1,17 +1,25 @@
 # Managed acceptance fixture
 
-Run the configured preparation, then `npm --prefix ui run serve:acceptance`.
+Run the configured preparation, then launch the clean candidate from the repository root:
+
+```sh
+EXPECTED_SHA="$(git rev-parse HEAD)" npm --prefix ui run serve:acceptance
+```
+
 The launcher serves the existing executable `hostPage` fixture and real Vite UI on
 loopback. Its JSON receipt contains the actual URL, full SHA, tracked-dirty and
-untracked-dirty flags, and private port. Supply `EXPECTED_SHA` to require an exact
-clean candidate; the server refuses mismatches and nonignored untracked files.
+untracked-dirty flags, and private port. With `EXPECTED_SHA`, the server refuses
+SHA mismatches, tracked changes, and nonignored untracked files. Omitting it allows
+dirty-source exploration, which does not establish acceptance of a clean candidate.
 Each launcher owns one loopback HTTP listener for pages and Vite WebSockets.
 Default ports are isolated, explicit ports are strict, and SIGINT/SIGTERM closes
 WebSocket clients and releases the listener. `/__acceptance` exposes the same provenance.
 
-Open `/host` on the receipt's URL. It redirects to `?scenario=success`; select another
+Open `/host` on the receipt's URL in the user's Chrome for manual acceptance,
+not a Hermes or headless browser or native DevTools shortcuts.
+It redirects to `?scenario=success`; select another
 scenario with `/host?scenario=<name>` from [the executable fixture](ui/e2e/agent-setup.spec.ts).
-To request an HTTP port, run `npm --prefix ui run serve:acceptance -- --port <port>`;
+To request an HTTP port, append `-- --port <port>` to the launch command;
 `0` selects an available port, and explicit ports must be between 1024 and 65535.
 `EXPECTED_SHA` must be a full 40-character hexadecimal SHA. On each HTTP request,
 the launcher checks HEAD, tracked changes, and nonignored untracked file paths and
@@ -31,4 +39,6 @@ mixed-version compatibility. Configured unit suites alone cannot clear browser
 acceptance. Paired changes require current combined pins and both mixed-version
 directions, conservative old-host refusal, instruction/doneWhen and email-arrival
 preservation. Missing companion/provider proof is blocked or inconclusive.
-After rebase, rerun relevant Chrome checks on the new pins before handing off or merging.
+After any source change, including a rebase, restart with the new clean HEAD and
+rerun relevant Chrome checks on the current pins before handing off. Fixture results
+do not clear outstanding companion/provider blockers or authorize a merge.
