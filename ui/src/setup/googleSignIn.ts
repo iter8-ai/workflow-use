@@ -58,6 +58,8 @@ export function useGoogleSignInPrompt(bridge: HostBridge | null | undefined, all
   const open = async (reason: "demonstration" | "test" | "edit") => {
     if (!bridge) return null;
     const result = await bridge.request("setUpGoogleSignIn", { reason }, { timeoutMs: setUpTimeoutMs });
+    // A status check still in flight was asked before this save, so its answer can't bring the offer back.
+    if (result.status === "ready") checkRef.current += 1;
     // Cancel keeps the user moving: the offer becomes the skip note.
     setState((current) => result.status === "ready" ? "hidden" : current === "offer" ? "skipped" : current);
     return result;
@@ -69,8 +71,8 @@ export function useGoogleSignInPrompt(bridge: HostBridge | null | undefined, all
     open("demonstration")
       .then((result) => {
         if (result?.changed === true) page.onChanged();
-        // The offer is gone; keep keyboard focus on the page it was part of.
-        if (result?.status === "ready" && check === checkRef.current) {
+        // The offer is gone; keep keyboard focus on the page it was part of, unless a reset came during the save.
+        if (result?.status === "ready" && checkRef.current === check + 1) {
           const heading = page.heading();
           if (heading) { heading.tabIndex = -1; heading.focus({ preventScroll: true }); }
         }

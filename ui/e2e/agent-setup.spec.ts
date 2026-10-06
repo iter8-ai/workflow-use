@@ -548,8 +548,8 @@ test("keeps keyboard focus on the demonstration's next action and shows what was
   // The sign-in note moves out of the way into the steps rail; the steps are numbered like the review list.
   await expect(setup.locator(".credential-warning")).toHaveCount(0);
   await expect(setup.getByRole("complementary", { name: "Captured demonstration steps" })).toContainText("Sign in here if the site asks.");
-  // Google's default number challenge in the Gmail app can't be repeated later; steer users to an authenticator code.
-  await expect(setup.getByRole("complementary", { name: "Captured demonstration steps" })).toContainText("When Google asks you to confirm on your phone or tap a number in the Gmail app, choose More ways to verify (or Try another way) and enter the code from your authenticator app.");
+  // A host without the Google sign-in dialog can't offer it, so the note keeps the authenticator guidance.
+  await expect(setup.locator(".google-verify-note")).toHaveText("Signing in with Google? Add an authenticator app to your Google Account first. When Google asks you to confirm on your phone or tap a number in the Gmail app, choose More ways to verify (or Try another way) and enter the code from your authenticator app.");
   await expect(setup.getByRole("link", { name: "Add an authenticator app to your Google Account" })).toHaveAttribute("href", "https://myaccount.google.com/two-step-verification/authenticator");
   await expect(setup.getByRole("link", { name: "Add an authenticator app to your Google Account" })).toHaveAttribute("target", "_blank");
   await expect(setup.getByLabel("Recorded steps list").locator("ol")).toHaveCSS("list-style-type", "decimal");
@@ -1103,6 +1103,20 @@ test("preserves the saved username when rewriting a failed sign-in instruction",
   expect(saved.at(-1).config.stages[0].prompt).not.toContain("into Email");
 });
 
+test("the demonstration rail promises the Google sign-in setup on a host with the Google sign-in dialog", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=google-demo-missing`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByLabel("Agent name").fill("Download monthly statement");
+  await setup.getByLabel("Website address").fill("https://portal.example.test/reports");
+  await setup.getByLabel("What should the agent do?").fill("Download the monthly statement.");
+  await setup.getByRole("button", { name: "Continue to demonstration" }).click();
+  // Agents answer Google's verification with an authenticator code, which setup helps save after the demonstration.
+  await expect(setup.locator(".google-verify-note")).toHaveText("Signing in with Google? After the demonstration we'll help you save a Google sign-in with an authenticator key, so the agent can pass Google's verification.");
+  await expect(setup.getByRole("link", { name: "authenticator key" })).toHaveAttribute("href", "https://myaccount.google.com/two-step-verification/authenticator");
+  await expect(setup.getByRole("link", { name: "authenticator key" })).toHaveAttribute("target", "_blank");
+  await googleShots(page, "rail-note", setup.locator(".google-verify-note"));
+});
+
 for (const mode of ["create", "edit"]) {
   for (const outcome of ["connected", "cancel", "old-host"]) {
     test(`${mode} Google failure handles ${outcome}`, async ({ page }) => {
@@ -1113,7 +1127,12 @@ for (const mode of ["create", "edit"]) {
       const result = setup.locator(mode === "edit" ? ".edit-result-failed" : ".run-status");
       await expect(result).toContainText("Google sign-in needed");
       await expect(result).toContainText("The agent needs a Google sign-in");
-      await expect(result).toContainText("Connect the Google account this website uses, then run the test again.");
+      // The host's message, once, whatever the host can do about it; without one, the general sentence.
+      if (outcome === "old-host") await expect(result.getByText("Connect the Google account this website uses, then run the test again.")).toHaveCount(1);
+      else {
+        await expect(result.getByText("Reconnect Google for this agent, then run the test again.", { exact: true })).toHaveCount(1);
+        await expect(result).not.toContainText("Connect the Google account this website uses");
+      }
       await expect(result).not.toContainText("Change sign-in details");
       await expect(result.getByRole("button", { name: "Set up Google sign-in" })).toHaveCount(0);
       if (mode === "create") await expect(setup.locator(".test-step.failed")).toHaveCount(1);
@@ -1180,6 +1199,17 @@ for (const mode of ["create", "edit"]) {
     });
   }
 }
+
+test("edit Google failure shows why Google didn't accept the saved Google sign-in", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=edit-google-signin-rejected`);
+  const setup = page.frameLocator("iframe");
+  await setup.getByRole("button", { name: "Test changes" }).click();
+  const result = setup.locator(".edit-result-failed");
+  await expect(result.getByText("Google didn't accept the saved Google sign-in. Check the password and authenticator key, then run the test again.", { exact: true })).toHaveCount(1);
+  await expect(result).not.toContainText("Set up the Google sign-in with an authenticator key");
+  await expect(result.getByRole("button", { name: "Set up Google sign-in" })).toBeVisible();
+  await expect(result.getByRole("button", { name: "Connect Google" })).toHaveCount(0);
+});
 
 const googleSignInPanelBody = "You signed in with Google during the demonstration. Google asks for a verification code every time the agent signs in, so the agent needs your Google password and an authenticator key. It takes about two minutes.";
 const googleSignInSkipNote = "Test runs will stop at Google's verification until the Google sign-in is set up.";
@@ -1294,6 +1324,42 @@ test("edit Google sign-in offer appears when the re-demonstration's stop is seen
   await expect(setup.getByRole("region", { name: "Finish the Google sign-in setup" })).toBeVisible();
   await expect(setup.getByRole("button", { name: "Finish re-demonstration" })).toHaveCount(0);
   expect(await page.evaluate(() => window.__googleSignInRequests)).toEqual([{ method: "getGoogleSignIn", params: {} }]);
+});
+
+test("a Google sign-in status that answers after the setup was saved doesn't bring the offer back", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=google-demo-late`);
+  const setup = page.frameLocator("iframe");
+  await completeToTest(setup);
+  await expect.poll(() => page.evaluate(() => window.__googleSignInRequests)).toEqual([{ method: "getGoogleSignIn", params: {} }]);
+  await setup.getByRole("button", { name: "Run test" }).click();
+  const result = setup.locator(".run-status");
+  await result.getByRole("button", { name: "Set up Google sign-in" }).click();
+  await expect(result).toContainText("Not tested yet");
+  // The status was asked before the save, while there was no Google sign-in.
+  await page.evaluate(() => window.__answerGoogleSignIn());
+  await setup.getByRole("button", { name: "Back to review" }).click();
+  await expect(setup.getByLabel("Step 1 description")).toBeVisible();
+  await page.waitForTimeout(250);
+  await expect(setup.getByRole("region", { name: "Finish the Google sign-in setup" })).toHaveCount(0);
+  await expect(setup.getByText(googleSignInSkipNote)).toHaveCount(0);
+});
+
+test("a Google sign-in setup that fails keeps the offer so it can be tried again", async ({ page }) => {
+  await page.goto(`${baseUrl}/host?scenario=google-demo-retry`);
+  const setup = page.frameLocator("iframe");
+  await describeAndDemonstrate(setup);
+  const panel = setup.getByRole("region", { name: "Finish the Google sign-in setup" });
+  await panel.getByRole("button", { name: "Set up Google sign-in" }).click();
+  await expect(panel.getByRole("alert")).toHaveText("Reiterate couldn't save the Google sign-in. Try again.");
+  await expect(panel.getByRole("button", { name: "Skip for now" })).toBeEnabled();
+  await panel.getByRole("button", { name: "Set up Google sign-in" }).click();
+  await expect(panel).toHaveCount(0);
+  await expect(setup.getByText(googleSignInSkipNote)).toHaveCount(0);
+  expect(await page.evaluate(() => window.__googleSignInRequests)).toEqual([
+    { method: "getGoogleSignIn", params: {} },
+    { method: "setUpGoogleSignIn", params: { reason: "demonstration" } },
+    { method: "setUpGoogleSignIn", params: { reason: "demonstration" } },
+  ]);
 });
 
 test("Review opens without a Google sign-in offer when the host can't report the Google sign-in", async ({ page }) => {
@@ -3538,9 +3604,14 @@ function hostPage(url: string, scenario: string | null): string {
       savedCredentials = request.params.kinds;
       send({ saved: savedCredentials, ...(edit && scenario !== "edit-credentials-legacy-add" ? { changed: true } : {}) });
     } else if (request.method === "connectGoogle") { window.__googleRequests.push(request.params); send({ connected: !scenario.endsWith("cancel") });
-    } else if (request.method === "getGoogleSignIn") { window.__googleSignInRequests.push({ method: request.method, params: request.params }); if (scenario.endsWith("google-demo-error")) { fail("Reiterate couldn't load the Google sign-in."); return; } send({ status: googleSignInStatus, email: googleSignInStatus === "missing" ? null : "ops@example.test" });
+    } else if (request.method === "getGoogleSignIn") { window.__googleSignInRequests.push({ method: request.method, params: request.params }); if (scenario.endsWith("google-demo-error")) { fail("Reiterate couldn't load the Google sign-in."); return; }
+      // "late" holds the status reply, as it stood when asked, until the test answers it.
+      const status = { status: googleSignInStatus, email: googleSignInStatus === "missing" ? null : "ops@example.test" };
+      if (scenario.endsWith("google-demo-late")) window.__answerGoogleSignIn = () => send(status); else send(status);
     } else if (request.method === "setUpGoogleSignIn") {
       window.__googleSignInRequests.push({ method: request.method, params: request.params });
+      // "retry" fails the first save.
+      if (scenario.endsWith("google-demo-retry") && window.__googleSignInRequests.filter((item) => item.method === "setUpGoogleSignIn").length === 1) { fail("Reiterate couldn't save the Google sign-in. Try again."); return; }
       // "cancel" and "needs" scenarios close the dialog without saving.
       const saved = !scenario.endsWith("cancel") && !scenario.endsWith("-needs");
       if (saved) googleSignInStatus = "ready";
@@ -3591,8 +3662,9 @@ function hostPage(url: string, scenario: string | null): string {
       }
       if (activityScenario.startsWith("activity-")) { const frame = activityFrame(request.params.runId); if (frame === null) fail("The connection to Reiterate was lost."); else send(frame); return; }
       if (scenario === "edit-fail-evidence") send({ status: "failed", failure: { kind: "website", message: "The download button was missing." }, stoppedAtStep: 2, confirmation: "The reports list opened, but no file was downloaded.", screens: [{ ...screen, thought: "Earlier screen" }, screen] });
-      else if (googleSignInHost) send({ status: "failed", failure: { kind: "google", message: "Set up the Google sign-in with an authenticator key, then run the test again." }, stoppedAtStep: 2, screens: [screen] });
-      else if (scenario.includes("google-")) send({ status: "failed", failure: { kind: "google", message: "Google sign-in requires an account, but no Google credentials are available." }, stoppedAtStep: 2, screens: [screen] });
+      // The host's classifyFailure message; "old-host" hosts send none.
+      else if (googleSignInHost) send({ status: "failed", failure: { kind: "google", message: scenario.endsWith("rejected") ? "Google didn't accept the saved Google sign-in. Check the password and authenticator key, then run the test again." : "Set up the Google sign-in with an authenticator key, then run the test again." }, stoppedAtStep: 2, screens: [screen] });
+      else if (scenario.includes("google-")) send({ status: "failed", failure: { kind: "google", ...(scenario.endsWith("old-host") ? {} : { message: "Reconnect Google for this agent, then run the test again." }) }, stoppedAtStep: 2, screens: [screen] });
       else if (scenario.startsWith("edit-failure-label-")) {
         const kind = scenario.slice("edit-failure-label-".length);
         send({ status: "failed", failure: kind === "missing" ? null : { kind, message: "The test could not finish." } });
