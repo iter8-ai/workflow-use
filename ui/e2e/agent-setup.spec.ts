@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { expect, test, type FrameLocator, type Locator, type Page } from "@playwright/test";
+import { expect, test, type FrameLocator, type Page } from "@playwright/test";
 
 const baseUrl = process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:4173";
 const clockStart = new Date("2026-10-04T09:00:00Z");
@@ -553,7 +553,6 @@ test("keeps keyboard focus on the demonstration's next action and shows what was
   await expect(setup.getByRole("link", { name: "Add an authenticator app to your Google Account" })).toHaveAttribute("href", "https://myaccount.google.com/two-step-verification/authenticator");
   await expect(setup.getByRole("link", { name: "Add an authenticator app to your Google Account" })).toHaveAttribute("target", "_blank");
   await expect(setup.getByLabel("Recorded steps list").locator("ol")).toHaveCSS("list-style-type", "decimal");
-  await googleShots(page, "rail-note-old-host", setup.locator(".google-verify-note"));
 
   await page.keyboard.press("Enter");
   await expect(setup.getByRole("button", { name: "Continue to review" })).toBeFocused();
@@ -1115,7 +1114,6 @@ test("the demonstration rail promises the Google sign-in setup on a host with th
   await expect(setup.locator(".google-verify-note")).toHaveText("Signing in with Google? After the demonstration we'll help you save a Google sign-in with an authenticator key, so the agent can pass Google's verification.");
   await expect(setup.getByRole("link", { name: "authenticator key" })).toHaveAttribute("href", "https://myaccount.google.com/two-step-verification/authenticator");
   await expect(setup.getByRole("link", { name: "authenticator key" })).toHaveAttribute("target", "_blank");
-  await googleShots(page, "rail-note", setup.locator(".google-verify-note"));
 });
 
 for (const mode of ["create", "edit"]) {
@@ -1179,9 +1177,6 @@ for (const mode of ["create", "edit"]) {
       await expect(result.getByRole("button", { name: "Connect Google" })).toHaveCount(0);
       const setUp = result.getByRole("button", { name: "Set up Google sign-in" });
       await expect(setUp).toHaveClass(/button-primary/);
-      if (outcome === "saved") {
-        await googleShots(page, `test-result-${mode}`, result);
-      }
       await setUp.click();
       await expect.poll(() => page.evaluate(() => window.__googleSignInRequests)).toEqual([{ method: "setUpGoogleSignIn", params: { reason: "test" } }]);
       expect(await page.evaluate(() => window.__googleRequests)).toEqual([]);
@@ -1254,7 +1249,6 @@ test("offers the Google sign-in setup in Review after a demonstration that signe
   const panelBox = await panel.boundingBox();
   const stepBox = await setup.getByLabel("Step 1 description").boundingBox();
   expect(panelBox!.y).toBeLessThan(stepBox!.y);
-  await googleShots(page, "panel", panel);
   await panel.getByRole("button", { name: "Set up Google sign-in" }).click();
   await expect(panel).toHaveCount(0);
   await expect(setup.getByText(googleSignInSkipNote)).toHaveCount(0);
@@ -1276,7 +1270,6 @@ for (const [scenario, action] of [["google-demo-missing", "Skip for now"], ["goo
     await expect(note).toHaveText(googleSignInSkipNote);
     await expect(note).toBeFocused();
     await expect(setup.getByRole("region", { name: "Finish the Google sign-in setup" })).toHaveCount(0);
-    if (scenario === "google-demo-missing") await googleShots(page, "skip-note", note);
     await setup.getByRole("button", { name: "Continue to test" }).click();
     await expect(setup.getByRole("button", { name: "Run test" })).toBeVisible();
   });
@@ -1301,7 +1294,6 @@ test("edit re-demonstration that signed in with Google offers the Google sign-in
   await setup.getByRole("button", { name: "Finish re-demonstration" }).click();
   const panel = setup.getByRole("region", { name: "Finish the Google sign-in setup" });
   await expect(panel).toContainText(googleSignInPanelBody);
-  await googleShots(page, "panel-edit", panel);
   await panel.getByRole("button", { name: "Skip for now" }).click();
   await expect(setup.getByRole("status").filter({ hasText: googleSignInSkipNote })).toBeFocused();
   expect(await page.evaluate(() => window.__googleSignInRequests)).toEqual([{ method: "getGoogleSignIn", params: {} }]);
@@ -3187,20 +3179,6 @@ test("shows credential host errors inline and keeps internal agents read-only", 
   await expect(setup.getByRole("button", { name: "Change sign-in details", exact: true })).toHaveCount(0);
   expect(await page.evaluate(() => window.__credentialRequests)).toEqual([]);
 });
-
-/** Review screenshots of the Google sign-in states, taken only when GOOGLE_SIGNIN_SHOTS names a directory. */
-async function googleShots(page: Page, name: string, subject?: Locator): Promise<void> {
-  const dir = process.env.GOOGLE_SIGNIN_SHOTS;
-  if (!dir) return;
-  for (const [width, height] of [[1440, 900], [1280, 640]]) {
-    await page.setViewportSize({ width, height });
-    // The setup page is an iframe; let it lay out at the new size before capturing.
-    await page.waitForTimeout(300);
-    await subject?.scrollIntoViewIfNeeded();
-    await page.screenshot({ path: `${dir}/${name}-${width}x${height}.png` });
-  }
-  await page.setViewportSize({ width: 1440, height: 900 });
-}
 
 async function describeAndDemonstrate(setup: FrameLocator): Promise<void> {
   await setup.getByLabel("Agent name").fill("Download monthly statement");
