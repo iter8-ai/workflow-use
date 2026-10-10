@@ -1444,3 +1444,13 @@ input.edit-stage:focus { border-color: #cfc5f2; outline: none; text-transform: n
   .edit-test .test-rail { flex: none; height: 360px; }
 }
 @media (prefers-reduced-motion: reduce) { .browser-notice .edit-spinner, .activity-working .edit-spinner { animation: none; } }
+
+/* After a demonstration that signed in with Google: the offer to save the organisation's Google sign-in, then the skip note. */
+.google-signin-prompt { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 12px; margin: 4px 0 8px; padding: 14px 16px 16px; border: 1px solid #d3cdf0; border-radius: 8px; background: #f6f3ff; color: #4e38a0; }
+.google-signin-prompt > svg, .google-signin-skipped > svg { flex-shrink: 0; margin-top: 2px; }
+.google-signin-prompt h3, .setup-panel .google-signin-prompt h3 { margin: 0; color: #17182b; font-size: .98rem; font-weight: 650; letter-spacing: -0.018em; }
+.google-signin-prompt p, .setup-panel .google-signin-prompt p { max-width: 70ch; margin: 5px 0 0; color: #453c6e; font-size: .9rem; line-height: 1.5; }
+.google-signin-prompt .google-signin-error, .setup-panel .google-signin-prompt .google-signin-error { color: #922e3d; }
+.google-signin-prompt .setup-actions { margin-top: 12px; }
+.google-signin-skipped, .setup-panel .google-signin-skipped { display: flex; gap: 8px; align-items: flex-start; max-width: none; margin: 4px 0 8px; padding: 9px 12px; border: 1px solid #dfc680; border-radius: 7px; background: #fff9e9; color: #684b16; font-size: .86rem; font-weight: 500; line-height: 1.45; }
+.google-signin-skipped:focus { outline: none; }

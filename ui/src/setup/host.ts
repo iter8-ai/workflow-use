@@ -14,6 +14,8 @@ export type Recording = {
   downloads?: RecordedDownload[];
   /** True while the finished steps are being grouped into stages and reworded. */
   organizing?: boolean;
+  /** Whether the demonstration browser ended signed in to Google. Older hosts omit it. */
+  google?: { signedIn: boolean };
 };
 
 export type TestRun = {
@@ -49,6 +51,9 @@ export type TestActivity = {
   items: Array<{ sequence: number; kind: "stage" | "action" | "lifecycle"; status: "started" | "executed" | "blocked" | "rejected" | "completed" | "failed"; text: string }>;
 };
 
+/** The organisation's Google sign-in: `needs_authenticator` has some of email, password and authenticator key set, but not all three. */
+export type GoogleSignInStatus = "missing" | "needs_authenticator" | "ready";
+
 export type EditAgent = {
   agentId: string;
   name: string;
@@ -74,8 +79,11 @@ export type WatchedRun = {
 };
 
 type RequestMap = {
-  ready: { params: Record<string, never>; result: { schedule: boolean; credentials?: boolean; google?: boolean; emailRoutes?: boolean; chooseSchedule?: boolean; mode?: "create" | "edit" | "run" } };
+  ready: { params: Record<string, never>; result: { schedule: boolean; credentials?: boolean; google?: boolean; googleSignIn?: boolean; emailRoutes?: boolean; chooseSchedule?: boolean; mode?: "create" | "edit" | "run" } };
   connectGoogle: { params: { agentId: string }; result: { connected: boolean } };
+  getGoogleSignIn: { params: Record<string, never>; result: { status: GoogleSignInStatus; email: string | null } };
+  // The host's dialog collects and stores the values; Cancel resolves with `changed: false`.
+  setUpGoogleSignIn: { params: { reason: "demonstration" | "test" | "edit" }; result: { status: GoogleSignInStatus; email: string | null; changed: boolean } };
   // The host collects and stores the values; only the saved kinds come back.
   requestCredentials: { params: { kinds: CredentialKind[]; replace?: boolean }; result: { saved: CredentialKind[]; changed?: boolean; otpSource?: "authenticator" | "email" } };
   startRecording: { params: { url: string }; result: Recording };
