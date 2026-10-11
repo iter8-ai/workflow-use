@@ -6,7 +6,7 @@ product
 
 ## Users and purpose
 
-The setup UI is for accountants and operations users. See the [README](README.md) for the setup flow and current limits.
+The agent setup wizard is for accountants and operations users. It lives in the Reiterate editor (commercials-flow-editor); this repository provides the recording service it uses.
 
 ## Product direction
 
@@ -22,4 +22,4 @@ Recording is not agent success. Generated instructions are drafts. Test status c
 
 ## Data boundary
 
-Keep credentials out of prompts and recorded steps; see the [README setup and sign-in guidance](README.md) for demonstrated sign-in. Browser and platform credentials stay server-side. The public iframe communicates through a narrow origin-checked host bridge; no Auth0 token is passed to it.
+Keep credentials out of prompts and recorded steps. Browser and platform credentials stay server-side.

@@ -193,8 +193,4 @@ user_data_dir
 .claude/
 CLAUDE.md
 
-# Browser test artifacts
-ui/test-results/
-ui/playwright-report/
-ui/e2e-artifacts/
 graphify-out/

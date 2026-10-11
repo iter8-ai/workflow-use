@@ -1,64 +1,12 @@
-# Workflow Use agent setup
+# Workflow Use (Reiterate fork)
 
-This public fork adds a demonstration-based setup flow for computer-use agents. Users describe a task, demonstrate a task in a remote browser, edit the captured steps, and test before scheduling.
-
-Write step instructions and stage names using what the website shows, such as "Click the account selector" or "Enter Email [work]". Ordinary CSS, XPath, or selector wording and bracketed labels are allowed; detected locator syntax or screen coordinates require a rewrite. Detected locators in hidden recorded targets are omitted from run instructions and click completion choices without blocking a valid visible instruction. Named date fields retain their names. Switching a field with such a hidden target between Text and a saved sign-in kind preserves its authored instruction.
-
-Step validation errors show the current step number and highlight its row in Review or edit. Use "Go to step" to focus and scroll to its instruction, including from Test. Changing the steps clears the old validation message; continue to Test or test again to check the revised steps.
-
-The default `ui/` app is an embedded authoring interface that also lets users inspect an existing agent run without changing it. See [the host contract](docs/agent-setup-host.md) to open a run for inspection. Its host handles authentication, agent storage, test execution, and scheduling through an origin-checked message bridge. The separate `recording/` service captures browser actions. It does not run agents. Compiled configurations select the computer-use engine explicitly.
-
-## Run locally
-
-```sh
-cd ui
-npm ci
-npm run dev
-```
-
-Open the app through a host iframe with `?parentOrigin=https://your-host.example`. Opening it by itself shows a connection message. See [the host contract](docs/agent-setup-host.md) and [recording service setup](recording/README.md).
-
-```sh
-cd ui
-npm test
-npm run build
-npx playwright install chromium
-npm run test:e2e
-```
-
-The browser tests use a controlled host fixture. They do not prove a live Browserbase session or an actual computer-use run.
-
-For no-mistakes gate validation, see [.no-mistakes.yaml](.no-mistakes.yaml).
-
-For a reusable host fixture for manual browser checks, see [managed acceptance](MANAGED_ACCEPTANCE.md).
-
-## Deployment and current limits
-
-Build and run the public UI as an unprivileged static service:
-
-```sh
-docker build -f ui/Dockerfile -t workflow-use-ui:local ui
-docker run --rm -p 8080:8080 workflow-use-ui:local
-curl -i http://127.0.0.1:8080/health
-```
-
-The image serves `ui/dist/` on port 8080. Its Content Security Policy permits embedding only from `https://editor.reiterate.com` and `https://editor.usereiterate.com`, and allows the Browserbase live browser frame. It deliberately has no host authentication or credentials. Configure the host with this public UI URL. Deploy the recording service separately with its shared service key and Browserbase credentials; never expose those keys to the iframe.
-
-For an optional deployment smoke check, open `/setup-check.html` and download its synthetic CSV. This page is unlinked and is not part of the customer setup wizard.
-
-Start with a website address without query parameters or fragments; the compiler rejects either so they cannot enter a saved configuration or agent prompt. Navigate to the required page inside the demonstration browser. Recordings are ephemeral and expire after 15 minutes. Typed text and dropdown choices are recorded and repeated as exact values; they can be edited in review. Ordinary demonstrated website sign-in is different: each sign-in field compiles to an exact `$username`, `$password`, or `$otp` placeholder. The username and password typed during the demonstration are handed to the host once when the recording stops; the host stores them as encrypted agent parameters and asks in its own dialog only for what the demonstration could not provide, such as an authenticator key. For these website credentials, the setup page learns only which kinds are saved. The web agent engine substitutes them while typing, so the model and the setup page never receive them.
-
-On hosts that support Google sign-in setup, sign in with Google during the demonstration. When the demonstration ends signed in to Google and the host reports that the organisation's Google sign-in is incomplete, Review or edit offers **Set up Google sign-in** afterward, including after a re-demonstration while editing an agent. The host's dialog saves the Google email, password, and authenticator key for the organisation so agents can reuse them. These saves do not appear as unpublished agent changes. **Skip for now** or cancel the dialog to continue without completing setup; test runs may stop at Google's verification. If you change the saved Google sign-in, run a fresh test. A Google sign-in test failure shows the host's message and a **Set up Google sign-in** button. Older hosts show **Connect Google** or direct you to **Credentials → Connect Google** instead.
-
-If your host does not offer Google sign-in setup, [add an authenticator app to your Google Account](https://myaccount.google.com/two-step-verification/authenticator) before the demonstration. When Google asks you to confirm on your phone or tap a number in the Gmail app, choose "More ways to verify" (or "Try another way") and enter the code from your authenticator app during the demonstration.
-
-Schedules repeat the tested workflow. Relative dates such as “previous month” are not resolved automatically. A successful test still requires the user to inspect the result before scheduling.
+The agent setup wizard now lives in the Reiterate editor (commercials-flow-editor), which renders it natively. This repository keeps the recording service ([`recording/`](recording/README.md)), which captures browser actions for that wizard and does not run agents, and the upstream workflow engine (`workflows/`, `extension/`).
 
 ## Source and license
 
 Forked from [browser-use/workflow-use](https://github.com/browser-use/workflow-use) at `5d2d19fe8835cc86f1bf3e04302a5000d590f249`. This fork retains the upstream [AGPL-3.0 license](LICENSE). Its public source is [iter8-ai/workflow-use](https://github.com/iter8-ai/workflow-use). Host integrations are separate codebases; no private host source is included here.
 
-The original workflow editor and runtime remain in the repository for reference. Their instructions follow below and describe the upstream browser-use execution path.
+The upstream workflow runtime and extension remain in the repository for reference; the upstream workflow editor GUI (`ui/`) has been removed. The instructions below describe the upstream browser-use execution path.
 
 ---
 
@@ -239,53 +187,6 @@ result = await workflow.run_with_no_ai()  # No LLM calls, uses semantic mapping
 
 Examples:
 - `examples/cloud_browser_demo.py` - Load recorded workflow and run on cloud
-
-## Launch the GUI
-
-The Workflow UI provides a visual interface for managing, viewing, and executing workflows.
-
-### Option 1: Using the CLI command (Recommended)
-
-The easiest way to start the GUI is with the built-in CLI command:
-
-```bash
-cd workflows
-python cli.py launch-gui
-```
-
-This command will:
-- Start the backend server (FastAPI)
-- Start the frontend development server
-- Automatically open http://localhost:5173 in your browser
-- Capture logs to the `./tmp/logs` directory
-
-Press Ctrl+C to stop both servers when you're done.
-
-### Option 2: Start servers separately
-
-Alternatively, you can start the servers individually:
-
-#### Start the backend server
-
-```bash
-cd workflows
-uvicorn backend.api:app --reload
-```
-
-#### Start the frontend development server
-
-```bash
-cd ui
-npm install
-npm run dev
-```
-
-Once both servers are running, you can access the Workflow GUI at http://localhost:5173 in your browser. The UI allows you to:
-
-- Visualize workflows as interactive graphs
-- Execute workflows with custom input parameters
-- Monitor workflow execution logs in real-time
-- Edit workflow metadata and details
 
 # Demos
 
