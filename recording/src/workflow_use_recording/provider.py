@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import shutil
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 from uuid import uuid4
@@ -222,6 +221,39 @@ async def _show_opened_tab(session: PlaywrightRecordingSession, client: Any, ses
         session.finish_tab(page)
 
 
+async def _start_playwright_runtime() -> Any:
+    from playwright._impl._connection import Connection
+    from playwright._impl._object_factory import create_remote_object
+    from playwright._impl._transport import PipeTransport
+    from playwright.async_api import async_playwright
+    from playwright.async_api._generated import Playwright as AsyncPlaywright
+
+    manager = async_playwright()
+    loop = asyncio.get_running_loop()
+    manager._connection = Connection(None, create_remote_object, PipeTransport(loop), loop)
+    task = loop.create_task(manager._connection.run())
+    playwright_future = manager._connection.playwright_future
+    try:
+        done, _ = await asyncio.wait(
+            {manager._connection._transport.on_error_future, playwright_future},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if not playwright_future.done():
+            playwright_future.cancel()
+        runtime = AsyncPlaywright(next(iter(done)).result())
+    except BaseException:
+        if not playwright_future.done():
+            playwright_future.cancel()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        raise
+    # Playwright drops this task; retrieve a later failure without printing its details.
+    task.add_done_callback(lambda finished: finished.exception() if not finished.cancelled() else None)
+    runtime.stop = manager.__aexit__
+    return runtime
+
+
 class BrowserbaseProvider:
     """Creates Browserbase sessions in EU and retains links only in memory."""
 
@@ -243,8 +275,6 @@ class BrowserbaseProvider:
             raise RuntimeError("BROWSERBASE_PROJECT_ID is required.")
 
         from browserbase import AsyncBrowserbase
-        from playwright._impl._driver import compute_driver_executable
-        from playwright.async_api import async_playwright
 
         client = AsyncBrowserbase()
         context_id: str | None = None
@@ -281,10 +311,7 @@ class BrowserbaseProvider:
             stage = "debug_session"
             debug = await client.sessions.debug(created.id)
             stage = "start_runtime"
-            # A missing driver makes Playwright's detached connection task print the exception.
-            if shutil.which(compute_driver_executable()[0]) is None:
-                raise FileNotFoundError
-            runtime = await async_playwright().start()
+            runtime = await _start_playwright_runtime()
             stage = "connect"
             browser = await runtime.chromium.connect_over_cdp(created.connect_url)
             stage = "configure"
