@@ -14,7 +14,7 @@ from uuid import uuid4
 from .models import RecordedDownload, RecordingGoogle, RecordingResponse, SetupStep, StepDate
 from .organize import OrganizedStep, StepOrganizer
 from .provider import BrowserProvider, BrowserSession, _PendingContextCleanup
-from .security import is_google_sign_in, resolves_to_public_host, safe_public_url
+from .security import is_google_sign_in, is_public_http_url, resolves_to_public_host, safe_public_url
 
 MAX_STEPS = 200
 MAX_FIELD_LENGTH = 2000
@@ -225,9 +225,15 @@ class RecordingService:
             if (
                 recording.status != "recording"
                 or recording.closing
-                or recording.blocked_reason is not None
                 or datetime.now(UTC) >= recording.expires_at
             ):
+                return
+            if event.get("type") == "page_loaded":
+                url = event.get("url")
+                if isinstance(url, str) and is_public_http_url(url) and not is_google_sign_in(url):
+                    recording.start_page_failed = False
+                return
+            if recording.blocked_reason is not None:
                 return
             if event.get("type") == "sign_in_value":
                 # Only the provider's isolated sign-in world produces these; page events are stripped of them.

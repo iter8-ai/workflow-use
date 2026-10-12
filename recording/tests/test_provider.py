@@ -658,6 +658,54 @@ async def _ok(page: FakePage, url: str) -> None:
 
 
 @pytest.mark.asyncio
+async def test_only_a_loaded_public_main_page_clears_the_start_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    from workflow_use_recording import provider
+
+    async def no_capture(*_args: Any) -> None:
+        pass
+
+    monkeypatch.setattr(provider, "install_sign_in_capture", no_capture)
+    events: list[dict[str, Any]] = []
+
+    async def record(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    class Page(FakePage):
+        def __init__(self) -> None:
+            super().__init__()
+            self.handlers: dict[str, Any] = {}
+            self.context = object()
+            self.main_frame = SimpleNamespace(url="https://example.com/login")
+            self.url = "about:blank"
+
+        def on(self, event: str, callback: Any) -> None:
+            self.handlers[event] = callback
+
+    session = provider.PlaywrightRecordingSession(browser=object(), runtime=object(), live_view_url=None)
+    session.start_page_failed = True
+    page = Page()
+    await provider._install_page_events(session, page, record)
+
+    page.handlers["framenavigated"](page.main_frame)
+    await asyncio.gather(*session._tasks)
+    assert session.start_page_failed is True
+    assert events == [{"type": "navigation", "url": "https://example.com/login"}]
+
+    for url in ("about:blank", "chrome-error://chromewebdata/", "https://accounts.google.com/login"):
+        page.url = url
+        page.handlers["domcontentloaded"]()
+        assert session.start_page_failed is True
+
+    popup = Page()
+    popup.url = "https://example.com/login"
+    await provider._install_page_events(session, popup, record)
+    popup.handlers["domcontentloaded"]()
+    await asyncio.gather(*session._tasks)
+    assert session.start_page_failed is False
+    assert events[-1] == {"type": "page_loaded", "url": "https://example.com/login"}
+
+
+@pytest.mark.asyncio
 async def test_a_failure_before_the_navigate_stage_still_cleans_up(monkeypatch: pytest.MonkeyPatch) -> None:
     class Context(FakeContext):
         async def route(self, _pattern: str, _handler: Any) -> None:

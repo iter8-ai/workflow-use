@@ -160,6 +160,38 @@ def test_navigate_opens_a_page_and_its_navigation_becomes_the_first_step() -> No
     assert provider.sessions[0].navigated == ["https://example.com/login"]
 
 
+@pytest.mark.parametrize("blocked", [False, True])
+@pytest.mark.asyncio
+async def test_live_browser_load_clears_failed_start_in_get_and_stop_without_adding_a_step(
+    monkeypatch: pytest.MonkeyPatch, blocked: bool
+) -> None:
+    if blocked:
+        monkeypatch.setattr(recording_service, "MAX_STEPS", 1)
+    provider = FakeProvider(start_page_failed=True)
+    with client(provider) as http:
+        recording = create_recording(http)
+        session = provider.sessions[0]
+        assert recording["startPageFailed"] is True and recording["steps"] == []
+
+        await session.emit({"type": "navigation", "url": "https://example.com/login"})
+        if blocked:
+            await session.emit({"type": "click", "target": "Over the capture limit"})
+        await session.emit({"type": "page_loaded", "url": "about:blank"})
+        before_load = http.get(f"/recordings/{recording['id']}", headers=headers()).json()
+        assert before_load["startPageFailed"] is True
+        assert before_load["blockedReason"] == (CAPTURE_LIMIT_REASON if blocked else None)
+
+        await session.emit({"type": "page_loaded", "url": "https://example.com/login"})
+        after_load = http.get(f"/recordings/{recording['id']}", headers=headers()).json()
+        stopped = http.post(f"/recordings/{recording['id']}/stop", headers=headers()).json()
+
+    for body in (after_load, stopped):
+        assert body["startPageFailed"] is False
+        assert [(step["type"], step["url"]) for step in body["steps"]] == [
+            ("navigation", "https://example.com/login")
+        ]
+
+
 def test_navigate_rejects_unknown_foreign_stopped_and_private_targets() -> None:
     provider = FakeProvider()
     with client(provider) as http:
@@ -184,7 +216,7 @@ def test_navigate_rejects_unknown_foreign_stopped_and_private_targets() -> None:
 def test_navigate_reports_a_page_that_could_not_be_opened_without_provider_text() -> None:
     from playwright.async_api import Error as PlaywrightError
 
-    provider = FakeProvider()
+    provider = FakeProvider(start_page_failed=True)
     with client(provider) as http:
         recording = create_recording(http)
         provider.sessions[0].navigate_error = PlaywrightError("net::ERR_HTTP_RESPONSE_CODE_FAILURE wss://x?token=leak")
@@ -197,6 +229,8 @@ def test_navigate_reports_a_page_that_could_not_be_opened_without_provider_text(
     assert response.json() == {"detail": "The page could not be opened."}
     assert after.status_code == 200
     assert after.json()["status"] == "recording"
+    assert after.json()["startPageFailed"] is True
+    assert after.json()["steps"] == []
 
 
 @pytest.mark.parametrize(

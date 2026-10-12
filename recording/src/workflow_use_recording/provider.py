@@ -186,12 +186,19 @@ async def _install_page_events(session: PlaywrightRecordingSession, page: Any, o
             return
         session.track(on_event({"type": "navigation", "url": frame.url}))
 
+    def on_page_loaded() -> None:
+        if not is_public_http_url(page.url) or is_google_sign_in(page.url):
+            return
+        session.start_page_failed = False
+        session.track(on_event({"type": "page_loaded", "url": page.url}))
+
     def on_download(download: Any) -> None:
         if is_google_sign_in(page.url):
             return
         session.watch(_report_download(download, on_event))
 
     page.on("framenavigated", on_navigation)
+    page.on("domcontentloaded", on_page_loaded)
     # The live view shows no download bar, so the recorder reports each download to the person demonstrating.
     page.on("download", on_download)
     try:
