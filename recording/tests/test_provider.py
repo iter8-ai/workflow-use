@@ -501,3 +501,62 @@ async def test_popup_live_view_switching_expires_after_fifteen_seconds(monkeypat
     assert RecordingService.response(recording).live_view_switching is True
     await asyncio.sleep(0.02)
     assert RecordingService.response(recording).live_view_switching is False
+
+
+@pytest.mark.asyncio
+async def test_browser_startup_failure_names_its_stage_without_connection_details(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    class Client:
+        def __init__(self) -> None:
+            self.contexts = SimpleNamespace(create=self.create_context)
+            self.sessions = SimpleNamespace(create=self.create_session, debug=self.debug, update=self.update)
+
+        async def create_context(self, **_kwargs: Any) -> Any:
+            return SimpleNamespace(id="context-private")
+
+        async def create_session(self, **_kwargs: Any) -> Any:
+            return SimpleNamespace(id="session-1", connect_url="wss://connect.example/?signingKey=must-not-leak")
+
+        async def debug(self, _session_id: str) -> Any:
+            return SimpleNamespace(debugger_fullscreen_url="https://live.example/")
+
+        async def update(self, *_args: Any, **_kwargs: Any) -> None:
+            pass
+
+        async def delete(self, _path: str, **_kwargs: Any) -> None:
+            pass
+
+        async def __aexit__(self, *_args: Any) -> None:
+            pass
+
+    class Runtime:
+        def __init__(self) -> None:
+            self.chromium = SimpleNamespace(connect_over_cdp=self.connect_over_cdp)
+
+        async def connect_over_cdp(self, connect_url: str) -> Any:
+            raise RuntimeError(f"WebSocket error: {connect_url}")
+
+        async def stop(self) -> None:
+            pass
+
+    browserbase = ModuleType("browserbase")
+    browserbase.AsyncBrowserbase = Client  # type: ignore[attr-defined]
+    playwright_async_api = ModuleType("playwright.async_api")
+    runtime = Runtime()
+
+    async def start() -> Runtime:
+        return runtime
+
+    playwright_async_api.async_playwright = lambda: SimpleNamespace(start=start)  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "browserbase", browserbase)
+    monkeypatch.setitem(sys.modules, "playwright.async_api", playwright_async_api)
+
+    with caplog.at_level("WARNING", logger="workflow_use_recording.provider"):
+        with pytest.raises(RuntimeError):
+            await BrowserbaseProvider(project_id="project-1").create("https://example.com", _ignore_event)
+
+    # The service prints only the message text, so the stage and error type must be in it.
+    messages = [record.getMessage() for record in caplog.records if record.levelname == "WARNING"]
+    assert any("stage=connect" in message and "error_type=RuntimeError" in message for message in messages), messages
+    assert all("must-not-leak" not in message for message in messages)

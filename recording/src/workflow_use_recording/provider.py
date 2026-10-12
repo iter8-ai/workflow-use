@@ -248,6 +248,8 @@ class BrowserbaseProvider:
         context_id: str | None = None
         created: Any | None = None
         runtime: Any | None = None
+        # The API reports every startup failure as a generic 503, so the log must say where startup stopped.
+        stage = "create_context"
 
         async def delete_context(context_id: str) -> None:
             deletion_client = AsyncBrowserbase()
@@ -261,6 +263,7 @@ class BrowserbaseProvider:
 
         try:
             context_id = (await client.contexts.create(project_id=self.project_id)).id
+            stage = "create_session"
             created = await client.sessions.create(
                 project_id=self.project_id,
                 keep_alive=True,
@@ -273,9 +276,13 @@ class BrowserbaseProvider:
                     "context": {"id": context_id, "persist": True},
                 },
             )
+            stage = "debug_session"
             debug = await client.sessions.debug(created.id)
+            stage = "start_runtime"
             runtime = await async_playwright().start()
+            stage = "connect"
             browser = await runtime.chromium.connect_over_cdp(created.connect_url)
+            stage = "configure"
             contexts = browser.contexts
             if not contexts:
                 raise RuntimeError("Browserbase returned no browser context.")
@@ -304,9 +311,12 @@ class BrowserbaseProvider:
                 session.watch(_show_opened_tab(session, client, created.id, new_page))
 
             context.on("page", on_new_page)
+            stage = "navigate"
             await page.goto(start_url, wait_until="domcontentloaded", timeout=self.timeout_seconds * 1000)
             return session
-        except BaseException:
+        except BaseException as error:
+            # Only the stage and type: provider messages can carry the connect URL and its signing key.
+            logger.warning("recording_browser_start_failed stage=%s error_type=%s", stage, type(error).__name__)
             cleanup_pending = False
             if runtime is not None:
                 try:
