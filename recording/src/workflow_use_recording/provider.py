@@ -19,16 +19,26 @@ from .security import (
 EventSink = Callable[[dict[str, Any]], Awaitable[None]]
 logger = logging.getLogger(__name__)
 LIVE_VIEW_SWITCH_TIMEOUT_SECONDS = 15
+NAVIGATE_TIMEOUT_MS = 30_000
+NAVIGATE_ATTEMPTS = 3
+
+
+def _same_page(current: str, target: str) -> bool:
+    return current.rstrip("/") == target.rstrip("/")
 
 
 class BrowserSession(Protocol):
     live_view_url: str | None
+    # True while the start page failed to load and no page has been opened since.
+    start_page_failed: bool
 
     async def close(self) -> None: ...
 
     async def google_signed_in(self) -> bool: ...
 
     async def delete_context(self) -> None: ...
+
+    async def navigate(self, url: str) -> None: ...
 
 
 class BrowserProvider(Protocol):
@@ -60,6 +70,7 @@ class PlaywrightRecordingSession:
         self.browser = browser
         self.runtime = runtime
         self.live_view_url = live_view_url
+        self.start_page_failed = False
         self._first_live_view_url = live_view_url
         # Tabs opened during the demonstration (e.g. a "Continue with Google" window), oldest first, each with
         # its own live view. The person demonstrating sees the newest one still open.
@@ -112,6 +123,36 @@ class PlaywrightRecordingSession:
 
     async def google_signed_in(self) -> bool:
         return has_google_session(await self.browser.contexts[0].cookies())
+
+    async def navigate(self, url: str, *, timeout_ms: int = NAVIGATE_TIMEOUT_MS) -> None:
+        """Open a page in the tab the live view shows. Raises Playwright's own errors."""
+        context = self.browser.contexts[0]
+        if self._opened_tabs:
+            page = self._opened_tabs[-1][0]
+        elif context.pages:
+            page = context.pages[0]
+        else:
+            page = await context.new_page()
+        from playwright.async_api import Error as PlaywrightError
+
+        for attempt in range(NAVIGATE_ATTEMPTS):
+            try:
+                await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+                break
+            except PlaywrightError as error:
+                # Right after a page fails to load, Chromium is still committing its error page, and that
+                # commit reports the next navigation as interrupted even though it usually still lands.
+                if 'interrupted by another navigation to "chrome-error://chromewebdata/"' not in str(error):
+                    raise
+                try:
+                    await page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+                except PlaywrightError:
+                    pass
+                if _same_page(getattr(page, "url", ""), url):
+                    break
+                if attempt == NAVIGATE_ATTEMPTS - 1:
+                    raise
+        self.start_page_failed = False
 
     async def delete_context(self) -> None:
         if self.context_id is not None and self._delete_context is not None:
@@ -168,12 +209,19 @@ async def _install_page_events(session: PlaywrightRecordingSession, page: Any, o
             return
         session.track(on_event({"type": "navigation", "url": frame.url}))
 
+    def on_page_loaded() -> None:
+        if not is_public_http_url(page.url) or is_google_sign_in(page.url):
+            return
+        session.start_page_failed = False
+        session.track(on_event({"type": "page_loaded", "url": page.url}))
+
     def on_download(download: Any) -> None:
         if is_google_sign_in(page.url):
             return
         session.watch(_report_download(download, on_event))
 
     page.on("framenavigated", on_navigation)
+    page.on("domcontentloaded", on_page_loaded)
     # The live view shows no download bar, so the recorder reports each download to the person demonstrating.
     page.on("download", on_download)
     try:
@@ -344,7 +392,15 @@ class BrowserbaseProvider:
 
             context.on("page", on_new_page)
             stage = "navigate"
-            await page.goto(start_url, wait_until="domcontentloaded", timeout=self.timeout_seconds * 1000)
+            from playwright.async_api import Error as PlaywrightError
+
+            try:
+                await page.goto(start_url, wait_until="domcontentloaded", timeout=self.timeout_seconds * 1000)
+            except PlaywrightError as error:
+                # The browser is up; the person can still open another page. Only the type: the message can
+                # carry the connect URL.
+                logger.warning("recording_start_page_failed error_type=%s", type(error).__name__)
+                session.start_page_failed = True
             return session
         except BaseException as error:
             # Only the stage and type: provider messages can carry the connect URL and its signing key.
@@ -395,6 +451,12 @@ class LocalPlaywrightProvider:
         page = await context.new_page()
         await _install_page_events(session, page, on_event)
         context.on("page", lambda new_page: session.track(_install_page_events(session, new_page, on_event)))
-        await page.goto(start_url, wait_until="domcontentloaded")
+        from playwright.async_api import Error as PlaywrightError
+
+        try:
+            await page.goto(start_url, wait_until="domcontentloaded")
+        except PlaywrightError as error:
+            logger.warning("recording_start_page_failed error_type=%s", type(error).__name__)
+            session.start_page_failed = True
         self.last_session = session
         return session

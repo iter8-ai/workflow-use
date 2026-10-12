@@ -329,12 +329,13 @@ async def test_page_scripts_cannot_read_or_forge_sign_in_values() -> None:
     assert all("forged" not in str(event) and "sign_in_value" not in str(event) for event in events)
 
 
-def test_page_events_never_carry_sign_in_values() -> None:
+def test_page_events_never_carry_browser_only_events() -> None:
     assert page_event({"type": "credential", "value": "password", "secret": "forged"}) == {
         "type": "credential",
         "value": "password",
     }
     assert page_event({"type": "sign_in_value", "value": "password", "secret": "forged"}) == {}
+    assert page_event({"type": "page_loaded", "url": "https://example.com/login"}) == {}
 
 
 @pytest.mark.asyncio
