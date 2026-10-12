@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shutil
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 from uuid import uuid4
@@ -242,6 +243,7 @@ class BrowserbaseProvider:
             raise RuntimeError("BROWSERBASE_PROJECT_ID is required.")
 
         from browserbase import AsyncBrowserbase
+        from playwright._impl._driver import compute_driver_executable
         from playwright.async_api import async_playwright
 
         client = AsyncBrowserbase()
@@ -279,6 +281,9 @@ class BrowserbaseProvider:
             stage = "debug_session"
             debug = await client.sessions.debug(created.id)
             stage = "start_runtime"
+            # A missing driver makes Playwright's detached connection task print the exception.
+            if shutil.which(compute_driver_executable()[0]) is None:
+                raise FileNotFoundError
             runtime = await async_playwright().start()
             stage = "connect"
             browser = await runtime.chromium.connect_over_cdp(created.connect_url)
