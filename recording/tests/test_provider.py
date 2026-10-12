@@ -720,12 +720,19 @@ async def test_navigate_gives_up_after_repeated_interruptions() -> None:
 
     from workflow_use_recording.provider import PlaywrightRecordingSession
 
+    errors = [
+        PlaywrightError(
+            f'Page.goto: interrupted by another navigation to "chrome-error://chromewebdata/" ({attempt})'
+        )
+        for attempt in range(3)
+    ]
+
     class Page(FakePage):
         url = "chrome-error://chromewebdata/"
 
         async def goto(self, url: str, **_kwargs: Any) -> None:
             self.goto_urls.append(url)
-            raise PlaywrightError('Page.goto: Navigation to "x" is interrupted by another navigation to "y"')
+            raise errors[len(self.goto_urls) - 1]
 
     page = Page()
     context = FakeContext(page)
@@ -733,11 +740,73 @@ async def test_navigate_gives_up_after_repeated_interruptions() -> None:
     session = PlaywrightRecordingSession(browser=FakeBrowser(context), runtime=object(), live_view_url=None)
     session.start_page_failed = True
 
-    with pytest.raises(PlaywrightError):
+    with pytest.raises(PlaywrightError) as caught:
         await session.navigate("https://example.com/login")
 
+    assert caught.value is errors[-1]
     assert len(page.goto_urls) == 3
     assert session.start_page_failed is True
+
+
+@pytest.mark.asyncio
+async def test_navigate_does_not_recover_an_unrelated_interruption_even_if_it_lands() -> None:
+    from playwright.async_api import Error as PlaywrightError
+
+    from workflow_use_recording.provider import PlaywrightRecordingSession
+
+    error = PlaywrightError('Page.goto: Navigation to "x" is interrupted by another navigation to "y"')
+
+    class Page(FakePage):
+        async def goto(self, url: str, **_kwargs: Any) -> None:
+            self.goto_urls.append(url)
+            self.url = url
+            raise error
+
+    page = Page()
+    context = FakeContext(page)
+    context.pages = [page]
+    session = PlaywrightRecordingSession(browser=FakeBrowser(context), runtime=object(), live_view_url=None)
+    session.start_page_failed = True
+
+    with pytest.raises(PlaywrightError) as caught:
+        await session.navigate("https://example.com/login")
+
+    assert caught.value is error
+    assert page.goto_urls == ["https://example.com/login"]
+    assert session.start_page_failed is True
+
+
+@pytest.mark.asyncio
+async def test_navigate_accepts_target_landed_during_final_settle() -> None:
+    from playwright.async_api import Error as PlaywrightError
+
+    from workflow_use_recording.provider import PlaywrightRecordingSession
+
+    class Page(FakePage):
+        url = "chrome-error://chromewebdata/"
+
+        async def goto(self, url: str, **_kwargs: Any) -> None:
+            self.goto_urls.append(url)
+            raise PlaywrightError(
+                'Page.goto: interrupted by another navigation to "chrome-error://chromewebdata/"'
+            )
+
+        async def wait_for_load_state(self, _state: str, **_kwargs: Any) -> None:
+            if len(self.goto_urls) == 3:
+                self.url = "https://example.com/login/"
+            else:
+                raise PlaywrightError("load interrupted")
+
+    page = Page()
+    context = FakeContext(page)
+    context.pages = [page]
+    session = PlaywrightRecordingSession(browser=FakeBrowser(context), runtime=object(), live_view_url=None)
+    session.start_page_failed = True
+
+    await session.navigate("https://example.com/login")
+
+    assert page.goto_urls == ["https://example.com/login"] * 3
+    assert session.start_page_failed is False
 
 
 @pytest.mark.asyncio

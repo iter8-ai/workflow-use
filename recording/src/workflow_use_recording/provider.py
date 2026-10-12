@@ -142,7 +142,7 @@ class PlaywrightRecordingSession:
             except PlaywrightError as error:
                 # Right after a page fails to load, Chromium is still committing its error page, and that
                 # commit reports the next navigation as interrupted even though it usually still lands.
-                if "interrupted by another navigation" not in str(error) or attempt == NAVIGATE_ATTEMPTS - 1:
+                if 'interrupted by another navigation to "chrome-error://chromewebdata/"' not in str(error):
                     raise
                 try:
                     await page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
@@ -150,6 +150,8 @@ class PlaywrightRecordingSession:
                     pass
                 if _same_page(getattr(page, "url", ""), url):
                     break
+                if attempt == NAVIGATE_ATTEMPTS - 1:
+                    raise
         self.start_page_failed = False
 
     async def delete_context(self) -> None:
