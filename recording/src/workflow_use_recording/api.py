@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import secrets
 from contextlib import asynccontextmanager, suppress
@@ -16,6 +17,7 @@ from .provider import BrowserbaseProvider, BrowserProvider
 from .service import InvalidRecordingUrl, RecordingOwner, RecordingService
 
 SERVICE_UNAVAILABLE = "Recording service is temporarily unavailable."
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -81,7 +83,9 @@ def create_app(provider: BrowserProvider, config: RecordingConfig, organizer: St
             recording = await service.create(recording_owner, request.url)
         except InvalidRecordingUrl as error:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
-        except Exception:
+        except Exception as error:
+            # The response stays generic; the log names the failure type so a 503 can be traced.
+            logger.warning("recording_start_failed error_type=%s", type(error).__name__)
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=SERVICE_UNAVAILABLE) from None
         return _response(service.response(recording), status_code=status.HTTP_201_CREATED)
 

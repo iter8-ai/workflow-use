@@ -221,6 +221,39 @@ async def _show_opened_tab(session: PlaywrightRecordingSession, client: Any, ses
         session.finish_tab(page)
 
 
+async def _start_playwright_runtime() -> Any:
+    from playwright._impl._connection import Connection
+    from playwright._impl._object_factory import create_remote_object
+    from playwright._impl._transport import PipeTransport
+    from playwright.async_api import async_playwright
+    from playwright.async_api._generated import Playwright as AsyncPlaywright
+
+    manager = async_playwright()
+    loop = asyncio.get_running_loop()
+    manager._connection = Connection(None, create_remote_object, PipeTransport(loop), loop)
+    task = loop.create_task(manager._connection.run())
+    playwright_future = manager._connection.playwright_future
+    try:
+        done, _ = await asyncio.wait(
+            {manager._connection._transport.on_error_future, playwright_future},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if not playwright_future.done():
+            playwright_future.cancel()
+        runtime = AsyncPlaywright(next(iter(done)).result())
+    except BaseException:
+        if not playwright_future.done():
+            playwright_future.cancel()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        raise
+    # Playwright drops this task; retrieve a later failure without printing its details.
+    task.add_done_callback(lambda finished: finished.exception() if not finished.cancelled() else None)
+    runtime.stop = manager.__aexit__
+    return runtime
+
+
 class BrowserbaseProvider:
     """Creates Browserbase sessions in EU and retains links only in memory."""
 
@@ -242,12 +275,13 @@ class BrowserbaseProvider:
             raise RuntimeError("BROWSERBASE_PROJECT_ID is required.")
 
         from browserbase import AsyncBrowserbase
-        from playwright.async_api import async_playwright
 
         client = AsyncBrowserbase()
         context_id: str | None = None
         created: Any | None = None
         runtime: Any | None = None
+        # The API reports every startup failure as a generic 503, so the log must say where startup stopped.
+        stage = "create_context"
 
         async def delete_context(context_id: str) -> None:
             deletion_client = AsyncBrowserbase()
@@ -261,6 +295,7 @@ class BrowserbaseProvider:
 
         try:
             context_id = (await client.contexts.create(project_id=self.project_id)).id
+            stage = "create_session"
             created = await client.sessions.create(
                 project_id=self.project_id,
                 keep_alive=True,
@@ -273,9 +308,13 @@ class BrowserbaseProvider:
                     "context": {"id": context_id, "persist": True},
                 },
             )
+            stage = "debug_session"
             debug = await client.sessions.debug(created.id)
-            runtime = await async_playwright().start()
+            stage = "start_runtime"
+            runtime = await _start_playwright_runtime()
+            stage = "connect"
             browser = await runtime.chromium.connect_over_cdp(created.connect_url)
+            stage = "configure"
             contexts = browser.contexts
             if not contexts:
                 raise RuntimeError("Browserbase returned no browser context.")
@@ -304,9 +343,12 @@ class BrowserbaseProvider:
                 session.watch(_show_opened_tab(session, client, created.id, new_page))
 
             context.on("page", on_new_page)
+            stage = "navigate"
             await page.goto(start_url, wait_until="domcontentloaded", timeout=self.timeout_seconds * 1000)
             return session
-        except BaseException:
+        except BaseException as error:
+            # Only the stage and type: provider messages can carry the connect URL and its signing key.
+            logger.warning("recording_browser_start_failed stage=%s error_type=%s", stage, type(error).__name__)
             cleanup_pending = False
             if runtime is not None:
                 try:
