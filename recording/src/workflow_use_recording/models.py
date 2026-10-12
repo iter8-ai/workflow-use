@@ -113,6 +113,10 @@ class CreateRecordingRequest(BaseModel):
     url: str
 
 
+class NavigateRecordingRequest(BaseModel):
+    url: str
+
+
 class RecordingGoogle(BaseModel):
     signed_in: bool = Field(serialization_alias="signedIn")
 
@@ -131,6 +135,8 @@ class RecordingResponse(BaseModel):
     # True while the finished steps are being grouped into stages and reworded; poll until it is false.
     organizing: bool = False
     google: RecordingGoogle | None = None
+    # True when the start page did not load; the person opens another page with the navigate endpoint.
+    start_page_failed: bool = Field(default=False, serialization_alias="startPageFailed")
 
 
 class CapturedCredentials(BaseModel):

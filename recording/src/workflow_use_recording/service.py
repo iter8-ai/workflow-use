@@ -43,6 +43,14 @@ class InvalidRecordingUrl(ValueError):
     """Raised only for a recording URL rejected before a provider is contacted."""
 
 
+class RecordingNotActive(RuntimeError):
+    """Raised when an action needs a recording that is still being demonstrated."""
+
+
+class PageNotOpened(RuntimeError):
+    """Raised when the browser could not open the requested page. Carries no provider text."""
+
+
 @dataclass(frozen=True)
 class RecordingOwner:
     organization: str
@@ -61,6 +69,7 @@ class Recording:
     last_input_key: str | None = None
     downloads: list[RecordedDownload] = field(default_factory=list)
     organizing: bool = False
+    start_page_failed: bool = False
     # Sign-in values typed during the demonstration, by kind. Never part of steps, responses or logs;
     # handed to the host once on stop, then forgotten.
     credentials: dict[str, str] = field(default_factory=dict, repr=False)
@@ -133,8 +142,11 @@ class RecordingService:
             if await self._attach_browser(recording, browser):
                 raise RuntimeError("Recording stopped before the browser became available.")
             # Browser events are authoritative, including redirects and actions during startup.
-            # Only seed the configured URL when the provider captured nothing.
-            if not recording.steps:
+            # Only seed the configured URL when the provider captured nothing. A start page that failed to load
+            # is not a step: the first page the person opens successfully becomes step 1.
+            if getattr(browser, "start_page_failed", False):
+                recording.start_page_failed = True
+            elif not recording.steps:
                 await self.record_event(recording.id, {"type": "navigation", "url": safe_url})
             return recording
         except _PendingContextCleanup as error:
@@ -156,6 +168,25 @@ class RecordingService:
         recording = self._recordings.get(recording_id)
         if recording is None or recording.owner != owner or recording.deleted:
             return None
+        return recording
+
+    async def navigate(self, recording_id: str, owner: RecordingOwner, url: str) -> Recording | None:
+        recording = await self.get(recording_id, owner)
+        if recording is None:
+            return None
+        safe_url = safe_public_url(url)
+        if safe_url is None:
+            raise InvalidRecordingUrl("The recording URL must be a public HTTP(S) URL.")
+        if recording.status != "recording" or recording.browser is None or recording.closing:
+            raise RecordingNotActive("The recording is not active.")
+        from playwright.async_api import Error as PlaywrightError
+
+        try:
+            await recording.browser.navigate(safe_url)
+        except PlaywrightError as error:
+            logger.warning("recording_navigate_failed error_type=%s", type(error).__name__)
+            raise PageNotOpened("The page could not be opened.") from None
+        recording.start_page_failed = False
         return recording
 
     async def stop(self, recording_id: str, owner: RecordingOwner) -> Recording | None:
@@ -546,6 +577,7 @@ class RecordingService:
             blocked_reason=recording.blocked_reason,
             downloads=recording.downloads,
             organizing=recording.organizing,
+            start_page_failed=recording.start_page_failed,
             google=None if recording.status == "recording" else RecordingGoogle(signed_in=recording.google_signed_in),
         )
 

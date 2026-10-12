@@ -11,10 +11,10 @@ from typing import Annotated, Any, AsyncIterator
 from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
 from fastapi.responses import JSONResponse
 
-from .models import CreateRecordingRequest, RecordingResponse, StoppedRecordingResponse
+from .models import CreateRecordingRequest, NavigateRecordingRequest, RecordingResponse, StoppedRecordingResponse
 from .organize import OpenAIStepOrganizer, StepOrganizer
 from .provider import BrowserbaseProvider, BrowserProvider
-from .service import InvalidRecordingUrl, RecordingOwner, RecordingService
+from .service import InvalidRecordingUrl, PageNotOpened, RecordingNotActive, RecordingOwner, RecordingService
 
 SERVICE_UNAVAILABLE = "Recording service is temporarily unavailable."
 logger = logging.getLogger(__name__)
@@ -100,6 +100,27 @@ def create_app(provider: BrowserProvider, config: RecordingConfig, organizer: St
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Recording is unavailable. It may have expired or the service restarted.",
             )
+        return _response(service.response(recording))
+
+    @app.post("/recordings/{recording_id}/navigate", response_model=RecordingResponse)
+    async def navigate_recording(
+        recording_id: str, request: NavigateRecordingRequest, recording_owner: RecordingOwner = Depends(owner)
+    ) -> JSONResponse:
+        try:
+            recording = await service.navigate(recording_id, recording_owner, request.url)
+        except InvalidRecordingUrl as error:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
+        except RecordingNotActive:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Recording is not active.") from None
+        except PageNotOpened:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="The page could not be opened."
+            ) from None
+        except Exception as error:
+            logger.warning("recording_navigate_error error_type=%s", type(error).__name__)
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=SERVICE_UNAVAILABLE) from None
+        if recording is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording not found.")
         return _response(service.response(recording))
 
     @app.post("/recordings/{recording_id}/stop", response_model=StoppedRecordingResponse)

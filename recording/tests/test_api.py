@@ -23,6 +23,16 @@ class FakeSession:
         self.signed_in = False
         self.cookie_failure = False
         self.deleted = False
+        self.start_page_failed = False
+        self.navigate_error: Exception | None = None
+        self.navigated: list[str] = []
+
+    async def navigate(self, url: str) -> None:
+        if self.navigate_error is not None:
+            raise self.navigate_error
+        self.navigated.append(url)
+        self.start_page_failed = False
+        await self.emit({"type": "navigation", "url": url})
 
     async def close(self) -> None:
         self.closed = True
@@ -38,11 +48,13 @@ class FakeSession:
 
 
 class FakeProvider(BrowserProvider):
-    def __init__(self) -> None:
+    def __init__(self, *, start_page_failed: bool = False) -> None:
         self.sessions: list[FakeSession] = []
+        self.start_page_failed = start_page_failed
 
     async def create(self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]) -> BrowserSession:
         session = FakeSession(on_event)
+        session.start_page_failed = self.start_page_failed
         self.sessions.append(session)
         return session
 
@@ -115,8 +127,76 @@ def test_create_returns_only_safe_live_view_response() -> None:
         "downloads": [],
         "organizing": False,
         "google": None,
+        "startPageFailed": False,
     }
     assert "test-key" not in response.text
+
+
+def test_create_with_a_failed_start_page_keeps_the_demonstration_open_without_a_step() -> None:
+    provider = FakeProvider(start_page_failed=True)
+    with client(provider) as http:
+        response = http.post("/recordings", json={"url": "https://example.com"}, headers=headers())
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["startPageFailed"] is True
+    assert body["status"] == "recording"
+    assert body["steps"] == []
+    assert body["liveViewUrl"] == "https://browserbase.example/debug?token=secret"
+
+
+def test_navigate_opens_a_page_and_its_navigation_becomes_the_first_step() -> None:
+    provider = FakeProvider(start_page_failed=True)
+    with client(provider) as http:
+        recording = http.post("/recordings", json={"url": "https://example.com"}, headers=headers()).json()
+        response = http.post(
+            f"/recordings/{recording['id']}/navigate", json={"url": "https://example.com/login"}, headers=headers()
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["startPageFailed"] is False
+    assert [(step["type"], step["url"]) for step in body["steps"]] == [("navigation", "https://example.com/login")]
+    assert provider.sessions[0].navigated == ["https://example.com/login"]
+
+
+def test_navigate_rejects_unknown_foreign_stopped_and_private_targets() -> None:
+    provider = FakeProvider()
+    with client(provider) as http:
+        recording = create_recording(http)
+        path = f"/recordings/{recording['id']}/navigate"
+        unknown = http.post("/recordings/missing/navigate", json={"url": "https://example.com"}, headers=headers())
+        foreign = http.post(
+            path, json={"url": "https://example.com"}, headers=headers("other", "someone@other.example")
+        )
+        private = http.post(path, json={"url": "http://10.0.0.1"}, headers=headers())
+        http.post(f"/recordings/{recording['id']}/stop", headers=headers())
+        stopped = http.post(path, json={"url": "https://example.com/next"}, headers=headers())
+
+    assert unknown.status_code == 404
+    assert foreign.status_code == 404
+    assert private.status_code == 422
+    assert private.json()["detail"] == "The recording URL must be a public HTTP(S) URL."
+    assert stopped.status_code == 409
+    assert provider.sessions[0].navigated == []
+
+
+def test_navigate_reports_a_page_that_could_not_be_opened_without_provider_text() -> None:
+    from playwright.async_api import Error as PlaywrightError
+
+    provider = FakeProvider()
+    with client(provider) as http:
+        recording = create_recording(http)
+        provider.sessions[0].navigate_error = PlaywrightError("net::ERR_HTTP_RESPONSE_CODE_FAILURE wss://x?token=leak")
+        response = http.post(
+            f"/recordings/{recording['id']}/navigate", json={"url": "https://example.com/gone"}, headers=headers()
+        )
+        after = http.get(f"/recordings/{recording['id']}", headers=headers())
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "The page could not be opened."}
+    assert after.status_code == 200
+    assert after.json()["status"] == "recording"
 
 
 @pytest.mark.parametrize(
