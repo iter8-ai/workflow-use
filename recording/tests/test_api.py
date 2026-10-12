@@ -50,9 +50,11 @@ class FakeSession:
 class FakeProvider(BrowserProvider):
     def __init__(self, *, start_page_failed: bool = False) -> None:
         self.sessions: list[FakeSession] = []
+        self.start_urls: list[str] = []
         self.start_page_failed = start_page_failed
 
     async def create(self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]) -> BrowserSession:
+        self.start_urls.append(start_url)
         session = FakeSession(on_event)
         session.start_page_failed = self.start_page_failed
         self.sessions.append(session)
@@ -610,18 +612,14 @@ async def test_typed_text_is_kept_verbatim_and_oversized_text_is_not_truncated()
     assert "sunflower" not in response.text
 
 
-def test_create_rejects_query_and_fragment_urls_without_creating_a_recording() -> None:
+def test_create_opens_the_typed_address_with_its_query_and_fragment() -> None:
     provider = FakeProvider()
+    url = "https://example.com/billing/?business_id=123#invoices"
     with client(provider) as http:
-        response = http.post(
-            "/recordings",
-            json={"url": "https://example.com/callback?p=opaque-value#latest"},
-            headers=headers(),
-        )
+        response = http.post("/recordings", json={"url": url}, headers=headers())
 
-    assert response.status_code == 422
-    assert provider.sessions == []
-    assert "opaque-value" not in response.text
+    assert response.status_code == 201
+    assert provider.start_urls == [url]
 
 
 @pytest.mark.asyncio
