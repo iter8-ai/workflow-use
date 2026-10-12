@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 
 class InvalidRecordingUrl(ValueError):
-    """Raised only for a recording URL rejected before a provider is contacted."""
+    """Raised for a recording URL rejected before browser navigation."""
 
 
 class RecordingNotActive(RuntimeError):
@@ -142,8 +142,7 @@ class RecordingService:
             if await self._attach_browser(recording, browser):
                 raise RuntimeError("Recording stopped before the browser became available.")
             # Browser events are authoritative, including redirects and actions during startup.
-            # Only seed the configured URL when the provider captured nothing. A start page that failed to load
-            # is not a step: the first page the person opens successfully becomes step 1.
+            # Seed the configured URL only when startup succeeded and no steps were captured.
             if getattr(browser, "start_page_failed", False):
                 recording.start_page_failed = True
             elif not recording.steps:
