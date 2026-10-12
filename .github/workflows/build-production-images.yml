@@ -4,7 +4,6 @@ name: Build production images
   push:
     branches: [main]
     paths:
-      - "ui/**"
       - "recording/**"
       - ".github/workflows/build-production-images.yml"
   workflow_dispatch:
@@ -29,10 +28,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: ui
-            context: ui
-            dockerfile: ui/Dockerfile
-            repository: workflow-use-ui-default
           - name: recording
             context: recording
             dockerfile: recording/Dockerfile

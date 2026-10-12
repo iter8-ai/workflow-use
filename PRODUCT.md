@@ -6,11 +6,11 @@ product
 
 ## Users and purpose
 
-The setup UI is for accountants and operations users. See the [README](README.md) for the setup flow and current limits.
+The agent setup wizard is for accountants and operations users. See the [README](README.md) for its location and this repository's role.
 
 ## Product direction
 
-This public Reiterate fork provides demonstration authoring. The Reiterate host owns authentication, agent storage, computer-use execution, and scheduling. Users do not install an extension. Existing upstream code may be retained selectively; the target engine is computer-use.
+The Reiterate editor owns demonstration authoring. The Reiterate host owns authentication, agent storage, computer-use execution, and scheduling. Users do not install an extension. Existing upstream code may be retained selectively; the target engine is computer-use.
 
 ## Design
 
@@ -22,4 +22,4 @@ Recording is not agent success. Generated instructions are drafts. Test status c
 
 ## Data boundary
 
-Keep credentials out of prompts and recorded steps; see the [README setup and sign-in guidance](README.md) for demonstrated sign-in. Browser and platform credentials stay server-side. The public iframe communicates through a narrow origin-checked host bridge; no Auth0 token is passed to it.
+Keep credentials out of prompts and recorded steps. Browser and platform credentials stay server-side.
