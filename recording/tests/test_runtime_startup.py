@@ -58,7 +58,9 @@ browserbase = ModuleType("browserbase")
 browserbase.AsyncBrowserbase = Client
 sys.modules["browserbase"] = browserbase
 logging.basicConfig(level=logging.WARNING)
-with TestClient(create_app(BrowserbaseProvider(project_id="project-private"), RecordingConfig(service_key="test-key"))) as http:
+with TestClient(
+    create_app(BrowserbaseProvider(project_id="project-private"), RecordingConfig(service_key="test-key"))
+) as http:
     response = http.post("/recordings", json={"url": "https://example.com"}, headers={
         "X-Workflow-Key": "test-key", "x-organization": "test-org", "x-user-email": "test@example.com"})
 print("RESULT=" + json.dumps({"status": response.status_code, "body": response.json(), "calls": calls}))
