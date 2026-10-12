@@ -23,6 +23,9 @@ class FakePage:
     async def goto(self, url: str, **_kwargs: Any) -> None:
         self.goto_urls.append(url)
 
+    async def wait_for_load_state(self, _state: str, **_kwargs: Any) -> None:
+        pass
+
 
 class FakeContext:
     def __init__(self, page: FakePage) -> None:
@@ -655,6 +658,110 @@ async def test_a_start_page_that_fails_to_load_keeps_the_session_open(
 
 async def _ok(page: FakePage, url: str) -> None:
     page.goto_urls.append(url)
+
+
+@pytest.mark.asyncio
+async def test_navigate_retries_once_when_the_error_page_commit_interrupts_it() -> None:
+    from playwright.async_api import Error as PlaywrightError
+
+    from workflow_use_recording.provider import PlaywrightRecordingSession
+
+    class Page(FakePage):
+        async def goto(self, url: str, **_kwargs: Any) -> None:
+            self.goto_urls.append(url)
+            if len(self.goto_urls) == 1:
+                raise PlaywrightError(
+                    'Page.goto: Navigation to "https://example.com/login" is interrupted by another navigation to "chrome-error://chromewebdata/"'
+                )
+
+    page = Page()
+    context = FakeContext(page)
+    context.pages = [page]
+    session = PlaywrightRecordingSession(browser=FakeBrowser(context), runtime=object(), live_view_url=None)
+    session.start_page_failed = True
+
+    await session.navigate("https://example.com/login")
+
+    assert page.goto_urls == ["https://example.com/login", "https://example.com/login"]
+    assert session.start_page_failed is False
+
+
+@pytest.mark.asyncio
+async def test_navigate_accepts_an_interrupted_navigation_that_still_landed() -> None:
+    from playwright.async_api import Error as PlaywrightError
+
+    from workflow_use_recording.provider import PlaywrightRecordingSession
+
+    class Page(FakePage):
+        url = "chrome-error://chromewebdata/"
+
+        async def goto(self, url: str, **_kwargs: Any) -> None:
+            self.goto_urls.append(url)
+            self.url = url
+            raise PlaywrightError(
+                'Page.goto: Navigation to "https://example.com/login" is interrupted by another navigation to "chrome-error://chromewebdata/"'
+            )
+
+    page = Page()
+    context = FakeContext(page)
+    context.pages = [page]
+    session = PlaywrightRecordingSession(browser=FakeBrowser(context), runtime=object(), live_view_url=None)
+    session.start_page_failed = True
+
+    await session.navigate("https://example.com/login")
+
+    assert page.goto_urls == ["https://example.com/login"]
+    assert session.start_page_failed is False
+
+
+@pytest.mark.asyncio
+async def test_navigate_gives_up_after_repeated_interruptions() -> None:
+    from playwright.async_api import Error as PlaywrightError
+
+    from workflow_use_recording.provider import PlaywrightRecordingSession
+
+    class Page(FakePage):
+        url = "chrome-error://chromewebdata/"
+
+        async def goto(self, url: str, **_kwargs: Any) -> None:
+            self.goto_urls.append(url)
+            raise PlaywrightError('Page.goto: Navigation to "x" is interrupted by another navigation to "y"')
+
+    page = Page()
+    context = FakeContext(page)
+    context.pages = [page]
+    session = PlaywrightRecordingSession(browser=FakeBrowser(context), runtime=object(), live_view_url=None)
+    session.start_page_failed = True
+
+    with pytest.raises(PlaywrightError):
+        await session.navigate("https://example.com/login")
+
+    assert len(page.goto_urls) == 3
+    assert session.start_page_failed is True
+
+
+@pytest.mark.asyncio
+async def test_navigate_does_not_retry_other_navigation_errors() -> None:
+    from playwright.async_api import Error as PlaywrightError
+
+    from workflow_use_recording.provider import PlaywrightRecordingSession
+
+    class Page(FakePage):
+        async def goto(self, url: str, **_kwargs: Any) -> None:
+            self.goto_urls.append(url)
+            raise PlaywrightError("net::ERR_HTTP_RESPONSE_CODE_FAILURE at https://example.com/login")
+
+    page = Page()
+    context = FakeContext(page)
+    context.pages = [page]
+    session = PlaywrightRecordingSession(browser=FakeBrowser(context), runtime=object(), live_view_url=None)
+    session.start_page_failed = True
+
+    with pytest.raises(PlaywrightError):
+        await session.navigate("https://example.com/login")
+
+    assert page.goto_urls == ["https://example.com/login"]
+    assert session.start_page_failed is True
 
 
 @pytest.mark.asyncio

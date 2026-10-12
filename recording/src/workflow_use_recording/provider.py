@@ -20,6 +20,11 @@ EventSink = Callable[[dict[str, Any]], Awaitable[None]]
 logger = logging.getLogger(__name__)
 LIVE_VIEW_SWITCH_TIMEOUT_SECONDS = 15
 NAVIGATE_TIMEOUT_MS = 30_000
+NAVIGATE_ATTEMPTS = 3
+
+
+def _same_page(current: str, target: str) -> bool:
+    return current.rstrip("/") == target.rstrip("/")
 
 
 class BrowserSession(Protocol):
@@ -128,7 +133,23 @@ class PlaywrightRecordingSession:
             page = context.pages[0]
         else:
             page = await context.new_page()
-        await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+        from playwright.async_api import Error as PlaywrightError
+
+        for attempt in range(NAVIGATE_ATTEMPTS):
+            try:
+                await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+                break
+            except PlaywrightError as error:
+                # Right after a page fails to load, Chromium is still committing its error page, and that
+                # commit reports the next navigation as interrupted even though it usually still lands.
+                if "interrupted by another navigation" not in str(error) or attempt == NAVIGATE_ATTEMPTS - 1:
+                    raise
+                try:
+                    await page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+                except PlaywrightError:
+                    pass
+                if _same_page(getattr(page, "url", ""), url):
+                    break
         self.start_page_failed = False
 
     async def delete_context(self) -> None:
