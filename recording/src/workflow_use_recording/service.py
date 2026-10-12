@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from .models import RecordedDownload, RecordingGoogle, RecordingResponse, SetupStep, StepDate
@@ -106,7 +107,9 @@ class RecordingService:
         # The browser's requests to this host are blocked unless it resolves to a public address, so the first
         # navigation would fail after a session was already started. Reject it here with a clear reason instead.
         if not await resolves_to_public_host(safe_url):
-            raise InvalidRecordingUrl("The recording URL host could not be resolved to a public address.")
+            raise InvalidRecordingUrl(
+                f"The recording URL host {urlsplit(safe_url).hostname} could not be resolved to a public address."
+            )
         async with self._create_lock:
             if self._closed:
                 raise RuntimeError("Recording service is shutting down.")

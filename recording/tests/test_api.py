@@ -579,8 +579,12 @@ def test_start_url_whose_host_does_not_resolve_is_rejected_before_a_browser_is_s
     monkeypatch.setattr(recording_service, "resolves_to_public_host", unresolvable, raising=False)
     provider = FakeProvider()
     with client(provider) as http:
-        response = http.post("/recordings", json={"url": "https://no-such-host.example"}, headers=headers())
+        response = http.post(
+            "/recordings", json={"url": "https://no-such-host.example/private-path"}, headers=headers()
+        )
 
     assert response.status_code == 422
-    assert "resolve" in response.json()["detail"]
+    assert response.json()["detail"] == (
+        "The recording URL host no-such-host.example could not be resolved to a public address."
+    )
     assert provider.sessions == []
