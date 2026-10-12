@@ -6,11 +6,11 @@ product
 
 ## Users and purpose
 
-The agent setup wizard is for accountants and operations users. It lives in the Reiterate editor (commercials-flow-editor); this repository provides the recording service it uses.
+The agent setup wizard is for accountants and operations users. See the [README](README.md) for its location and this repository's role.
 
 ## Product direction
 
-This public Reiterate fork provides demonstration authoring. The Reiterate host owns authentication, agent storage, computer-use execution, and scheduling. Users do not install an extension. Existing upstream code may be retained selectively; the target engine is computer-use.
+The Reiterate editor owns demonstration authoring. The Reiterate host owns authentication, agent storage, computer-use execution, and scheduling. Users do not install an extension. Existing upstream code may be retained selectively; the target engine is computer-use.
 
 ## Design
 

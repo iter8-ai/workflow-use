@@ -6,7 +6,7 @@ The agent setup wizard now lives in the Reiterate editor (commercials-flow-edito
 
 Forked from [browser-use/workflow-use](https://github.com/browser-use/workflow-use) at `5d2d19fe8835cc86f1bf3e04302a5000d590f249`. This fork retains the upstream [AGPL-3.0 license](LICENSE). Its public source is [iter8-ai/workflow-use](https://github.com/iter8-ai/workflow-use). Host integrations are separate codebases; no private host source is included here.
 
-The upstream workflow runtime and extension remain in the repository for reference; the upstream workflow editor GUI (`ui/`) has been removed. The instructions below describe the upstream browser-use execution path.
+The upstream workflow runtime and extension remain in the repository for reference; the upstream workflow editor GUI (`ui/`) has been removed. `python cli.py --help` still lists the legacy `launch-gui` command, which requires the removed directory and cannot start. The instructions below describe the upstream browser-use execution path.
 
 ---
 
