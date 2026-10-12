@@ -24,9 +24,14 @@ import sys
 from types import ModuleType, SimpleNamespace
 
 from fastapi.testclient import TestClient
+from workflow_use_recording import service
 from workflow_use_recording.api import RecordingConfig, create_app
 from workflow_use_recording.provider import BrowserbaseProvider
 
+async def resolves(_url):
+    return True
+
+service.resolves_to_public_host = resolves
 calls = []
 class Client:
     def __init__(self):
