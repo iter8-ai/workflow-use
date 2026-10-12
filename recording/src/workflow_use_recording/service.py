@@ -110,14 +110,13 @@ class RecordingService:
     async def create(self, owner: RecordingOwner, start_url: str) -> Recording:
         if self._closed:
             raise RuntimeError("Recording service is shutting down.")
-        safe_url = safe_public_url(start_url)
-        if safe_url is None:
+        if not is_public_http_url(start_url):
             raise InvalidRecordingUrl("The recording URL must be a public HTTP(S) URL.")
         # The browser's requests to this host are blocked unless it resolves to a public address, so the first
         # navigation would fail after a session was already started. Reject it here with a clear reason instead.
-        if not await resolves_to_public_host(safe_url):
+        if not await resolves_to_public_host(start_url):
             raise InvalidRecordingUrl(
-                f"The recording URL host {urlsplit(safe_url).hostname} could not be resolved to a public address."
+                f"The recording URL host {urlsplit(start_url).hostname} could not be resolved to a public address."
             )
         async with self._create_lock:
             if self._closed:
@@ -138,7 +137,7 @@ class RecordingService:
             await self.record_event(recording.id, event)
 
         try:
-            browser = await self.provider.create(safe_url, on_event)
+            browser = await self.provider.create(start_url, on_event)
             if await self._attach_browser(recording, browser):
                 raise RuntimeError("Recording stopped before the browser became available.")
             # Browser events are authoritative, including redirects and actions during startup.
@@ -146,7 +145,7 @@ class RecordingService:
             if getattr(browser, "start_page_failed", False):
                 recording.start_page_failed = True
             elif not recording.steps:
-                await self.record_event(recording.id, {"type": "navigation", "url": safe_url})
+                await self.record_event(recording.id, {"type": "navigation", "url": start_url})
             return recording
         except _PendingContextCleanup as error:
             async with recording.lock:
@@ -173,15 +172,14 @@ class RecordingService:
         recording = await self.get(recording_id, owner)
         if recording is None:
             return None
-        safe_url = safe_public_url(url)
-        if safe_url is None:
+        if not is_public_http_url(url):
             raise InvalidRecordingUrl("The recording URL must be a public HTTP(S) URL.")
         if recording.status != "recording" or recording.browser is None or recording.closing:
             raise RecordingNotActive("The recording is not active.")
         from playwright.async_api import Error as PlaywrightError
 
         try:
-            await recording.browser.navigate(safe_url)
+            await recording.browser.navigate(url)
         except PlaywrightError as error:
             logger.warning("recording_navigate_failed error_type=%s", type(error).__name__)
             raise PageNotOpened("The page could not be opened.") from None

@@ -13,7 +13,6 @@ from .security import (
     is_google_sign_in,
     is_public_http_url,
     resolves_to_public_host,
-    safe_public_url,
 )
 
 EventSink = Callable[[dict[str, Any]], Awaitable[None]]
@@ -317,7 +316,7 @@ class BrowserbaseProvider:
         self.timeout_seconds = min(max(timeout_seconds, 1), 900)
 
     async def create(self, start_url: str, on_event: EventSink) -> BrowserSession:
-        if safe_public_url(start_url) is None:
+        if not is_public_http_url(start_url):
             raise ValueError("The recording URL must be a public HTTP(S) URL.")
         if not self.project_id:
             raise RuntimeError("BROWSERBASE_PROJECT_ID is required.")
@@ -439,7 +438,7 @@ class LocalPlaywrightProvider:
         self.last_session: PlaywrightRecordingSession | None = None
 
     async def create(self, start_url: str, on_event: EventSink) -> BrowserSession:
-        if safe_public_url(start_url) is None:
+        if not is_public_http_url(start_url):
             raise ValueError("The recording URL must be a public HTTP(S) URL.")
         from playwright.async_api import async_playwright
 
