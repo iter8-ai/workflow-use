@@ -503,22 +503,35 @@ async def test_popup_live_view_switching_expires_after_fifteen_seconds(monkeypat
     assert RecordingService.response(recording).live_view_switching is False
 
 
+@pytest.mark.parametrize(
+    "stage",
+    ["create_context", "create_session", "debug_session", "start_runtime", "connect", "configure", "navigate"],
+)
 @pytest.mark.asyncio
 async def test_browser_startup_failure_names_its_stage_without_connection_details(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, stage: str
 ) -> None:
+    connect_url = "wss://connect.example/?signingKey=must-not-leak"
+
+    def fail_at(current_stage: str) -> None:
+        if stage == current_stage:
+            raise RuntimeError(f"WebSocket error: {connect_url}")
+
     class Client:
         def __init__(self) -> None:
             self.contexts = SimpleNamespace(create=self.create_context)
             self.sessions = SimpleNamespace(create=self.create_session, debug=self.debug, update=self.update)
 
         async def create_context(self, **_kwargs: Any) -> Any:
+            fail_at("create_context")
             return SimpleNamespace(id="context-private")
 
         async def create_session(self, **_kwargs: Any) -> Any:
-            return SimpleNamespace(id="session-1", connect_url="wss://connect.example/?signingKey=must-not-leak")
+            fail_at("create_session")
+            return SimpleNamespace(id="session-1", connect_url=connect_url)
 
         async def debug(self, _session_id: str) -> Any:
+            fail_at("debug_session")
             return SimpleNamespace(debugger_fullscreen_url="https://live.example/")
 
         async def update(self, *_args: Any, **_kwargs: Any) -> None:
@@ -534,11 +547,21 @@ async def test_browser_startup_failure_names_its_stage_without_connection_detail
         def __init__(self) -> None:
             self.chromium = SimpleNamespace(connect_over_cdp=self.connect_over_cdp)
 
-        async def connect_over_cdp(self, connect_url: str) -> Any:
-            raise RuntimeError(f"WebSocket error: {connect_url}")
+        async def connect_over_cdp(self, _connect_url: str) -> Any:
+            fail_at("connect")
+            return FakeBrowser(Context(Page()))
 
         async def stop(self) -> None:
             pass
+
+    class Context(FakeContext):
+        async def route(self, _pattern: str, _handler: Any) -> None:
+            fail_at("configure")
+
+    class Page(FakePage):
+        async def goto(self, url: str, **_kwargs: Any) -> None:
+            fail_at("navigate")
+            await super().goto(url)
 
     browserbase = ModuleType("browserbase")
     browserbase.AsyncBrowserbase = Client  # type: ignore[attr-defined]
@@ -546,6 +569,7 @@ async def test_browser_startup_failure_names_its_stage_without_connection_detail
     runtime = Runtime()
 
     async def start() -> Runtime:
+        fail_at("start_runtime")
         return runtime
 
     playwright_async_api.async_playwright = lambda: SimpleNamespace(start=start)  # type: ignore[attr-defined]
@@ -558,5 +582,8 @@ async def test_browser_startup_failure_names_its_stage_without_connection_detail
 
     # The service prints only the message text, so the stage and error type must be in it.
     messages = [record.getMessage() for record in caplog.records if record.levelname == "WARNING"]
-    assert any("stage=connect" in message and "error_type=RuntimeError" in message for message in messages), messages
-    assert all("must-not-leak" not in message for message in messages)
+    assert f"recording_browser_start_failed stage={stage} error_type=RuntimeError" in messages
+    assert "WebSocket error" not in caplog.text
+    assert connect_url not in caplog.text
+    assert "must-not-leak" not in caplog.text
+    assert "Traceback" not in caplog.text

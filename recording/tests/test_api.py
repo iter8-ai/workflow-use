@@ -590,16 +590,20 @@ def test_start_url_whose_host_does_not_resolve_is_rejected_before_a_browser_is_s
     assert provider.sessions == []
 
 
+@pytest.mark.parametrize("value_error, error_type", [(False, "RuntimeError"), (True, "ValueError")])
 def test_failed_recording_start_is_logged_by_error_type_without_connection_details(
     caplog: pytest.LogCaptureFixture,
+    value_error: bool,
+    error_type: str,
 ) -> None:
-    provider = FailingProvider(fail_create=True)
+    provider = FailingProvider(fail_create=True, value_error=value_error)
     with caplog.at_level("WARNING", logger="workflow_use_recording"), client(provider) as http:
         response = http.post("/recordings", json={"url": "https://example.com"}, headers=headers())
 
     assert response.status_code == 503
+    assert response.json() == {"detail": "Recording service is temporarily unavailable."}
     messages = [record.getMessage() for record in caplog.records if record.levelname == "WARNING"]
-    assert any("recording_start_failed" in message and "error_type=RuntimeError" in message for message in messages), (
-        messages
-    )
-    assert all("must-not-leak" not in message for message in messages)
+    assert f"recording_start_failed error_type={error_type}" in messages
+    assert "wss://browserbase.example/connect" not in caplog.text
+    assert "must-not-leak" not in caplog.text
+    assert "Traceback" not in caplog.text
