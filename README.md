@@ -229,6 +229,8 @@ Show computer what it needs to do once, and it will do it over and over again wi
 (cd recording && uv sync && uv run pytest)
 ```
 
+Workflow tests that drive a real browser are skipped unless `WORKFLOW_USE_BROWSER_TESTS=1` is set.
+
 To run `lint.sh` before every commit, install the hook once per clone:
 
 ```bash
