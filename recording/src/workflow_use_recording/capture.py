@@ -4,11 +4,7 @@ import json
 from collections.abc import Callable
 from typing import Any
 
-CAPTURE_SCRIPT = r"""
-(() => {
-  if (window.__workflowUseRecordingInstalled) return;
-  window.__workflowUseRecordingInstalled = true;
-
+_FIELD_CLASSIFICATION_SCRIPT = r"""
   const semanticText = (value, size = 240) => String(value ?? "").trim().replace(/\s+/g, " ").slice(0, size);
   const labelText = (node) => {
     if (!(node instanceof Element)) return "";
@@ -62,6 +58,15 @@ CAPTURE_SCRIPT = r"""
     if (passwordInForm || /user.?name|login/.test(hint)) return "username";
     return null;
   };
+""".lstrip("\n")
+
+
+CAPTURE_SCRIPT = r"""
+(() => {
+  if (window.__workflowUseRecordingInstalled) return;
+  window.__workflowUseRecordingInstalled = true;
+
+  __FIELD_CLASSIFICATION__
   // Controls a person clicks on purpose. Landmark and container roles (dialog, form, main, ...) are not here:
   // naming a click after one of them glues the whole panel's text into one unreadable label.
   const CLICKABLE = "button,a,input,select,textarea,summary,label,[role=button],[role=link],[role=tab]," +
@@ -170,7 +175,7 @@ CAPTURE_SCRIPT = r"""
     emit({ type: "scroll", value: direction });
   }, true);
 })();
-"""
+""".replace("  __FIELD_CLASSIFICATION__\n", _FIELD_CLASSIFICATION_SCRIPT)
 
 
 SIGN_IN_WORLD = "workflow-use-sign-in"
@@ -184,59 +189,7 @@ SIGN_IN_SCRIPT = r"""
   const send = globalThis.__BINDING__;
   if (typeof send !== "function" || globalThis.__workflowUseSignInInstalled) return;
   globalThis.__workflowUseSignInInstalled = true;
-  const semanticText = (value, size = 240) => String(value ?? "").trim().replace(/\s+/g, " ").slice(0, size);
-  const labelText = (node) => {
-    if (!(node instanceof Element)) return "";
-    const labelled = (node.getAttribute("aria-labelledby") || "").split(/\s+/)
-      .map((id) => document.getElementById(id)?.textContent || "").join(" ");
-    const hasLabels = node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement ||
-      node instanceof HTMLSelectElement;
-    const associated = hasLabels
-      ? Array.from(node.labels || []).map((label) => label.textContent || "").join(" ") : "";
-    return semanticText(node.getAttribute("aria-label") || labelled || associated);
-  };
-  // Sign-in fields become credential steps: the kind is recorded, never the value.
-  // Buttons and checkboxes are clicked, not typed into (e.g. "Sign in", "Remember me").
-  const typedField = (node) => (node instanceof HTMLInputElement &&
-      !["button", "submit", "reset", "checkbox", "radio", "image", "file", "hidden"].includes(node.type)) ||
-    node instanceof HTMLTextAreaElement || (node instanceof HTMLElement && node.isContentEditable);
-  const otherSecretHint =
-    /api.?key|\bauth\b|credential|jwt|secret|token|\bpin\b|passphrase|security.?answer|cvv|cvc|card.?number/;
-  // Only a real sign-in username or password is handed to the host to reuse. Tokens, PINs, card
-  // numbers and the like are still recorded as secret fields, but their values are never kept.
-  const reusableSignIn = (node, kind) => {
-    if (kind === "username") return true;
-    if (kind !== "password") return false;
-    const input = node instanceof HTMLInputElement ? node : null;
-    const hint = (`${input?.name || ""} ${node.id} ${labelText(node)} ` +
-      `${node.getAttribute("placeholder") || ""}`).toLowerCase();
-    // A new-password field (sign-up, reset) is not the password the account signs in with today.
-    if (/new-password/.test(input?.autocomplete || "")) return false;
-    const passwordField = input?.type === "password" || /current-password/.test(input?.autocomplete || "");
-    const oneTime = /one.?time|otp|passcode|verification.?code|2fa|mfa|authenticator/.test(hint);
-    return !otherSecretHint.test(hint) && !oneTime && (passwordField || /pass.?word/.test(hint));
-  };
-  const credentialKind = (node) => {
-    if (!typedField(node)) return null;
-    const input = node instanceof HTMLInputElement ? node : null;
-    const hint = (`${input?.type || ""} ${input?.autocomplete || ""} ${input?.name || ""} ${node.id} ` +
-      `${labelText(node)} ${node.getAttribute("placeholder") || ""}`).toLowerCase();
-    // Most specific signal first: the input type, then explicit autocomplete and username hints.
-    const oneTime = /one.?time|otp|passcode|verification.?code|2fa|mfa|authenticator/.test(hint);
-    if (input?.type === "password" || /(?:current|new)-password/.test(input?.autocomplete || "")) {
-      // A masked verification field is still a one-time code, not the account password.
-      const verification = /one.?time|\botp\b|verification.?code|2fa|mfa|authenticator/.test(hint);
-      return /one-time-code/.test(input?.autocomplete || "") || verification ? "otp" : "password";
-    }
-    // A "show password" toggle turns the field into type=text; its hints still say password.
-    if (/pass.?word/.test(hint)) return "password";
-    if (/\b(?:username|email)\b/.test(input?.autocomplete || "") || /user.?name/.test(hint)) return "username";
-    if (oneTime) return "otp";
-    if (otherSecretHint.test(hint)) return "password";
-    const passwordInForm = Boolean(node.closest("form")?.querySelector('input[type="password"]'));
-    if (passwordInForm || /user.?name|login/.test(hint)) return "username";
-    return null;
-  };
+  __FIELD_CLASSIFICATION__
   document.addEventListener("input", (event) => {
     // A page can set a value and dispatch its own input event; only real user input counts.
     if (!event.isTrusted) return;
@@ -250,7 +203,7 @@ SIGN_IN_SCRIPT = r"""
     send(JSON.stringify({ kind, value }));
   }, true);
 })();
-""".replace("__BINDING__", SIGN_IN_BINDING)
+""".replace("  __FIELD_CLASSIFICATION__\n", _FIELD_CLASSIFICATION_SCRIPT).replace("__BINDING__", SIGN_IN_BINDING)
 
 
 def page_event(event: object) -> object:
