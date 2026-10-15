@@ -65,13 +65,8 @@ def has_google_session(cookies: list[dict[str, Any]]) -> bool:
 
 
 def safe_public_url(url: str) -> str | None:
-    """Return a public URL only when it has no query parameters or fragment."""
-    if not is_public_http_url(url):
-        return None
-    parsed = urlsplit(url)
-    if parsed.query or parsed.fragment:
-        return None
-    return url
+    """Return a public HTTP(S) URL without changing its path, query, or fragment."""
+    return url if is_public_http_url(url) else None
 
 
 async def resolves_to_public_host(url: str) -> bool:

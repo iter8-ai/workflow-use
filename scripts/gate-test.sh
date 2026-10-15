@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # See .no-mistakes.yaml for gate commands and validation instructions.
 # Changed areas are compared with the merge base of HEAD and origin/main.
-# test mirrors the CI "Agent setup" recording job for touched areas (Playwright browsers are never installed);
-# lint mirrors the lint checks of the CI "Lint" and "Agent setup" workflows for touched areas.
+# test mirrors the CI "Recording" workflow's recording job for touched areas (Playwright browsers are never installed);
+# lint mirrors the lint checks of the CI "Lint" and "Recording" workflows for touched areas.
 set -euo pipefail
 
 root="$(git rev-parse --show-toplevel)"
@@ -63,7 +63,7 @@ case "${1:-}" in
     "$0" prepare
     status=0
     if has recording; then
-      # The Agent setup workflow's recording job runs this ruff check.
+      # The Recording workflow runs this Ruff check.
       (cd recording && uv sync -q --frozen --group dev && uv run --no-sync ruff check .) || status=1
     fi
     if has workflows; then

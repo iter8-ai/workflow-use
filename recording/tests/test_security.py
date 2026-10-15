@@ -5,13 +5,21 @@ import pytest
 from workflow_use_recording.security import has_google_session, is_google_sign_in, safe_public_url
 
 
-@pytest.mark.parametrize("query", ["p=opaque-value", "token=synthetic-value", "session_id=safe-value"])
-def test_safe_public_url_rejects_every_query_parameter_and_fragment(query: str) -> None:
-    assert safe_public_url(f"https://example.com/reports?{query}#latest") is None
+def test_safe_public_url_preserves_query_and_fragment() -> None:
+    url = "https://example.com/report?month=2026-09#top"
+    assert safe_public_url(url) == url
 
 
 def test_safe_public_url_preserves_a_plain_public_path() -> None:
     assert safe_public_url("https://example.com/reports") == "https://example.com/reports"
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["https://user:pass@example.com/report?month=2026-09#top", "https://127.0.0.1/report?month=2026-09#top"],
+)
+def test_safe_public_url_rejects_credentials_and_private_hosts(url: str) -> None:
+    assert safe_public_url(url) is None
 
 
 @pytest.mark.parametrize(

@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 LIVE_VIEW_SWITCH_TIMEOUT_SECONDS = 15
 NAVIGATE_TIMEOUT_MS = 30_000
 NAVIGATE_ATTEMPTS = 3
+START_PAGE_TIMEOUT_SECONDS = 45
+CLEANUP_TIMEOUT_SECONDS = 2
 
 
 def _same_page(current: str, target: str) -> bool:
@@ -47,10 +49,17 @@ class BrowserProvider(Protocol):
 class _PendingContextCleanup(Exception):
     """Startup failed and the service must retry deleting the created context."""
 
-    def __init__(self, context_id: str, delete_context: Callable[[], Awaitable[None]]) -> None:
+    def __init__(
+        self, context_id: str, delete_context: Callable[[], Awaitable[None]], *, timed_out: bool = False
+    ) -> None:
         super().__init__("Browserbase context cleanup pending")
         self.context_id = context_id
         self.delete_context = delete_context
+        self.timed_out = timed_out
+
+
+class RecordingStartTimeout(TimeoutError):
+    """The browser or start page did not become ready before the create deadline."""
 
 
 class PlaywrightRecordingSession:
@@ -327,6 +336,7 @@ class BrowserbaseProvider:
         context_id: str | None = None
         created: Any | None = None
         runtime: Any | None = None
+        browser: Any | None = None
         # The API reports every startup failure as a generic 503, so the log must say where startup stopped.
         stage = "create_context"
 
@@ -392,9 +402,12 @@ class BrowserbaseProvider:
             context.on("page", on_new_page)
             stage = "navigate"
             from playwright.async_api import Error as PlaywrightError
+            from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
             try:
-                await page.goto(start_url, wait_until="domcontentloaded", timeout=self.timeout_seconds * 1000)
+                await page.goto(start_url, wait_until="domcontentloaded", timeout=START_PAGE_TIMEOUT_SECONDS * 1000)
+            except PlaywrightTimeoutError:
+                raise RecordingStartTimeout("The recording start page did not load in time.") from None
             except PlaywrightError as error:
                 # The browser is up; the person can still open another page. Only the type: the message can
                 # carry the connect URL.
@@ -404,30 +417,44 @@ class BrowserbaseProvider:
         except BaseException as error:
             # Only the stage and type: provider messages can carry the connect URL and its signing key.
             logger.warning("recording_browser_start_failed stage=%s error_type=%s", stage, type(error).__name__)
+            timed_out = isinstance(error, TimeoutError)
             cleanup_pending = False
+            if browser is not None:
+                try:
+                    await asyncio.wait_for(browser.close(), CLEANUP_TIMEOUT_SECONDS)
+                except Exception as error:
+                    logger.warning("recording_browser_cleanup_failed", extra={"error_type": type(error).__name__})
             if runtime is not None:
                 try:
-                    await runtime.stop()
+                    await asyncio.wait_for(runtime.stop(), CLEANUP_TIMEOUT_SECONDS)
                 except Exception as error:
                     logger.warning("recording_runtime_cleanup_failed", extra={"error_type": type(error).__name__})
             if created is not None:
                 try:
-                    await client.sessions.update(created.id, project_id=self.project_id, status="REQUEST_RELEASE")
+                    await asyncio.wait_for(
+                        client.sessions.update(created.id, project_id=self.project_id, status="REQUEST_RELEASE"),
+                        CLEANUP_TIMEOUT_SECONDS,
+                    )
                 except Exception as error:
                     logger.warning("recording_session_cleanup_failed", extra={"error_type": type(error).__name__})
             if context_id is not None:
                 try:
-                    await client.delete(f"/v1/contexts/{context_id}", cast_to=object, body={})
+                    await asyncio.wait_for(
+                        client.delete(f"/v1/contexts/{context_id}", cast_to=object, body={}),
+                        CLEANUP_TIMEOUT_SECONDS,
+                    )
                 except Exception as error:
                     if getattr(error, "status_code", None) != 404:
                         cleanup_pending = True
                         logger.warning("recording_context_cleanup_failed", extra={"error_type": type(error).__name__})
             try:
-                await client.__aexit__(None, None, None)
+                await asyncio.wait_for(client.__aexit__(None, None, None), CLEANUP_TIMEOUT_SECONDS)
             except Exception as error:
                 logger.warning("recording_client_cleanup_failed", extra={"error_type": type(error).__name__})
             if cleanup_pending and context_id is not None:
-                raise _PendingContextCleanup(context_id, lambda: delete_context(context_id)) from None
+                raise _PendingContextCleanup(
+                    context_id, lambda: delete_context(context_id), timed_out=timed_out
+                ) from None
             raise
 
 
