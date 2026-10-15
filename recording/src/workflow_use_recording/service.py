@@ -13,13 +13,20 @@ from uuid import uuid4
 
 from .models import RecordedDownload, RecordingGoogle, RecordingResponse, SetupStep, StepDate
 from .organize import OrganizedStep, StepOrganizer
-from .provider import BrowserProvider, BrowserSession, _PendingContextCleanup
+from .provider import (
+    START_PAGE_TIMEOUT_SECONDS,
+    BrowserProvider,
+    BrowserSession,
+    RecordingStartTimeout,
+    _PendingContextCleanup,
+)
 from .security import is_google_sign_in, is_public_http_url, resolves_to_public_host, safe_public_url
 
 MAX_STEPS = 200
 MAX_FIELD_LENGTH = 2000
 MAX_DOWNLOADS = 20
 ORGANIZE_TIMEOUT_SECONDS = 45
+CREATE_TIMEOUT_SECONDS = START_PAGE_TIMEOUT_SECONDS
 HANDOFF_RETRY_WINDOW = timedelta(minutes=60)
 CREDENTIAL_KINDS = frozenset({"username", "password", "otp"})
 # Backstop for the page script: typing into a field labelled like a secret never keeps the text.
@@ -137,7 +144,8 @@ class RecordingService:
             await self.record_event(recording.id, event)
 
         try:
-            browser = await self.provider.create(start_url, on_event)
+            async with asyncio.timeout(CREATE_TIMEOUT_SECONDS):
+                browser = await self.provider.create(start_url, on_event)
             if await self._attach_browser(recording, browser):
                 raise RuntimeError("Recording stopped before the browser became available.")
             # Browser events are authoritative, including redirects and actions during startup.
@@ -156,9 +164,11 @@ class RecordingService:
                 recording.context_delete = error.delete_context
                 recording.context_delete_pending = True
             raise
-        except BaseException:
+        except BaseException as error:
             if recording.browser is None and recording.close_requested is None and recording.context_id is None:
                 self._recordings.pop(recording.id, None)
+            if isinstance(error, TimeoutError) and not isinstance(error, RecordingStartTimeout):
+                raise RecordingStartTimeout("The recording start page did not load in time.") from None
             raise
 
     async def get(self, recording_id: str, owner: RecordingOwner) -> Recording | None:
@@ -219,11 +229,7 @@ class RecordingService:
         if recording is None:
             return
         async with recording.lock:
-            if (
-                recording.status != "recording"
-                or recording.closing
-                or datetime.now(UTC) >= recording.expires_at
-            ):
+            if recording.status != "recording" or recording.closing or datetime.now(UTC) >= recording.expires_at:
                 return
             if event.get("type") == "page_loaded":
                 url = event.get("url")

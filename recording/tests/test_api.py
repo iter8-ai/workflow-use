@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from collections.abc import Awaitable, Callable
@@ -10,7 +11,7 @@ from fastapi.testclient import TestClient
 
 import workflow_use_recording.service as recording_service
 from workflow_use_recording.api import RecordingConfig, create_app
-from workflow_use_recording.provider import BrowserProvider, BrowserSession
+from workflow_use_recording.provider import BrowserProvider, BrowserSession, RecordingStartTimeout
 from workflow_use_recording.service import CAPTURE_LIMIT_REASON
 
 
@@ -147,6 +148,47 @@ def test_create_with_a_failed_start_page_keeps_the_demonstration_open_without_a_
     assert body["liveViewUrl"] == "https://browserbase.example/debug?token=secret"
 
 
+def test_start_page_timeout_has_clear_response_without_leaking_provider_details() -> None:
+    class TimeoutProvider(FakeProvider):
+        async def create(self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]) -> BrowserSession:
+            raise RecordingStartTimeout("wss://connect.example/?signingKey=must-not-leak")
+
+    with client(TimeoutProvider()) as http:
+        response = http.post("/recordings", json={"url": "https://example.com"}, headers=headers())
+
+    assert response.status_code == 504
+    assert response.json() == {"detail": "The recording start page did not load in time."}
+    assert "must-not-leak" not in response.text
+
+
+def test_startup_deadline_releases_capacity_for_the_next_create(monkeypatch: pytest.MonkeyPatch) -> None:
+    class SlowProvider(FakeProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.cancelled = False
+
+        async def create(self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]) -> BrowserSession:
+            if not self.cancelled:
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    self.cancelled = True
+                    raise
+            return await super().create(start_url, on_event)
+
+    monkeypatch.setattr(recording_service, "CREATE_TIMEOUT_SECONDS", 0.01)
+    provider = SlowProvider()
+    app = create_app(provider, RecordingConfig(service_key="test-key", max_sessions=1))
+    with TestClient(app) as http:
+        first = http.post("/recordings", json={"url": "https://example.com"}, headers=headers())
+        second = http.post("/recordings", json={"url": "https://example.com"}, headers=headers())
+
+    assert first.status_code == 504
+    assert first.json() == {"detail": "The recording start page did not load in time."}
+    assert provider.cancelled
+    assert second.status_code == 201
+
+
 def test_navigate_opens_a_page_and_its_navigation_becomes_the_first_step() -> None:
     provider = FakeProvider(start_page_failed=True)
     with client(provider) as http:
@@ -189,9 +231,7 @@ async def test_live_browser_load_clears_failed_start_in_get_and_stop_without_add
 
     for body in (after_load, stopped):
         assert body["startPageFailed"] is False
-        assert [(step["type"], step["url"]) for step in body["steps"]] == [
-            ("navigation", "https://example.com/login")
-        ]
+        assert [(step["type"], step["url"]) for step in body["steps"]] == [("navigation", "https://example.com/login")]
 
 
 def test_navigate_rejects_unknown_foreign_stopped_and_private_targets() -> None:

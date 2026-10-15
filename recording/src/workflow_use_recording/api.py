@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 
 from .models import CreateRecordingRequest, NavigateRecordingRequest, RecordingResponse, StoppedRecordingResponse
 from .organize import OpenAIStepOrganizer, StepOrganizer
-from .provider import BrowserbaseProvider, BrowserProvider
+from .provider import BrowserbaseProvider, BrowserProvider, RecordingStartTimeout
 from .service import InvalidRecordingUrl, PageNotOpened, RecordingNotActive, RecordingOwner, RecordingService
 
 SERVICE_UNAVAILABLE = "Recording service is temporarily unavailable."
@@ -83,6 +83,11 @@ def create_app(provider: BrowserProvider, config: RecordingConfig, organizer: St
             recording = await service.create(recording_owner, request.url)
         except InvalidRecordingUrl as error:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
+        except RecordingStartTimeout:
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail="The recording start page did not load in time.",
+            ) from None
         except Exception as error:
             # The response stays generic; the log names the failure type so a 503 can be traced.
             logger.warning("recording_start_failed error_type=%s", type(error).__name__)
