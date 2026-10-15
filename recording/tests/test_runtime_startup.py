@@ -11,13 +11,16 @@ import pytest
 
 @pytest.mark.parametrize(
     ("driver_state", "stage", "error_type"),
-    [("missing", "start_runtime", "FileNotFoundError"), ("invalid", "start_runtime", "OSError"),
-     ("healthy", "connect", "Error")],
+    [
+        ("missing", "start_runtime", "FileNotFoundError"),
+        ("invalid", "start_runtime", "OSError"),
+        ("healthy", "connect", "Error"),
+    ],
 )
 def test_playwright_startup_keeps_process_output_generic(
     tmp_path: Path, driver_state: str, stage: str, error_type: str
 ) -> None:
-    script = '''
+    script = """
 import json
 import logging
 import sys
@@ -69,7 +72,7 @@ with TestClient(
     response = http.post("/recordings", json={"url": "https://example.com"}, headers={
         "X-Workflow-Key": "test-key", "x-organization": "test-org", "x-user-email": "test@example.com"})
 print("RESULT=" + json.dumps({"status": response.status_code, "body": response.json(), "calls": calls}))
-'''
+"""
     env = os.environ.copy()
     driver = tmp_path / f"{driver_state}-driver-must-not-leak"
     if driver_state == "invalid":
@@ -86,7 +89,12 @@ print("RESULT=" + json.dumps({"status": response.status_code, "body": response.j
     assert outcome["status"] == 503
     assert outcome["body"] == {"detail": "Recording service is temporarily unavailable."}
     assert outcome["calls"] == [
-        "create_context", "create_session", "debug_session", "release_session", "delete_context", "client_exit"
+        "create_context",
+        "create_session",
+        "debug_session",
+        "release_session",
+        "delete_context",
+        "client_exit",
     ]
     assert f"recording_browser_start_failed stage={stage} error_type={error_type}" in result.stderr
     assert f"recording_start_failed error_type={error_type}" in result.stderr

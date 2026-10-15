@@ -1,4 +1,4 @@
-name: Agent setup
+name: Recording
 on:
   pull_request:
   push:
