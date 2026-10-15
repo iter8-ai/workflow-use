@@ -12,7 +12,7 @@ class TestSelectorGenerator:
 
 	def setup_method(self):
 		"""Setup test fixture"""
-		self.generator = SelectorGenerator()
+		self.generator = SelectorGenerator(max_total_strategies=20)  # default cap of 2 would truncate
 
 	# Test 1: Basic semantic strategies for button with text
 	def test_button_with_text_generates_semantic_strategies(self):

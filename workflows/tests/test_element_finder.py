@@ -22,6 +22,7 @@ class TestElementFinder:
 		"""Test finding element using text_exact strategy"""
 		# Mock browser session with DOM state
 		mock_session = Mock()
+		mock_session.get_current_page = AsyncMock(return_value=Mock())
 		mock_state = Mock()
 
 		# Create mock DOM nodes
@@ -31,12 +32,12 @@ class TestElementFinder:
 			3: Mock(text='Back', tag_name='a'),
 		}
 		mock_state.selector_map = mock_nodes
-		mock_session.get_state = AsyncMock(return_value=mock_state)
+		mock_session.get_selector_map = AsyncMock(return_value=mock_state.selector_map)
 
 		# Strategy to find "Submit"
 		strategies = [{'type': 'text_exact', 'value': 'Submit', 'priority': 1, 'metadata': {}}]
 
-		result = await self.finder.find_element_with_strategies(strategies, mock_session)
+		result, _attempts = await self.finder.find_element_with_strategies(strategies, mock_session)
 
 		assert result is not None, 'Should find element'
 		index, strategy_used = result
@@ -47,6 +48,7 @@ class TestElementFinder:
 	async def test_find_by_role_text(self):
 		"""Test finding element using role + text strategy"""
 		mock_session = Mock()
+		mock_session.get_current_page = AsyncMock(return_value=Mock())
 		mock_state = Mock()
 
 		# Create mock DOM nodes
@@ -55,12 +57,12 @@ class TestElementFinder:
 			2: Mock(text='Submit', tag_name='a', role='link'),  # Wrong role
 		}
 		mock_state.selector_map = mock_nodes
-		mock_session.get_state = AsyncMock(return_value=mock_state)
+		mock_session.get_selector_map = AsyncMock(return_value=mock_state.selector_map)
 
 		# Strategy to find button with text "Submit"
 		strategies = [{'type': 'role_text', 'value': 'Submit', 'priority': 2, 'metadata': {'role': 'button'}}]
 
-		result = await self.finder.find_element_with_strategies(strategies, mock_session)
+		result, _attempts = await self.finder.find_element_with_strategies(strategies, mock_session)
 
 		assert result is not None, 'Should find element'
 		index, strategy_used = result
@@ -70,6 +72,7 @@ class TestElementFinder:
 	async def test_find_by_aria_label(self):
 		"""Test finding element using aria-label strategy"""
 		mock_session = Mock()
+		mock_session.get_current_page = AsyncMock(return_value=Mock())
 		mock_state = Mock()
 
 		mock_nodes = {
@@ -77,11 +80,11 @@ class TestElementFinder:
 			2: Mock(aria_label='Open menu', tag_name='button'),
 		}
 		mock_state.selector_map = mock_nodes
-		mock_session.get_state = AsyncMock(return_value=mock_state)
+		mock_session.get_selector_map = AsyncMock(return_value=mock_state.selector_map)
 
 		strategies = [{'type': 'aria_label', 'value': 'Close dialog', 'priority': 3, 'metadata': {}}]
 
-		result = await self.finder.find_element_with_strategies(strategies, mock_session)
+		result, _attempts = await self.finder.find_element_with_strategies(strategies, mock_session)
 
 		assert result is not None, 'Should find element'
 		index, _ = result
@@ -91,6 +94,7 @@ class TestElementFinder:
 	async def test_find_by_placeholder(self):
 		"""Test finding element using placeholder strategy"""
 		mock_session = Mock()
+		mock_session.get_current_page = AsyncMock(return_value=Mock())
 		mock_state = Mock()
 
 		mock_nodes = {
@@ -98,11 +102,11 @@ class TestElementFinder:
 			2: Mock(placeholder='Enter your email', tag_name='input'),  # Should match
 		}
 		mock_state.selector_map = mock_nodes
-		mock_session.get_state = AsyncMock(return_value=mock_state)
+		mock_session.get_selector_map = AsyncMock(return_value=mock_state.selector_map)
 
 		strategies = [{'type': 'placeholder', 'value': 'Enter your email', 'priority': 4, 'metadata': {}}]
 
-		result = await self.finder.find_element_with_strategies(strategies, mock_session)
+		result, _attempts = await self.finder.find_element_with_strategies(strategies, mock_session)
 
 		assert result is not None, 'Should find element'
 		index, _ = result
@@ -112,6 +116,7 @@ class TestElementFinder:
 	async def test_find_by_title(self):
 		"""Test finding element using title attribute strategy"""
 		mock_session = Mock()
+		mock_session.get_current_page = AsyncMock(return_value=Mock())
 		mock_state = Mock()
 
 		mock_nodes = {
@@ -119,11 +124,11 @@ class TestElementFinder:
 			2: Mock(title='Click to submit', tag_name='button'),
 		}
 		mock_state.selector_map = mock_nodes
-		mock_session.get_state = AsyncMock(return_value=mock_state)
+		mock_session.get_selector_map = AsyncMock(return_value=mock_state.selector_map)
 
 		strategies = [{'type': 'title', 'value': 'Click to close', 'priority': 5, 'metadata': {}}]
 
-		result = await self.finder.find_element_with_strategies(strategies, mock_session)
+		result, _attempts = await self.finder.find_element_with_strategies(strategies, mock_session)
 
 		assert result is not None, 'Should find element'
 		index, _ = result
@@ -133,6 +138,7 @@ class TestElementFinder:
 	async def test_find_by_alt_text(self):
 		"""Test finding element using alt text strategy (for images)"""
 		mock_session = Mock()
+		mock_session.get_current_page = AsyncMock(return_value=Mock())
 		mock_state = Mock()
 
 		mock_nodes = {
@@ -140,11 +146,11 @@ class TestElementFinder:
 			2: Mock(alt='User avatar', tag_name='img'),
 		}
 		mock_state.selector_map = mock_nodes
-		mock_session.get_state = AsyncMock(return_value=mock_state)
+		mock_session.get_selector_map = AsyncMock(return_value=mock_state.selector_map)
 
 		strategies = [{'type': 'alt_text', 'value': 'Company logo', 'priority': 6, 'metadata': {}}]
 
-		result = await self.finder.find_element_with_strategies(strategies, mock_session)
+		result, _attempts = await self.finder.find_element_with_strategies(strategies, mock_session)
 
 		assert result is not None, 'Should find element'
 		index, _ = result
@@ -154,6 +160,7 @@ class TestElementFinder:
 	async def test_find_by_fuzzy_text(self):
 		"""Test finding element using fuzzy text matching"""
 		mock_session = Mock()
+		mock_session.get_current_page = AsyncMock(return_value=Mock())
 		mock_state = Mock()
 
 		# "Submit" vs "Submit Form" has ratio 0.70, so use lower threshold or closer match
@@ -161,11 +168,11 @@ class TestElementFinder:
 			1: Mock(text='Submitt', tag_name='button'),  # Typo - ratio ~0.92, should match with threshold 0.8
 		}
 		mock_state.selector_map = mock_nodes
-		mock_session.get_state = AsyncMock(return_value=mock_state)
+		mock_session.get_selector_map = AsyncMock(return_value=mock_state.selector_map)
 
 		strategies = [{'type': 'text_fuzzy', 'value': 'Submit', 'priority': 7, 'metadata': {'threshold': 0.8}}]
 
-		result = await self.finder.find_element_with_strategies(strategies, mock_session)
+		result, _attempts = await self.finder.find_element_with_strategies(strategies, mock_session)
 
 		assert result is not None, 'Should find element with fuzzy matching'
 		index, _ = result
@@ -175,6 +182,7 @@ class TestElementFinder:
 	async def test_multiple_strategies_fallback(self):
 		"""Test that strategies are tried in priority order (lower priority = try first)"""
 		mock_session = Mock()
+		mock_session.get_current_page = AsyncMock(return_value=Mock())
 		mock_state = Mock()
 
 		mock_nodes = {
@@ -182,7 +190,7 @@ class TestElementFinder:
 			2: Mock(text='Submit', tag_name='button', aria_label='Submit'),  # Should match on text_exact (priority 1)
 		}
 		mock_state.selector_map = mock_nodes
-		mock_session.get_state = AsyncMock(return_value=mock_state)
+		mock_session.get_selector_map = AsyncMock(return_value=mock_state.selector_map)
 
 		# Strategies in reverse order (should still try priority 1 first)
 		strategies = [
@@ -190,7 +198,7 @@ class TestElementFinder:
 			{'type': 'text_exact', 'value': 'Submit', 'priority': 1, 'metadata': {}},  # Should match index 2 first
 		]
 
-		result = await self.finder.find_element_with_strategies(strategies, mock_session)
+		result, _attempts = await self.finder.find_element_with_strategies(strategies, mock_session)
 
 		assert result is not None, 'Should find element'
 		index, strategy_used = result
@@ -202,6 +210,7 @@ class TestElementFinder:
 	async def test_no_match_returns_none(self):
 		"""Test that None is returned when no strategy matches"""
 		mock_session = Mock()
+		mock_session.get_current_page = AsyncMock(return_value=Mock())
 		mock_state = Mock()
 
 		mock_nodes = {
@@ -209,12 +218,12 @@ class TestElementFinder:
 			2: Mock(text='Back', tag_name='a'),
 		}
 		mock_state.selector_map = mock_nodes
-		mock_session.get_state = AsyncMock(return_value=mock_state)
+		mock_session.get_selector_map = AsyncMock(return_value=mock_state.selector_map)
 
 		# Strategy looking for non-existent text
 		strategies = [{'type': 'text_exact', 'value': 'Submit', 'priority': 1, 'metadata': {}}]
 
-		result = await self.finder.find_element_with_strategies(strategies, mock_session)
+		result, _attempts = await self.finder.find_element_with_strategies(strategies, mock_session)
 
 		assert result is None, 'Should return None when no match found'
 
@@ -222,8 +231,9 @@ class TestElementFinder:
 	async def test_empty_strategies_returns_none(self):
 		"""Test that None is returned when strategies list is empty"""
 		mock_session = Mock()
+		mock_session.get_current_page = AsyncMock(return_value=Mock())
 
-		result = await self.finder.find_element_with_strategies([], mock_session)
+		result, _attempts = await self.finder.find_element_with_strategies([], mock_session)
 
 		assert result is None, 'Should return None for empty strategies'
 
@@ -231,11 +241,12 @@ class TestElementFinder:
 	async def test_no_dom_state_returns_none(self):
 		"""Test that None is returned when DOM state is not available"""
 		mock_session = Mock()
-		mock_session.get_state = AsyncMock(return_value=None)
+		mock_session.get_current_page = AsyncMock(return_value=Mock())
+		mock_session.get_selector_map = AsyncMock(return_value=None)
 
 		strategies = [{'type': 'text_exact', 'value': 'Submit', 'priority': 1, 'metadata': {}}]
 
-		result = await self.finder.find_element_with_strategies(strategies, mock_session)
+		result, _attempts = await self.finder.find_element_with_strategies(strategies, mock_session)
 
 		assert result is None, 'Should return None when DOM state is not available'
 
@@ -243,13 +254,14 @@ class TestElementFinder:
 	async def test_empty_selector_map_returns_none(self):
 		"""Test that None is returned when selector_map is empty"""
 		mock_session = Mock()
+		mock_session.get_current_page = AsyncMock(return_value=Mock())
 		mock_state = Mock()
 		mock_state.selector_map = {}  # Empty
-		mock_session.get_state = AsyncMock(return_value=mock_state)
+		mock_session.get_selector_map = AsyncMock(return_value=mock_state.selector_map)
 
 		strategies = [{'type': 'text_exact', 'value': 'Submit', 'priority': 1, 'metadata': {}}]
 
-		result = await self.finder.find_element_with_strategies(strategies, mock_session)
+		result, _attempts = await self.finder.find_element_with_strategies(strategies, mock_session)
 
 		assert result is None, 'Should return None when selector_map is empty'
 
