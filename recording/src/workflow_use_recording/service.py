@@ -144,7 +144,7 @@ class RecordingService:
             await self.record_event(recording.id, event)
 
         try:
-            async with asyncio.timeout(CREATE_TIMEOUT_SECONDS):
+            async with asyncio.timeout(CREATE_TIMEOUT_SECONDS) as deadline:
                 browser = await self.provider.create(start_url, on_event)
             if await self._attach_browser(recording, browser):
                 raise RuntimeError("Recording stopped before the browser became available.")
@@ -163,6 +163,8 @@ class RecordingService:
                 recording.context_id = error.context_id
                 recording.context_delete = error.delete_context
                 recording.context_delete_pending = True
+            if error.timed_out or deadline.expired():
+                raise RecordingStartTimeout("The recording start page did not load in time.") from None
             raise
         except BaseException as error:
             if recording.browser is None and recording.close_requested is None and recording.context_id is None:

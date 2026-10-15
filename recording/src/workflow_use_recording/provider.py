@@ -49,10 +49,13 @@ class BrowserProvider(Protocol):
 class _PendingContextCleanup(Exception):
     """Startup failed and the service must retry deleting the created context."""
 
-    def __init__(self, context_id: str, delete_context: Callable[[], Awaitable[None]]) -> None:
+    def __init__(
+        self, context_id: str, delete_context: Callable[[], Awaitable[None]], *, timed_out: bool = False
+    ) -> None:
         super().__init__("Browserbase context cleanup pending")
         self.context_id = context_id
         self.delete_context = delete_context
+        self.timed_out = timed_out
 
 
 class RecordingStartTimeout(TimeoutError):
@@ -414,6 +417,7 @@ class BrowserbaseProvider:
         except BaseException as error:
             # Only the stage and type: provider messages can carry the connect URL and its signing key.
             logger.warning("recording_browser_start_failed stage=%s error_type=%s", stage, type(error).__name__)
+            timed_out = isinstance(error, TimeoutError)
             cleanup_pending = False
             if browser is not None:
                 try:
@@ -448,7 +452,9 @@ class BrowserbaseProvider:
             except Exception as error:
                 logger.warning("recording_client_cleanup_failed", extra={"error_type": type(error).__name__})
             if cleanup_pending and context_id is not None:
-                raise _PendingContextCleanup(context_id, lambda: delete_context(context_id)) from None
+                raise _PendingContextCleanup(
+                    context_id, lambda: delete_context(context_id), timed_out=timed_out
+                ) from None
             raise
 
 

@@ -11,6 +11,7 @@ from workflow_use_recording.provider import (
     BrowserProvider,
     BrowserSession,
     PlaywrightRecordingSession,
+    RecordingStartTimeout,
     _PendingContextCleanup,
 )
 from workflow_use_recording.service import RecordingOwner, RecordingService
@@ -403,6 +404,45 @@ async def test_failed_startup_context_cleanup_stays_owned_for_sweep_retry() -> N
     assert attempts == 1
     assert service._recordings == {}
 
+
+@pytest.mark.asyncio
+async def test_timed_out_startup_with_pending_context_cleanup_reports_timeout() -> None:
+    async def delete_context() -> None:
+        pass
+
+    class Provider:
+        async def create(self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]) -> BrowserSession:
+            raise _PendingContextCleanup("private-context", delete_context, timed_out=True)
+
+    service = RecordingService(Provider())
+    with pytest.raises(RecordingStartTimeout):
+        await service.create(RecordingOwner("iter7", "owner@iter7.example"), "https://example.com")
+    recording = next(iter(service._recordings.values()))
+    assert recording.context_delete_pending
+
+
+@pytest.mark.asyncio
+async def test_create_deadline_with_pending_context_cleanup_reports_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    import workflow_use_recording.service as service_module
+
+    monkeypatch.setattr(service_module, "CREATE_TIMEOUT_SECONDS", 0.01)
+
+    async def delete_context() -> None:
+        pass
+
+    class Provider:
+        async def create(self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]) -> BrowserSession:
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                raise _PendingContextCleanup("private-context", delete_context) from None
+            raise AssertionError("create deadline did not fire")
+
+    service = RecordingService(Provider())
+    with pytest.raises(RecordingStartTimeout):
+        await service.create(RecordingOwner("iter7", "owner@iter7.example"), "https://example.com")
+    recording = next(iter(service._recordings.values()))
+    assert recording.context_delete_pending
 
 @pytest.mark.asyncio
 async def test_failed_context_deletion_keeps_ownership_for_sweep_retry() -> None:
