@@ -230,6 +230,22 @@ async def test_startup_does_not_append_the_configured_url_after_browser_events()
 
 
 @pytest.mark.asyncio
+async def test_navigation_preserves_deep_link_and_rejects_unsafe_urls() -> None:
+    service = RecordingService(ContextProvider())
+    owner = RecordingOwner("iter7", "owner@iter7.example")
+    recording = await service.create(owner, "https://example.com/")
+    url = "https://example.com/report?month=2026-09#top"
+
+    await service.record_event(recording.id, {"type": "navigation", "url": url})
+    assert [step.url for step in recording.steps] == ["https://example.com/", url]
+
+    for unsafe in ("https://user:pass@example.com/report", "https://127.0.0.1/report"):
+        await service.record_event(recording.id, {"type": "navigation", "url": unsafe})
+    assert [step.url for step in recording.steps] == ["https://example.com/", url]
+    await service.close()
+
+
+@pytest.mark.asyncio
 async def test_sweep_deletes_unclaimed_google_context_after_one_hour() -> None:
     provider = ContextProvider()
     service = RecordingService(provider)

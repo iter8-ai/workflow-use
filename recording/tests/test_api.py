@@ -623,15 +623,15 @@ def test_create_opens_the_typed_address_with_its_query_and_fragment() -> None:
 
 
 @pytest.mark.asyncio
-async def test_navigation_event_with_query_is_omitted_from_recorded_steps() -> None:
+async def test_navigation_event_with_query_and_fragment_is_recorded_intact() -> None:
     provider = FakeProvider()
+    report_url = "https://example.com/report?month=2026-09#top"
     with client(provider) as http:
         recording = create_recording(http)
-        await provider.sessions[0].emit({"type": "navigation", "url": "https://example.com/callback?p=opaque-value"})
+        await provider.sessions[0].emit({"type": "navigation", "url": report_url})
         response = http.get(f"/recordings/{recording['id']}", headers=headers())
 
-    assert [step["url"] for step in response.json()["steps"]] == ["https://example.com"]
-    assert "opaque-value" not in response.text
+    assert [step["url"] for step in response.json()["steps"]] == ["https://example.com", report_url]
 
 
 def test_health_endpoint_never_requires_or_leaks_credentials() -> None:
