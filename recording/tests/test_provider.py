@@ -973,3 +973,99 @@ async def test_a_failure_before_the_navigate_stage_still_cleans_up(monkeypatch: 
     assert runtime.stopped
     assert calls.releases == [1]
     assert calls.deleted == ["/v1/contexts/context-private"]
+
+
+def _borrowing_browserbase(monkeypatch: pytest.MonkeyPatch, *, fail_session: bool = False) -> SimpleNamespace:
+    calls = SimpleNamespace(contexts_created=0, sessions=[], deleted=[])
+
+    class Client:
+        def __init__(self) -> None:
+            self.contexts = SimpleNamespace(create=self.create_context)
+            self.sessions = SimpleNamespace(create=self.create_session, debug=self.debug, update=self.update)
+
+        async def create_context(self, **_kwargs: Any) -> Any:
+            calls.contexts_created += 1
+            return SimpleNamespace(id="context-new")
+
+        async def create_session(self, **kwargs: Any) -> Any:
+            calls.sessions.append(kwargs)
+            if fail_session:
+                raise RuntimeError("provider failure")
+            return SimpleNamespace(id="session-1", connect_url="wss://connect.example/session-1")
+
+        async def debug(self, _session_id: str) -> Any:
+            return SimpleNamespace(debugger_fullscreen_url="https://live.example/")
+
+        async def update(self, *_args: Any, **_kwargs: Any) -> None:
+            pass
+
+        async def delete(self, path: str, **_kwargs: Any) -> None:
+            calls.deleted.append(path)
+
+        async def __aexit__(self, *_args: Any) -> None:
+            pass
+
+    browserbase = ModuleType("browserbase")
+    browserbase.AsyncBrowserbase = Client  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "browserbase", browserbase)
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_a_saved_sign_in_context_is_opened_read_only_and_never_deleted(monkeypatch: pytest.MonkeyPatch) -> None:
+    from workflow_use_recording.models import RecordingLogin
+
+    page = FakePage()
+    runtime = FakeRuntime(FakeBrowser(FakeContext(page)))
+    calls = _borrowing_browserbase(monkeypatch)
+    monkeypatch.setattr("workflow_use_recording.provider._start_playwright_runtime", lambda: _start(runtime))
+    login = RecordingLogin(origins=["https://example.com"], password="saved-password")
+
+    session = await BrowserbaseProvider(project_id="project-1").create(
+        "https://example.com", _ignore_event, context_id="context-saved", login=login
+    )
+
+    assert calls.contexts_created == 0
+    assert calls.sessions[0]["browser_settings"]["context"] == {"id": "context-saved", "persist": False}
+    # The service sees no context of the session's own, so no stop, expiry or claim path can delete or lend it.
+    assert session.context_id is None
+    assert session.login is login
+    await session.close()
+    await session.delete_context()
+    assert calls.deleted == []
+    # The saved sign-in does not outlive the browser.
+    assert session.login is None
+
+
+@pytest.mark.asyncio
+async def test_failed_startup_never_deletes_a_saved_sign_in_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _borrowing_browserbase(monkeypatch, fail_session=True)
+
+    with pytest.raises(RuntimeError, match="provider failure"):
+        await BrowserbaseProvider(project_id="project-1").create(
+            "https://example.com", _ignore_event, context_id="context-saved"
+        )
+
+    assert calls.contexts_created == 0
+    assert calls.deleted == []
+
+
+@pytest.mark.asyncio
+async def test_local_provider_ignores_a_saved_context_without_logging_it(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from workflow_use_recording.provider import LocalPlaywrightProvider
+
+    pytest.importorskip("playwright.async_api")
+
+    async def offline(_url: str) -> bool:
+        return False
+
+    # No network: the start page is blocked and fails to load, which keeps the session open.
+    monkeypatch.setattr("workflow_use_recording.provider.resolves_to_public_host", offline)
+    caplog.set_level("WARNING")
+    session = await LocalPlaywrightProvider().create("https://example.com", _ignore_event, context_id="context-saved")
+    await session.close()
+
+    assert "recording_saved_context_ignored" in caplog.text
+    assert "context-saved" not in caplog.text

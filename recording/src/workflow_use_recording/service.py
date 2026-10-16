@@ -11,7 +11,7 @@ from typing import Any, Literal
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-from .models import RecordedDownload, RecordingGoogle, RecordingResponse, SetupStep, StepDate
+from .models import RecordedDownload, RecordingGoogle, RecordingLogin, RecordingResponse, SetupStep, StepDate
 from .organize import OrganizedStep, StepOrganizer
 from .provider import (
     START_PAGE_TIMEOUT_SECONDS,
@@ -114,7 +114,16 @@ class RecordingService:
         self._create_lock = asyncio.Lock()
         self._closed = False
 
-    async def create(self, owner: RecordingOwner, start_url: str) -> Recording:
+    async def create(
+        self,
+        owner: RecordingOwner,
+        start_url: str,
+        *,
+        context_id: str | None = None,
+        login: RecordingLogin | None = None,
+    ) -> Recording:
+        """Start a recording. ``context_id`` and ``login`` go to the provider only and are not kept here: a
+        borrowed context is never recorded as the recording's own, so no stop, expiry or claim path deletes it."""
         if self._closed:
             raise RuntimeError("Recording service is shutting down.")
         if not is_public_http_url(start_url):
@@ -145,7 +154,7 @@ class RecordingService:
 
         try:
             async with asyncio.timeout(CREATE_TIMEOUT_SECONDS) as deadline:
-                browser = await self.provider.create(start_url, on_event)
+                browser = await self.provider.create(start_url, on_event, context_id=context_id, login=login)
             if await self._attach_browser(recording, browser):
                 raise RuntimeError("Recording stopped before the browser became available.")
             # Browser events are authoritative, including redirects and actions during startup.

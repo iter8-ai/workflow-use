@@ -7,7 +7,7 @@ from urllib.parse import quote
 
 import pytest
 
-from workflow_use_recording.capture import CAPTURE_SCRIPT, install_sign_in_capture, page_event
+from workflow_use_recording.capture import CAPTURE_SCRIPT, install_sign_in_capture, install_sign_in_fill, page_event
 
 
 @pytest.mark.asyncio
@@ -436,3 +436,156 @@ async def test_clicks_on_web_components_labels_rows_and_double_clicks_are_named(
         ("Next page", False),
         ("Next page", True),
     ]
+
+
+_SAVED_USERNAME = "saved-user@example.test"
+_SAVED_PASSWORD = "saved-password-must-not-leak"
+_SIGN_IN_PAGES = {
+    "https://login.example.test/": (
+        '<form action="/password"><input name="username" aria-label="Username">'
+        '<input type="password" aria-label="Password"><button>Sign in</button></form>'
+    ),
+    # A two-step sign-in: the username page posts on to a separate password page.
+    "https://login.example.test/step-one": (
+        '<form action="/password"><input autocomplete="username" aria-label="Email"><button>Next</button></form>'
+    ),
+    "https://login.example.test/password": (
+        '<form><input type="password" aria-label="Password"><input autocomplete="one-time-code" aria-label="Code">'
+        "<button>Sign in</button></form>"
+    ),
+    "https://login.example.test/sign-up": (
+        '<form><input name="username" aria-label="Username">'
+        '<input type="password" autocomplete="new-password" aria-label="New password"></form>'
+    ),
+    "https://other.example.test/": (
+        '<form><input name="username" aria-label="Username"><input type="password" aria-label="Password"></form>'
+    ),
+}
+
+
+def _saved_login(*origins: str) -> Any:
+    from workflow_use_recording.models import RecordingLogin
+
+    return RecordingLogin(origins=list(origins), username=_SAVED_USERNAME, password=_SAVED_PASSWORD)
+
+
+async def _sign_in_browser(runtime: Any, login: Any) -> tuple[Any, Any, list[Any], list[dict[str, str]]]:
+    """A recording-like page: page capture, typed sign-in capture and the saved sign-in fill."""
+    events: list[Any] = []
+    sign_ins: list[dict[str, str]] = []
+    tasks: set[asyncio.Task[None]] = set()
+
+    def track(coroutine: Any) -> None:
+        task = asyncio.ensure_future(coroutine)
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
+
+    async def serve(route: Any) -> None:
+        url = route.request.url.split("?", 1)[0]
+        await route.fulfill(content_type="text/html", body=_SIGN_IN_PAGES.get(url, "<p>Not found</p>"))
+
+    browser = await runtime.chromium.launch()
+    context = await browser.new_context()
+    await context.route("**/*", serve)
+    await context.expose_binding("workflowUseRecord", lambda _, event: events.append(page_event(event)))
+    await context.add_init_script(CAPTURE_SCRIPT)
+    page = await context.new_page()
+    await install_sign_in_capture(context, page, sign_ins.append)
+    install_sign_in_fill(page, lambda: login, track)
+    return browser, page, events, sign_ins
+
+
+async def _field(page: Any, label: str) -> str:
+    locator = page.get_by_label(label, exact=True)
+    for _ in range(40):
+        if await locator.input_value():
+            break
+        await asyncio.sleep(0.05)
+    return await locator.input_value()
+
+
+@pytest.mark.asyncio
+async def test_a_saved_sign_in_is_filled_on_its_origin_and_never_captured() -> None:
+    playwright = pytest.importorskip("playwright.async_api")
+
+    async with playwright.async_playwright() as runtime:
+        browser, page, events, sign_ins = await _sign_in_browser(runtime, _saved_login("https://LOGIN.example.test/"))
+        await page.goto("https://login.example.test/")
+        username, password = await _field(page, "Username"), await _field(page, "Password")
+        await asyncio.sleep(0.1)
+        await browser.close()
+
+    assert (username, password) == (_SAVED_USERNAME, _SAVED_PASSWORD)
+    # The fill dispatches input events, so the page sees it and the steps say a sign-in value was entered;
+    # it is not the person typing, so no value reaches the sign-in capture or any page event.
+    assert {event["value"] for event in events if event.get("type") == "credential"} == {"username", "password"}
+    assert sign_ins == []
+    assert all(_SAVED_PASSWORD not in str(event) and _SAVED_USERNAME not in str(event) for event in events)
+
+
+@pytest.mark.asyncio
+async def test_a_saved_sign_in_is_not_filled_on_another_origin() -> None:
+    playwright = pytest.importorskip("playwright.async_api")
+
+    async with playwright.async_playwright() as runtime:
+        browser, page, _events, _sign_ins = await _sign_in_browser(runtime, _saved_login("https://login.example.test"))
+        await page.goto("https://other.example.test/")
+        await asyncio.sleep(0.3)
+        values = await page.evaluate("() => Array.from(document.querySelectorAll('input'), (node) => node.value)")
+        await browser.close()
+
+    assert values == ["", ""]
+
+
+@pytest.mark.asyncio
+async def test_a_two_step_sign_in_gets_each_step_filled() -> None:
+    playwright = pytest.importorskip("playwright.async_api")
+
+    async with playwright.async_playwright() as runtime:
+        browser, page, _events, sign_ins = await _sign_in_browser(runtime, _saved_login("https://login.example.test"))
+        await page.goto("https://login.example.test/step-one")
+        username = await _field(page, "Email")
+        await page.get_by_role("button", name="Next").click()
+        await page.wait_for_url("https://login.example.test/password**")
+        password = await _field(page, "Password")
+        code = await page.get_by_label("Code").input_value()
+        # A password field the page shows later, without a navigation, is filled as it appears.
+        await page.evaluate(
+            """() => document.querySelector("form").insertAdjacentHTML(
+              "beforeend", '<input type="password" aria-label="Confirm password">')"""
+        )
+        late = await _field(page, "Confirm password")
+        await browser.close()
+
+    assert (username, password, late) == (_SAVED_USERNAME, _SAVED_PASSWORD, _SAVED_PASSWORD)
+    assert code == ""
+    assert sign_ins == []
+
+
+@pytest.mark.asyncio
+async def test_a_saved_sign_in_is_not_filled_into_a_sign_up_form_or_after_it_is_dropped() -> None:
+    playwright = pytest.importorskip("playwright.async_api")
+    login: list[Any] = [_saved_login("https://login.example.test")]
+
+    async with playwright.async_playwright() as runtime:
+        browser, page, _events, _sign_ins = await _sign_in_browser(runtime, None)
+        install_sign_in_fill(page, lambda: login[0], lambda coroutine: asyncio.ensure_future(coroutine))
+        await page.goto("https://login.example.test/sign-up")
+        await asyncio.sleep(0.3)
+        sign_up = await page.evaluate("() => Array.from(document.querySelectorAll('input'), (node) => node.value)")
+        # The recording ended: the session no longer holds the sign-in, so a new document gets nothing.
+        login[0] = None
+        await page.goto("https://login.example.test/")
+        await asyncio.sleep(0.3)
+        after = await page.evaluate("() => Array.from(document.querySelectorAll('input'), (node) => node.value)")
+        await browser.close()
+
+    assert sign_up == ["", ""]
+    assert after == ["", ""]
+
+
+def test_a_saved_sign_in_never_shows_its_values() -> None:
+    login = _saved_login("https://login.example.test")
+
+    assert _SAVED_PASSWORD not in repr(login) and _SAVED_USERNAME not in repr(login)
+    assert _SAVED_PASSWORD not in str(login.model_dump()) and _SAVED_PASSWORD not in login.model_dump_json()

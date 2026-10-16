@@ -27,6 +27,22 @@ def is_public_http_url(url: str) -> bool:
         return True
 
 
+def url_origin(url: str) -> str | None:
+    """The canonical ``scheme://host[:port]`` of an HTTP(S) URL, lowercase and without a default port."""
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+    except ValueError:
+        return None
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+        return None
+    host = parsed.hostname.rstrip(".").lower()
+    if ":" in host:
+        host = f"[{host}]"
+    default = 80 if parsed.scheme == "http" else 443
+    return f"{parsed.scheme}://{host}" + (f":{port}" if port is not None and port != default else "")
+
+
 def is_google_sign_in(url: str) -> bool:
     """Google's own sign-in pages, e.g. the window a site's "Continue with Google" button opens."""
     if not isinstance(url, str):

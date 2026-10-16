@@ -52,7 +52,9 @@ class ContextProvider:
     def __init__(self) -> None:
         self.sessions: list[ContextSession] = []
 
-    async def create(self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]) -> BrowserSession:
+    async def create(
+        self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]], **_options: Any
+    ) -> BrowserSession:
         session = ContextSession()
         self.sessions.append(session)
         return session
@@ -64,7 +66,9 @@ class DeferredProvider(BrowserProvider):
         self.release = asyncio.Event()
         self.session = DeferredSession()
 
-    async def create(self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]) -> BrowserSession:
+    async def create(
+        self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]], **_options: Any
+    ) -> BrowserSession:
         self.started.set()
         await self.release.wait()
         return self.session
@@ -92,7 +96,9 @@ class SequentialProvider(BrowserProvider):
         self.created: list[DeferredSession] = [CloseFailingSession(), DeferredSession()]
         self.sessions = list(self.created)
 
-    async def create(self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]) -> BrowserSession:
+    async def create(
+        self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]], **_options: Any
+    ) -> BrowserSession:
         return self.sessions.pop(0)
 
 
@@ -100,7 +106,9 @@ class RetryProvider(BrowserProvider):
     def __init__(self) -> None:
         self.session = RetryCloseSession()
 
-    async def create(self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]) -> BrowserSession:
+    async def create(
+        self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]], **_options: Any
+    ) -> BrowserSession:
         return self.session
 
 
@@ -209,7 +217,9 @@ async def test_playwright_session_retries_after_a_transient_browser_close_failur
 @pytest.mark.asyncio
 async def test_startup_does_not_append_the_configured_url_after_browser_events() -> None:
     class StartupProvider:
-        async def create(self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]) -> BrowserSession:
+        async def create(
+            self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]], **_options: Any
+        ) -> BrowserSession:
             await on_event({"type": "navigation", "url": start_url})
             await on_event({"type": "navigation", "url": "https://example.com/login"})
             await on_event({"type": "click", "target": "Continue"})
@@ -391,7 +401,9 @@ async def test_failed_startup_context_cleanup_stays_owned_for_sweep_retry() -> N
         attempts += 1
 
     class Provider:
-        async def create(self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]) -> BrowserSession:
+        async def create(
+            self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]], **_options: Any
+        ) -> BrowserSession:
             raise _PendingContextCleanup("private-context", delete_context)
 
     service = RecordingService(Provider())
@@ -411,7 +423,9 @@ async def test_timed_out_startup_with_pending_context_cleanup_reports_timeout() 
         pass
 
     class Provider:
-        async def create(self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]) -> BrowserSession:
+        async def create(
+            self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]], **_options: Any
+        ) -> BrowserSession:
             raise _PendingContextCleanup("private-context", delete_context, timed_out=True)
 
     service = RecordingService(Provider())
@@ -431,7 +445,9 @@ async def test_create_deadline_with_pending_context_cleanup_reports_timeout(monk
         pass
 
     class Provider:
-        async def create(self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]) -> BrowserSession:
+        async def create(
+            self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]], **_options: Any
+        ) -> BrowserSession:
             try:
                 await asyncio.sleep(10)
             except asyncio.CancelledError:
@@ -473,7 +489,9 @@ async def test_unsigned_stop_retries_failed_delete_on_next_sweep() -> None:
     session = UnsignedSession()
 
     class Provider:
-        async def create(self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]) -> BrowserSession:
+        async def create(
+            self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]], **_options: Any
+        ) -> BrowserSession:
             return session
 
     service = RecordingService(Provider())
@@ -557,7 +575,9 @@ async def test_signed_in_cookie_result_survives_close_retry() -> None:
     session = CookieThenReleaseSession()
 
     class Provider:
-        async def create(self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]) -> BrowserSession:
+        async def create(
+            self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]], **_options: Any
+        ) -> BrowserSession:
             return session
 
     provider = Provider()
@@ -584,7 +604,9 @@ async def test_concurrent_creates_do_not_overrun_capacity_during_eviction() -> N
             await super().delete_context()
 
     class Provider(ContextProvider):
-        async def create(self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]) -> BrowserSession:
+        async def create(
+            self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]], **_options: Any
+        ) -> BrowserSession:
             if not self.sessions:
                 session = WaitingContextSession()
                 self.sessions.append(session)
@@ -617,7 +639,9 @@ async def test_late_startup_expiry_keeps_signed_in_context_for_sweep() -> None:
             self.started = asyncio.Event()
             self.release = asyncio.Event()
 
-        async def create(self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]) -> BrowserSession:
+        async def create(
+            self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]], **_options: Any
+        ) -> BrowserSession:
             self.started.set()
             await self.release.wait()
             return await super().create(start_url, on_event)
@@ -647,7 +671,9 @@ async def test_context_returned_after_shutdown_keeps_failed_cleanup_for_retry() 
             self.started = asyncio.Event()
             self.release = asyncio.Event()
 
-        async def create(self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]) -> BrowserSession:
+        async def create(
+            self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]], **_options: Any
+        ) -> BrowserSession:
             self.started.set()
             await self.release.wait()
             session = await super().create(start_url, on_event)
@@ -667,3 +693,68 @@ async def test_context_returned_after_shutdown_keeps_failed_cleanup_for_retry() 
     assert next(iter(service._recordings.values())).context_id == "private-context"
     await service.close()
     assert provider.sessions[0].deleted
+
+
+class BorrowedContextSession(DeferredSession):
+    # A session started from a saved sign-in's context reports no context of its own (see BrowserbaseProvider).
+    context_id = None
+
+    def __init__(self, signed_in: bool) -> None:
+        super().__init__()
+        self.signed_in = signed_in
+        self.delete_attempts = 0
+
+    async def google_signed_in(self) -> bool:
+        return self.signed_in
+
+    async def delete_context(self) -> None:
+        self.delete_attempts += 1
+
+
+class BorrowingProvider:
+    def __init__(self, *, signed_in: bool) -> None:
+        self.signed_in = signed_in
+        self.sessions: list[BorrowedContextSession] = []
+        self.options: list[dict[str, Any]] = []
+
+    async def create(
+        self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]], **options: Any
+    ) -> BrowserSession:
+        self.options.append(options)
+        session = BorrowedContextSession(self.signed_in)
+        self.sessions.append(session)
+        return session
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("signed_in", [False, True])
+@pytest.mark.parametrize("ending", ["stop", "delete", "expiry", "sweep", "shutdown", "claim", "evict"])
+async def test_a_borrowed_saved_sign_in_context_is_never_deleted_or_lent(signed_in: bool, ending: str) -> None:
+    provider = BorrowingProvider(signed_in=signed_in)
+    service = RecordingService(provider, max_sessions=1 if ending == "evict" else 2)
+    owner = RecordingOwner("iter7", "owner@iter7.example")
+    recording = await service.create(owner, "https://example.com", context_id="saved-google-context")
+
+    assert provider.options == [{"context_id": "saved-google-context", "login": None}]
+    assert recording.context_id is None
+    if ending == "expiry":
+        recording.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        await service.cleanup()
+        assert recording.status == "expired"
+    else:
+        await service.stop(recording.id, owner)
+    if ending == "delete":
+        assert await service.delete(recording.id, owner)
+    elif ending == "sweep":
+        recording.stopped_at = datetime.now(UTC) - timedelta(minutes=61)
+        await service.cleanup()
+    elif ending == "claim":
+        assert await service.claim_google_context(recording.id, owner) == ""
+        assert await service.adopt_google_context(recording.id, owner) is False
+        assert await service.return_google_context(recording.id, owner) is False
+    elif ending == "evict":
+        await service.create(owner, "https://example.org")
+    await service.close()
+
+    assert provider.sessions[0].closed
+    assert all(session.delete_attempts == 0 for session in provider.sessions)

@@ -4,16 +4,19 @@ import asyncio
 import logging
 import os
 from collections.abc import Awaitable, Callable
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 from uuid import uuid4
 
-from .capture import CAPTURE_SCRIPT, install_sign_in_capture, page_event
+from .capture import CAPTURE_SCRIPT, install_sign_in_capture, install_sign_in_fill, page_event
 from .security import (
     has_google_session,
     is_google_sign_in,
     is_public_http_url,
     resolves_to_public_host,
 )
+
+if TYPE_CHECKING:
+    from .models import RecordingLogin
 
 EventSink = Callable[[dict[str, Any]], Awaitable[None]]
 logger = logging.getLogger(__name__)
@@ -43,7 +46,21 @@ class BrowserSession(Protocol):
 
 
 class BrowserProvider(Protocol):
-    async def create(self, start_url: str, on_event: EventSink) -> BrowserSession: ...
+    async def create(
+        self,
+        start_url: str,
+        on_event: EventSink,
+        *,
+        context_id: str | None = None,
+        login: RecordingLogin | None = None,
+    ) -> BrowserSession:
+        """Start a recording browser on ``start_url``.
+
+        ``context_id`` is a borrowed Browserbase context with a saved sign-in: it is opened read-only and the
+        session reports no context of its own, so nothing ever deletes it. ``login`` is filled into matching
+        sign-in forms while the session is open.
+        """
+        ...
 
 
 class _PendingContextCleanup(Exception):
@@ -74,6 +91,7 @@ class PlaywrightRecordingSession:
         release: Callable[[], Awaitable[None]] | None = None,
         context_id: str | None = None,
         delete_context: Callable[[str], Awaitable[None]] | None = None,
+        login: RecordingLogin | None = None,
     ) -> None:
         self.browser = browser
         self.runtime = runtime
@@ -87,6 +105,8 @@ class PlaywrightRecordingSession:
         self._release = release
         self.context_id = context_id
         self._delete_context = delete_context
+        # Held only while the browser is open; close() drops it.
+        self.login = login
         self._tasks: set[asyncio.Task[None]] = set()
         # Waits on downloads still in progress; nothing to report once the browser is gone.
         self._watchers: set[asyncio.Task[None]] = set()
@@ -167,6 +187,7 @@ class PlaywrightRecordingSession:
             await self._delete_context(self.context_id)
 
     async def close(self) -> None:
+        self.login = None
         for page in list(self._pending_tabs):
             self.finish_tab(page)
         if self._browser_closed and self._runtime_stopped and (self._release is None or self._released):
@@ -232,6 +253,8 @@ async def _install_page_events(session: PlaywrightRecordingSession, page: Any, o
     page.on("domcontentloaded", on_page_loaded)
     # The live view shows no download bar, so the recorder reports each download to the person demonstrating.
     page.on("download", on_download)
+    if session.login is not None:
+        install_sign_in_fill(page, lambda: session.login, session.track)
     try:
         await install_sign_in_capture(page.context, page, lambda event: session.track(on_event(event)))
     except Exception:
@@ -324,7 +347,14 @@ class BrowserbaseProvider:
         self.region = region
         self.timeout_seconds = min(max(timeout_seconds, 1), 900)
 
-    async def create(self, start_url: str, on_event: EventSink) -> BrowserSession:
+    async def create(
+        self,
+        start_url: str,
+        on_event: EventSink,
+        *,
+        context_id: str | None = None,
+        login: RecordingLogin | None = None,
+    ) -> BrowserSession:
         if not is_public_http_url(start_url):
             raise ValueError("The recording URL must be a public HTTP(S) URL.")
         if not self.project_id:
@@ -333,12 +363,15 @@ class BrowserbaseProvider:
         from browserbase import AsyncBrowserbase
 
         client = AsyncBrowserbase()
-        context_id: str | None = None
+        # A saved sign-in's context is borrowed: opened without persisting, and never deleted here or by the
+        # service. Only a context this call creates is the session's own.
+        saved_context_id = context_id
+        context_id = None
         created: Any | None = None
         runtime: Any | None = None
         browser: Any | None = None
         # The API reports every startup failure as a generic 503, so the log must say where startup stopped.
-        stage = "create_context"
+        stage = "create_context" if saved_context_id is None else "create_session"
 
         async def delete_context(context_id: str) -> None:
             deletion_client = AsyncBrowserbase()
@@ -351,8 +384,14 @@ class BrowserbaseProvider:
                 await deletion_client.__aexit__(None, None, None)
 
         try:
-            context_id = (await client.contexts.create(project_id=self.project_id)).id
-            stage = "create_session"
+            if saved_context_id is None:
+                context_id = (await client.contexts.create(project_id=self.project_id)).id
+                stage = "create_session"
+            browser_context = (
+                {"id": context_id, "persist": True}
+                if saved_context_id is None
+                else {"id": saved_context_id, "persist": False}
+            )
             created = await client.sessions.create(
                 project_id=self.project_id,
                 keep_alive=True,
@@ -362,7 +401,7 @@ class BrowserbaseProvider:
                     "viewport": {"width": 1280, "height": 720},
                     "record_session": False,
                     "log_session": False,
-                    "context": {"id": context_id, "persist": True},
+                    "context": browser_context,
                 },
             )
             stage = "debug_session"
@@ -387,6 +426,7 @@ class BrowserbaseProvider:
                 release=release,
                 context_id=context_id,
                 delete_context=delete_context,
+                login=login,
             )
             context = contexts[0]
             await _configure_context(context, on_event)
@@ -464,15 +504,25 @@ class LocalPlaywrightProvider:
     def __init__(self) -> None:
         self.last_session: PlaywrightRecordingSession | None = None
 
-    async def create(self, start_url: str, on_event: EventSink) -> BrowserSession:
+    async def create(
+        self,
+        start_url: str,
+        on_event: EventSink,
+        *,
+        context_id: str | None = None,
+        login: RecordingLogin | None = None,
+    ) -> BrowserSession:
         if not is_public_http_url(start_url):
             raise ValueError("The recording URL must be a public HTTP(S) URL.")
+        if context_id is not None:
+            # No Browserbase here; the demonstration starts signed out.
+            logger.warning("recording_saved_context_ignored provider=local")
         from playwright.async_api import async_playwright
 
         runtime = await async_playwright().start()
         browser = await runtime.chromium.launch()
         context = await browser.new_context()
-        session = PlaywrightRecordingSession(browser=browser, runtime=runtime, live_view_url=None)
+        session = PlaywrightRecordingSession(browser=browser, runtime=runtime, live_view_url=None, login=login)
         await _configure_context(context, on_event)
         page = await context.new_page()
         await _install_page_events(session, page, on_event)

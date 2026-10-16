@@ -8,7 +8,8 @@ from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from typing import Annotated, Any, AsyncIterator
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from .models import CreateRecordingRequest, NavigateRecordingRequest, RecordingResponse, StoppedRecordingResponse
@@ -60,6 +61,12 @@ def create_app(provider: BrowserProvider, config: RecordingConfig, organizer: St
 
     app = FastAPI(title="Workflow Use recording", lifespan=lifespan)
 
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(_: Request, error: RequestValidationError) -> JSONResponse:
+        # FastAPI echoes each rejected input by default; a saved sign-in's password must never come back.
+        detail = [{"type": item["type"], "loc": item["loc"], "msg": item["msg"]} for item in error.errors()]
+        return JSONResponse(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, content={"detail": detail})
+
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
@@ -80,7 +87,9 @@ def create_app(provider: BrowserProvider, config: RecordingConfig, organizer: St
         request: CreateRecordingRequest, recording_owner: RecordingOwner = Depends(owner)
     ) -> JSONResponse:
         try:
-            recording = await service.create(recording_owner, request.url)
+            recording = await service.create(
+                recording_owner, request.url, context_id=request.context_id, login=request.login
+            )
         except InvalidRecordingUrl as error:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
         except RecordingStartTimeout:
