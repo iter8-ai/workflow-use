@@ -1,0 +1,11 @@
+# Install once per clone: `pre-commit install`
+# Runs the same checks as CI (.github/workflows/lint.yml) before every commit.
+repos:
+  - repo: local
+    hooks:
+      - id: lint-sh
+        name: lint.sh (ruff, eslint, tsc)
+        entry: ./lint.sh
+        language: script
+        pass_filenames: false
+        always_run: true

@@ -27,6 +27,7 @@ All tests use mocking to avoid external dependencies (browsers, LLMs, networks).
 
 import asyncio
 import os
+import tempfile
 import time
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
@@ -112,7 +113,7 @@ async def test_runtime_wait_logic():
 	print('')
 
 
-async def test_wait_times():
+async def test_wait_times(tmp_path):
 	"""Test that default_wait_time and per-step wait_time work correctly."""
 	print('🧪 Testing wait_time schema functionality...\n')
 
@@ -142,11 +143,15 @@ steps:
     type: extract
     extractionGoal: Get more content
 
+  - description: Final extract step (required last step)
+    type: extract
+    extractionGoal: Final extraction
+
 input_schema: []
 """
 
 	# Save test workflow
-	test_file = Path('test_workflow_wait_times.yaml')
+	test_file = tmp_path / 'test_workflow_wait_times.yaml'
 	test_file.write_text(test_workflow_yaml)
 
 	try:
@@ -175,7 +180,10 @@ input_schema: []
 			description='Test default_wait_time=0',
 			version='1.0',
 			default_wait_time=0.0,
-			steps=[{'type': 'navigation', 'url': 'https://example.com', 'description': 'Nav'}],
+			steps=[
+				{'type': 'navigation', 'url': 'https://example.com', 'description': 'Nav'},
+				{'type': 'extract', 'extractionGoal': 'Final', 'description': 'Extract'},
+			],
 			input_schema=[],
 		)
 		assert workflow_zero_default.default_wait_time == 0.0, 'default_wait_time should be 0.0'
@@ -393,7 +401,8 @@ async def run_all_tests():
 	await test_actual_timing()
 
 	# Run schema tests
-	await test_wait_times()
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		await test_wait_times(Path(tmp_dir))
 
 
 if __name__ == '__main__':

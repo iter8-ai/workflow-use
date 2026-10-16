@@ -2,7 +2,9 @@
 
 import asyncio
 import logging
+import os
 
+import pytest
 from browser_use import Browser
 
 from workflow_use.workflow.semantic_executor import SemanticWorkflowExecutor
@@ -11,6 +13,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+@pytest.mark.skipif(
+	os.getenv('WORKFLOW_USE_BROWSER_TESTS') != '1',
+	reason='requires a live browser and network; integration test, set WORKFLOW_USE_BROWSER_TESTS=1 to run',
+)
 async def test_button_click():
 	browser = Browser()
 	await browser.start()

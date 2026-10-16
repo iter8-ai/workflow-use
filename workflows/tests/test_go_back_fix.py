@@ -3,15 +3,21 @@ Quick test to verify go_back action works with NoParamsAction fix.
 """
 
 import asyncio
+import os
 from pathlib import Path
 
+import pytest
 import yaml
 from browser_use.llm import ChatAnthropic
 
 from workflow_use.workflow.service import Workflow
 
 
-async def test_go_back_fix():
+@pytest.mark.skipif(
+	os.getenv('WORKFLOW_USE_BROWSER_TESTS') != '1',
+	reason='requires a live browser and network; integration test, set WORKFLOW_USE_BROWSER_TESTS=1 to run',
+)
+async def test_go_back_fix(tmp_path):
 	"""Test that go_back action works correctly"""
 
 	# Create a minimal workflow with a go_back action
@@ -28,7 +34,7 @@ async def test_go_back_fix():
 	}
 
 	# Write to YAML file
-	workflow_path = Path('test_go_back.workflow.yaml')
+	workflow_path = tmp_path / 'test_go_back.workflow.yaml'
 	workflow_path.write_text(yaml.dump(workflow_dict))
 
 	print('✅ Created test workflow')
@@ -64,4 +70,6 @@ async def test_go_back_fix():
 
 
 if __name__ == '__main__':
-	asyncio.run(test_go_back_fix())
+	import tempfile
+
+	asyncio.run(test_go_back_fix(Path(tempfile.mkdtemp())))

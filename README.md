@@ -220,6 +220,22 @@ Show computer what it needs to do once, and it will do it over and over again wi
 - [ ] Expose workflows as MCP tools
 - [ ] Use Browser Use to automatically create workflows from websites
 
+## Linting and tests
+
+`./lint.sh` runs the same ruff, eslint and tsc checks as CI. Workflow unit tests:
+
+```bash
+(cd workflows && uv sync --all-extras && uv run pytest)
+```
+
+Workflow tests that drive a real browser are skipped unless `WORKFLOW_USE_BROWSER_TESTS=1` is set. Recording tests launch Chromium; see [recording/README.md](recording/README.md) for setup.
+
+To run `lint.sh` before every commit, install the hook once per clone:
+
+```bash
+pre-commit install
+```
+
 ## Developer experience
 
 - [ ] Improve CLI
