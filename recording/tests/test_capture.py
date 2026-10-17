@@ -7,7 +7,13 @@ from urllib.parse import quote
 
 import pytest
 
-from workflow_use_recording.capture import CAPTURE_SCRIPT, install_sign_in_capture, install_sign_in_fill, page_event
+from workflow_use_recording.capture import (
+    CAPTURE_SCRIPT,
+    fill_sign_in,
+    install_sign_in_capture,
+    install_sign_in_fill,
+    page_event,
+)
 
 
 @pytest.mark.asyncio
@@ -535,6 +541,49 @@ async def test_a_saved_sign_in_is_not_filled_on_another_origin() -> None:
         await browser.close()
 
     assert values == ["", ""]
+
+
+@pytest.mark.asyncio
+async def test_a_saved_sign_in_is_not_filled_after_frame_navigates_before_evaluation() -> None:
+    playwright = pytest.importorskip("playwright.async_api")
+    login = _saved_login("https://login.example.test")
+
+    async with playwright.async_playwright() as runtime:
+        browser = await runtime.chromium.launch()
+        page = await browser.new_page()
+
+        async def serve(route: Any) -> None:
+            await route.fulfill(content_type="text/html", body=_SIGN_IN_PAGES[route.request.url])
+
+        await page.route("**/*", serve)
+        await page.goto("https://login.example.test/")
+
+        class NavigatingFrame:
+            @property
+            def url(self) -> str:
+                return page.main_frame.url
+
+            async def evaluate(self, script: str, values: dict[str, Any]) -> Any:
+                await page.goto("https://other.example.test/")
+                return await page.main_frame.evaluate(script, values)
+
+        await fill_sign_in(NavigatingFrame(), login)
+        initial = await page.evaluate("() => Array.from(document.querySelectorAll('input'), (node) => node.value)")
+        await page.evaluate(
+            """() => document.querySelector('form').insertAdjacentHTML('beforeend',
+              '<input name="username" aria-label="Late username"><input type="password" aria-label="Late password">')"""
+        )
+        await asyncio.sleep(0.1)
+        late = await page.evaluate("() => Array.from(document.querySelectorAll('input'), (node) => node.value)")
+
+        await page.goto("https://login.example.test/")
+        await fill_sign_in(page.main_frame, login)
+        allowed = await page.evaluate("() => Array.from(document.querySelectorAll('input'), (node) => node.value)")
+        await browser.close()
+
+    assert initial == ["", ""]
+    assert late == ["", "", "", ""]
+    assert allowed == [_SAVED_USERNAME, _SAVED_PASSWORD]
 
 
 @pytest.mark.asyncio

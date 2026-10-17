@@ -222,13 +222,14 @@ SIGN_IN_SCRIPT = r"""
 # the username step) are filled as they appear; a new document is filled again from Python.
 SIGN_IN_FILL_SCRIPT = r"""
 (login) => {
-  if (window.__workflowUseSignInFillInstalled) return;
+  if (!login.origins.includes(location.origin) || window.__workflowUseSignInFillInstalled) return;
   Object.defineProperty(window, "__workflowUseSignInFillInstalled", { value: true });
   __FIELD_CLASSIFICATION__
   const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
   const filled = new WeakSet();
   const visible = (node) => node.getClientRects().length > 0 && getComputedStyle(node).visibility !== "hidden";
   const fill = () => {
+    if (!login.origins.includes(location.origin)) return;
     for (const node of document.querySelectorAll("input")) {
       if (filled.has(node) || node.value || node.disabled || node.readOnly || !visible(node)) continue;
       // A sign-up or password-reset form asks for a new account, not the saved one.
@@ -262,6 +263,7 @@ async def fill_sign_in(frame: Any, login: RecordingLogin | None) -> None:
     if login is None or url_origin(getattr(frame, "url", "")) not in login.origins:
         return
     values = {
+        "origins": login.origins,
         "username": login.username.get_secret_value() if login.username is not None else None,
         "password": login.password.get_secret_value(),
     }
