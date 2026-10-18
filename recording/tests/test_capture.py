@@ -546,7 +546,9 @@ class HTMLInputElement extends HTMLElement {
   set value(value) { this._value = value; }
 }
 const form = {
-  querySelector(selector) { return selector === 'input[type="password"]' ? fields.find((field) => field.type === "password") : null; },
+  querySelector(selector) {
+    return selector === 'input[type="password"]' ? fields.find((field) => field.type === "password") : null;
+  },
 };
 const fields = [
   new HTMLInputElement("Company", "company"),
