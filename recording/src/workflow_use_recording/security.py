@@ -7,6 +7,8 @@ import time
 from typing import Any
 from urllib.parse import urlsplit
 
+import idna
+
 
 def is_public_http_url(url: str) -> bool:
     """Accept only a public HTTP(S) host with no embedded credentials."""
@@ -39,10 +41,10 @@ def url_origin(url: str) -> str | None:
     host = parsed.hostname.lower()
     if ":" in host:
         host = f"[{host}]"
-    else:
+    elif not host.isascii():
         try:
-            host = host.encode("idna").decode("ascii")
-        except UnicodeError:
+            host = idna.encode(host, uts46=True, transitional=False).decode("ascii")
+        except idna.IDNAError:
             return None
     default = 80 if parsed.scheme == "http" else 443
     return f"{parsed.scheme}://{host}" + (f":{port}" if port is not None and port != default else "")

@@ -512,6 +512,94 @@ assert.equal(queries, 1);
     subprocess.run(["node", "-e", harness], input=SIGN_IN_FILL_SCRIPT, text=True, check=True, capture_output=True)
 
 
+def test_saved_sign_in_fills_only_identified_username_fields() -> None:
+    harness = r"""
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const vm = require("node:vm");
+const source = fs.readFileSync(0, "utf8");
+let observe;
+class Element {
+  getAttribute(name) { return name === "aria-label" ? this.label : ""; }
+  closest() { return form; }
+  getClientRects() { return [1]; }
+  dispatchEvent() {}
+}
+class HTMLElement extends Element {}
+class HTMLInputElement extends HTMLElement {
+  constructor(label, name = "", type = "text", autocomplete = "") {
+    super();
+    this.label = label;
+    this.name = name;
+    this.type = type;
+    this.autocomplete = autocomplete;
+    this.id = "";
+    this.labels = [];
+    this.form = form;
+    this.value = "";
+  }
+  get value() { return this._value; }
+  set value(value) { this._value = value; }
+}
+const form = {
+  querySelector(selector) { return selector === 'input[type="password"]' ? fields.find((field) => field.type === "password") : null; },
+};
+const fields = [
+  new HTMLInputElement("Company", "company"),
+  new HTMLInputElement("Tenant", "tenant"),
+  new HTMLInputElement("Email"),
+  new HTMLInputElement("Contact", "", "email"),
+  new HTMLInputElement("Account", "", "text", "username"),
+  new HTMLInputElement("Login", "login"),
+  new HTMLInputElement("Password", "", "password"),
+];
+const context = vm.createContext({
+  window: {},
+  location: { origin: "https://login.example.test" },
+  document: { getElementById() { return null; }, querySelectorAll() { return fields; } },
+  Element, HTMLElement, HTMLInputElement,
+  HTMLTextAreaElement: class extends HTMLElement {},
+  HTMLSelectElement: class extends HTMLElement {},
+  MutationObserver: class { constructor(callback) { observe = callback; } observe() {} },
+  Event: class {},
+  getComputedStyle() { return { visibility: "visible" }; },
+  setTimeout(callback) { callback(); },
+});
+vm.runInContext('(' + source + ')({origins: ["https://login.example.test"], ' +
+  'username: "saved-user", password: "saved-password"})', context);
+assert.deepEqual(fields.map((field) => field.value),
+  ["", "", "saved-user", "saved-user", "saved-user", "saved-user", "saved-password"]);
+fields.push(new HTMLInputElement("Company", "company"), new HTMLInputElement("Email"));
+observe();
+assert.deepEqual(fields.slice(-2).map((field) => field.value), ["", "saved-user"]);
+"""
+    subprocess.run(["node", "-e", harness], input=SIGN_IN_FILL_SCRIPT, text=True, check=True, capture_output=True)
+
+
+@pytest.mark.asyncio
+async def test_saved_sign_in_does_not_match_ascii_host_confusable_with_unicode_idn() -> None:
+    class Frame:
+        def __init__(self, url: str) -> None:
+            self.url = url
+            self.values: dict[str, Any] | None = None
+
+        async def evaluate(self, _script: str, values: dict[str, Any]) -> None:
+            self.values = values
+
+    login = _saved_login("https://faß.example")
+    ascii_frame = Frame("https://fass.example/login")
+    idn_frame = Frame("https://xn--fa-hia.example/login")
+    await fill_sign_in(ascii_frame, login)
+    await fill_sign_in(idn_frame, login)
+
+    assert ascii_frame.values is None
+    assert idn_frame.values == {
+        "origins": ["https://xn--fa-hia.example"],
+        "username": _SAVED_USERNAME,
+        "password": _SAVED_PASSWORD,
+    }
+
+
 @pytest.mark.asyncio
 async def test_saved_sign_in_matches_unicode_dotted_frame_origin() -> None:
     class Frame:

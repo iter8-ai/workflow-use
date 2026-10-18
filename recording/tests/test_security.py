@@ -10,9 +10,17 @@ from workflow_use_recording.security import has_google_session, is_google_sign_i
     [
         ("https://BÜCHER.example./login", "https://xn--bcher-kva.example."),
         ("https://BÜCHER.example:443/login", "https://xn--bcher-kva.example"),
+        ("https://faß.example/login", "https://xn--fa-hia.example"),
+        ("https://fass.example/login", "https://fass.example"),
         ("http://[2001:db8::1]:8080/login", "http://[2001:db8::1]:8080"),
     ],
-    ids=["idna_with_trailing_dot", "idna_with_default_port", "ipv6_with_port"],
+    ids=[
+        "idna_with_trailing_dot",
+        "idna_with_default_port",
+        "nontransitional_idna",
+        "distinct_ascii",
+        "ipv6_with_port",
+    ],
 )
 def test_url_origin_matches_browser_host_format(url: str, expected: str) -> None:
     assert url_origin(url) == expected

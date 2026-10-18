@@ -45,7 +45,7 @@ _FIELD_CLASSIFICATION_SCRIPT = r"""
     const oneTime = /one.?time|otp|passcode|verification.?code|2fa|mfa|authenticator/.test(hint);
     return !otherSecretHint.test(hint) && !oneTime && (passwordField || /pass.?word/.test(hint));
   };
-  const credentialKind = (node) => {
+  const credentialKind = (node, autofill = false) => {
     if (!typedField(node)) return null;
     const input = node instanceof HTMLInputElement ? node : null;
     const hint = (`${input?.type || ""} ${input?.autocomplete || ""} ${input?.name || ""} ${node.id} ` +
@@ -59,10 +59,11 @@ _FIELD_CLASSIFICATION_SCRIPT = r"""
     }
     // A "show password" toggle turns the field into type=text; its hints still say password.
     if (/pass.?word/.test(hint)) return "password";
-    if (/\b(?:username|email)\b/.test(input?.autocomplete || "") || /user.?name/.test(hint)) return "username";
+    if (/\b(?:username|email)\b/.test(input?.autocomplete || "") || /user.?name/.test(hint) ||
+        (autofill && (input?.type === "email" || /\be-?mail\b/.test(hint)))) return "username";
     if (oneTime) return "otp";
     if (otherSecretHint.test(hint)) return "password";
-    const passwordInForm = Boolean(node.closest("form")?.querySelector('input[type="password"]'));
+    const passwordInForm = !autofill && Boolean(node.closest("form")?.querySelector('input[type="password"]'));
     if (passwordInForm || /user.?name|login/.test(hint)) return "username";
     return null;
   };
@@ -240,7 +241,7 @@ SIGN_IN_FILL_SCRIPT = r"""
       if (filled.has(node) || node.value || node.disabled || node.readOnly || !visible(node)) continue;
       // A sign-up or password-reset form asks for a new account, not the saved one.
       if (node.form?.querySelector('input[autocomplete~="new-password"]')) continue;
-      const kind = credentialKind(node);
+      const kind = credentialKind(node, true);
       if (!kind || !reusableSignIn(node, kind)) continue;
       const value = kind === "username" ? login.username : login.password;
       if (typeof value !== "string" || !value) continue;

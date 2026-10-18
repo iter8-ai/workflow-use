@@ -823,6 +823,22 @@ def test_create_canonicalizes_unicode_and_trailing_dot_login_origins() -> None:
     assert provider.options[0]["login"].origins == ["https://xn--bcher-kva.example."]
 
 
+def test_create_keeps_unicode_idn_distinct_from_ascii_hostname() -> None:
+    provider = FakeProvider()
+    with client(provider) as http:
+        response = http.post(
+            "/recordings",
+            json={
+                "url": "https://example.com",
+                "login": {"origins": ["https://faß.example", "https://fass.example"], "password": SAVED_PASSWORD},
+            },
+            headers=headers(),
+        )
+
+    assert response.status_code == 201
+    assert provider.options[0]["login"].origins == ["https://xn--fa-hia.example", "https://fass.example"]
+
+
 def test_create_rejects_malformed_ipv6_origin_without_echoing_host() -> None:
     provider = FakeProvider()
     with client(provider) as http:

@@ -614,6 +614,7 @@ source = { editable = "." }
 dependencies = [
     { name = "browserbase" },
     { name = "fastapi" },
+    { name = "idna" },
     { name = "openai" },
     { name = "playwright" },
     { name = "uvicorn" },
@@ -631,6 +632,7 @@ dev = [
 requires-dist = [
     { name = "browserbase", specifier = ">=1.0.3,<2" },
     { name = "fastapi", specifier = ">=0.115,<1" },
+    { name = "idna", specifier = ">=3,<4" },
     { name = "openai", specifier = ">=2,<3" },
     { name = "playwright", specifier = ">=1.45,<2" },
     { name = "uvicorn", specifier = ">=0.30,<1" },
