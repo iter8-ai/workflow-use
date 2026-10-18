@@ -60,7 +60,7 @@ _FIELD_CLASSIFICATION_SCRIPT = r"""
     // A "show password" toggle turns the field into type=text; its hints still say password.
     if (/pass.?word/.test(hint)) return "password";
     if (/\b(?:username|email)\b/.test(input?.autocomplete || "") || /user.?name/.test(hint) ||
-        (autofill && (input?.type === "email" || /\be-?mail\b/.test(hint)))) return "username";
+        input?.type === "email" || /\be-?mail\b/.test(hint)) return "username";
     if (oneTime) return "otp";
     if (otherSecretHint.test(hint)) return "password";
     const passwordInForm = !autofill && Boolean(node.closest("form")?.querySelector('input[type="password"]'));

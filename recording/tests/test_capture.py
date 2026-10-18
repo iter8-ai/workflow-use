@@ -517,25 +517,29 @@ def test_saved_sign_in_fills_only_identified_username_fields() -> None:
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
-const source = fs.readFileSync(0, "utf8");
+const { capture, fill } = JSON.parse(fs.readFileSync(0, "utf8"));
 let observe;
+const listeners = {};
+const events = [];
 class Element {
-  getAttribute(name) { return name === "aria-label" ? this.label : ""; }
-  closest() { return form; }
+  getAttribute(name) { return name === "aria-label" ? this.label : name === "name" ? this.name : ""; }
+  closest() { return this.form; }
   getClientRects() { return [1]; }
-  dispatchEvent() {}
+  matches() { return true; }
+  dispatchEvent(event) { listeners[event.type]?.({ target: this }); }
 }
 class HTMLElement extends Element {}
 class HTMLInputElement extends HTMLElement {
-  constructor(label, name = "", type = "text", autocomplete = "") {
+  constructor(label, name = "", type = "text", autocomplete = "", inForm = true) {
     super();
     this.label = label;
     this.name = name;
     this.type = type;
     this.autocomplete = autocomplete;
     this.id = "";
+    this.tagName = "INPUT";
     this.labels = [];
-    this.form = form;
+    this.form = inForm ? form : null;
     this.value = "";
   }
   get value() { return this._value; }
@@ -552,28 +556,60 @@ const fields = [
   new HTMLInputElement("Account", "", "text", "username"),
   new HTMLInputElement("Login", "login"),
   new HTMLInputElement("Password", "", "password"),
+  new HTMLInputElement("Contact address", "", "email", "", false),
+  new HTMLInputElement("Email", "", "text", "", false),
+  new HTMLInputElement("E-mail", "", "text", "", false),
 ];
 const context = vm.createContext({
-  window: {},
-  location: { origin: "https://login.example.test" },
-  document: { getElementById() { return null; }, querySelectorAll() { return fields; } },
+  window: {
+    scrollY: 0,
+    addEventListener() {},
+    workflowUseRecord(event) { events.push(event); return Promise.resolve(); },
+  },
+  location: { origin: "https://login.example.test", pathname: "/" },
+  document: {
+    addEventListener(type, listener) { listeners[type] = listener; },
+    getElementById() { return null; },
+    querySelectorAll() { return fields; },
+  },
   Element, HTMLElement, HTMLInputElement,
+  HTMLLabelElement: class extends HTMLElement {},
   HTMLTextAreaElement: class extends HTMLElement {},
   HTMLSelectElement: class extends HTMLElement {},
   MutationObserver: class { constructor(callback) { observe = callback; } observe() {} },
-  Event: class {},
-  getComputedStyle() { return { visibility: "visible" }; },
+  Event: class { constructor(type) { this.type = type; } },
+  getComputedStyle() { return { visibility: "visible", cursor: "pointer" }; },
   setTimeout(callback) { callback(); },
 });
-vm.runInContext('(' + source + ')({origins: ["https://login.example.test"], ' +
+vm.runInContext(capture, context);
+vm.runInContext('(' + fill + ')({origins: ["https://login.example.test"], ' +
   'username: "saved-user", password: "saved-password"})', context);
 assert.deepEqual(fields.map((field) => field.value),
-  ["", "", "saved-user", "saved-user", "saved-user", "saved-user", "saved-password"]);
-fields.push(new HTMLInputElement("Company", "company"), new HTMLInputElement("Email"));
+  ["", "", "saved-user", "saved-user", "saved-user", "saved-user", "saved-password",
+    "saved-user", "saved-user", "saved-user"]);
+assert.deepEqual(events.map((event) => [event.type, event.value]),
+  Array(4).fill(["credential", "username"]).concat(
+    [["credential", "password"]], Array(3).fill(["credential", "username"])));
+const email = fields.at(-1);
+listeners.click({ composedPath: () => [email], detail: 1 });
+assert.equal(events.length, 8);
+listeners.keydown({ target: email, key: "Enter" });
+assert.deepEqual([events.at(-1).type, events.at(-1).value], ["key_press", "Enter"]);
+fields.push(new HTMLInputElement("Company", "company"), new HTMLInputElement("Email", "", "text", "", false));
 observe();
 assert.deepEqual(fields.slice(-2).map((field) => field.value), ["", "saved-user"]);
+assert.equal(events.at(-1).type, "credential");
+assert.equal(events.at(-1).value, "username");
+assert.equal(JSON.stringify(events).includes("saved-user"), false);
+assert.equal(JSON.stringify(events).includes("saved-password"), false);
 """
-    subprocess.run(["node", "-e", harness], input=SIGN_IN_FILL_SCRIPT, text=True, check=True, capture_output=True)
+    subprocess.run(
+        ["node", "-e", harness],
+        input=json.dumps({"capture": CAPTURE_SCRIPT, "fill": SIGN_IN_FILL_SCRIPT}),
+        text=True,
+        check=True,
+        capture_output=True,
+    )
 
 
 @pytest.mark.asyncio
