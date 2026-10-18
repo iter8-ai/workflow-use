@@ -52,10 +52,14 @@ class FakeProvider(BrowserProvider):
     def __init__(self, *, start_page_failed: bool = False) -> None:
         self.sessions: list[FakeSession] = []
         self.start_urls: list[str] = []
+        self.options: list[dict[str, Any]] = []
         self.start_page_failed = start_page_failed
 
-    async def create(self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]) -> BrowserSession:
+    async def create(
+        self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]], **options: Any
+    ) -> BrowserSession:
         self.start_urls.append(start_url)
+        self.options.append(options)
         session = FakeSession(on_event)
         session.start_page_failed = self.start_page_failed
         self.sessions.append(session)
@@ -73,7 +77,9 @@ class FailingProvider(FakeProvider):
         self.fail_create = fail_create
         self.value_error = value_error
 
-    async def create(self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]) -> BrowserSession:
+    async def create(
+        self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]], **_options: Any
+    ) -> BrowserSession:
         if self.fail_create:
             if self.value_error:
                 raise ValueError("wss://browserbase.example/connect?token=must-not-leak")
@@ -150,7 +156,9 @@ def test_create_with_a_failed_start_page_keeps_the_demonstration_open_without_a_
 
 def test_start_page_timeout_has_clear_response_without_leaking_provider_details() -> None:
     class TimeoutProvider(FakeProvider):
-        async def create(self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]) -> BrowserSession:
+        async def create(
+            self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]], **_options: Any
+        ) -> BrowserSession:
             raise RecordingStartTimeout("wss://connect.example/?signingKey=must-not-leak")
 
     with client(TimeoutProvider()) as http:
@@ -167,7 +175,9 @@ def test_startup_deadline_releases_capacity_for_the_next_create(monkeypatch: pyt
             super().__init__()
             self.cancelled = False
 
-        async def create(self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]]) -> BrowserSession:
+        async def create(
+            self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]], **_options: Any
+        ) -> BrowserSession:
             if not self.cancelled:
                 try:
                     await asyncio.Event().wait()
@@ -759,3 +769,124 @@ def test_failed_recording_start_is_logged_by_error_type_without_connection_detai
     assert "wss://browserbase.example/connect" not in caplog.text
     assert "must-not-leak" not in caplog.text
     assert "Traceback" not in caplog.text
+
+
+SAVED_PASSWORD = "saved-password-must-not-leak"
+
+
+def test_create_passes_a_saved_sign_in_to_the_browser_and_never_returns_it(caplog: pytest.LogCaptureFixture) -> None:
+    provider = FakeProvider()
+    body = {
+        "url": "https://example.com",
+        "context_id": "context-saved-google",
+        "login": {
+            "origins": ["https://Login.Example.com/", "http://intranet.example.com:8080"],
+            "username": "person@example.com",
+            "password": SAVED_PASSWORD,
+        },
+    }
+    with client(provider) as http:
+        response = http.post("/recordings", json=body, headers=headers())
+
+    assert response.status_code == 201
+    [options] = provider.options
+    assert options["context_id"] == "context-saved-google"
+    login = options["login"]
+    assert login.origins == ["https://login.example.com", "http://intranet.example.com:8080"]
+    assert login.username.get_secret_value() == "person@example.com"
+    assert login.password.get_secret_value() == SAVED_PASSWORD
+    assert SAVED_PASSWORD not in response.text and "person@example.com" not in response.text
+    assert SAVED_PASSWORD not in caplog.text
+
+
+def test_create_without_a_saved_sign_in_passes_nothing() -> None:
+    provider = FakeProvider()
+    with client(provider) as http:
+        create_recording(http)
+
+    assert provider.options == [{"context_id": None, "login": None}]
+
+
+def test_create_canonicalizes_unicode_and_trailing_dot_login_origins() -> None:
+    provider = FakeProvider()
+    with client(provider) as http:
+        response = http.post(
+            "/recordings",
+            json={
+                "url": "https://example.com",
+                "login": {"origins": ["https://BÜCHER.example./"], "password": SAVED_PASSWORD},
+            },
+            headers=headers(),
+        )
+
+    assert response.status_code == 201
+    assert provider.options[0]["login"].origins == ["https://xn--bcher-kva.example."]
+
+
+def test_create_keeps_unicode_idn_distinct_from_ascii_hostname() -> None:
+    provider = FakeProvider()
+    with client(provider) as http:
+        response = http.post(
+            "/recordings",
+            json={
+                "url": "https://example.com",
+                "login": {"origins": ["https://faß.example", "https://fass.example"], "password": SAVED_PASSWORD},
+            },
+            headers=headers(),
+        )
+
+    assert response.status_code == 201
+    assert provider.options[0]["login"].origins == ["https://xn--fa-hia.example", "https://fass.example"]
+
+
+def test_create_rejects_malformed_ipv6_origin_without_echoing_host() -> None:
+    provider = FakeProvider()
+    with client(provider) as http:
+        response = http.post(
+            "/recordings",
+            json={
+                "url": "https://example.com",
+                "login": {"origins": ["https://[private-marker]/"], "password": SAVED_PASSWORD},
+            },
+            headers=headers(),
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == [
+        {
+            "type": "value_error",
+            "loc": ["body", "login", "origins"],
+            "msg": "Value error, Each origin must be an HTTP(S) origin such as https://app.example.com.",
+        }
+    ]
+    assert "private-marker" not in response.text
+    assert SAVED_PASSWORD not in response.text
+    assert provider.options == []
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"context_id": ""},
+        {"context_id": 7},
+        {"login": {"origins": [], "password": SAVED_PASSWORD}},
+        {"login": {"origins": ["https://example.com"] * 11, "password": SAVED_PASSWORD}},
+        {"login": {"origins": ["https://example.com/sign-in"], "password": SAVED_PASSWORD}},
+        {"login": {"origins": ["ftp://example.com"], "password": SAVED_PASSWORD}},
+        {"login": {"origins": ["https://example.com"]}},
+        {"login": {"origins": ["https://example.com"], "password": ""}},
+        {"login": {"origins": ["https://example.com"], "password": SAVED_PASSWORD + "x" * 2000}},
+        {"login": {"origins": ["https://example.com"], "username": SAVED_PASSWORD + "x" * 2000, "password": "p"}},
+        {"login": {"origins": ["https://example.com"], "password": 123}},
+        {"login": SAVED_PASSWORD},
+        {"url": 5, "login": {"origins": ["https://example.com"], "password": SAVED_PASSWORD}},
+    ],
+)
+def test_create_rejects_an_invalid_saved_sign_in_without_echoing_it(extra: dict[str, Any]) -> None:
+    provider = FakeProvider()
+    with client(provider) as http:
+        response = http.post("/recordings", json={"url": "https://example.com", **extra}, headers=headers())
+
+    assert response.status_code == 422
+    assert SAVED_PASSWORD not in response.text
+    assert provider.options == []

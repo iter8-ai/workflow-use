@@ -1,8 +1,18 @@
 """Browser-side capture code. It sends semantic, bounded events to Python."""
 
+from __future__ import annotations
+
 import json
-from collections.abc import Callable
-from typing import Any
+import logging
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Any
+
+from .security import url_origin
+
+if TYPE_CHECKING:
+    from .models import RecordingLogin
+
+logger = logging.getLogger(__name__)
 
 _FIELD_CLASSIFICATION_SCRIPT = r"""
   const semanticText = (value, size = 240) => String(value ?? "").trim().replace(/\s+/g, " ").slice(0, size);
@@ -37,7 +47,7 @@ _FIELD_CLASSIFICATION_SCRIPT = r"""
     const oneTime = /one.?time|otp|passcode|verification.?code|2fa|mfa|authenticator/.test(hint);
     return !otherSecretHint.test(hint) && !oneTime && (passwordField || /pass.?word/.test(hint));
   };
-  const credentialKind = (node) => {
+  const credentialKind = (node, autofill = false) => {
     if (!typedField(node)) return null;
     const input = node instanceof HTMLInputElement ? node : null;
     const hint = (`${input?.type || ""} ${input?.autocomplete || ""} ${input?.name || ""} ${node.id} ` +
@@ -51,10 +61,11 @@ _FIELD_CLASSIFICATION_SCRIPT = r"""
     }
     // A "show password" toggle turns the field into type=text; its hints still say password.
     if (/pass.?word/.test(hint)) return "password";
-    if (/\b(?:username|email)\b/.test(input?.autocomplete || "") || /user.?name/.test(hint)) return "username";
+    if (/\b(?:username|email)\b/.test(input?.autocomplete || "") || /user.?name/.test(hint) ||
+        input?.type === "email" || /\be-?mail\b/.test(hint)) return "username";
     if (oneTime) return "otp";
     if (otherSecretHint.test(hint)) return "password";
-    const passwordInForm = Boolean(node.closest("form")?.querySelector('input[type="password"]'));
+    const passwordInForm = !autofill && Boolean(node.closest("form")?.querySelector('input[type="password"]'));
     if (passwordInForm || /user.?name|login/.test(hint)) return "username";
     return null;
   };
@@ -204,6 +215,84 @@ SIGN_IN_SCRIPT = r"""
   }, true);
 })();
 """.replace("  __FIELD_CLASSIFICATION__\n", _FIELD_CLASSIFICATION_SCRIPT).replace("__BINDING__", SIGN_IN_BINDING)
+
+
+# Fills a saved username and password into the sign-in form of a page on a saved sign-in's origin, so the person
+# demonstrating does not type them. Uses the capture's own field classification: only reusable sign-in fields
+# are filled, never a new-password, one-time code or other secret field. The values are set the way a page
+# script would, so the events are not trusted and the sign-in capture never reads them back. Each field is
+# filled once while empty; a field the person clears stays cleared. DOM changes (a password step shown after
+# the username step) are filled as they appear; a new document is filled again from Python.
+SIGN_IN_FILL_SCRIPT = r"""
+(login) => {
+  const allowedOrigin = () => {
+    for (let i = 0; i < login.origins.length; i++) {
+      if (login.origins[i] === location.origin) return true;
+    }
+    return false;
+  };
+  if (!allowedOrigin() || window.__workflowUseSignInFillInstalled) return;
+  Object.defineProperty(window, "__workflowUseSignInFillInstalled", { value: true });
+  __FIELD_CLASSIFICATION__
+  const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+  const filled = new WeakSet();
+  const visible = (node) => node.getClientRects().length > 0 && getComputedStyle(node).visibility !== "hidden";
+  const fill = () => {
+    if (!allowedOrigin()) return;
+    for (const node of document.querySelectorAll("input")) {
+      if (filled.has(node) || node.value || node.disabled || node.readOnly || !visible(node)) continue;
+      // A sign-up or password-reset form asks for a new account, not the saved one.
+      if (node.form?.querySelector('input[autocomplete~="new-password"]')) continue;
+      const kind = credentialKind(node, true);
+      if (!kind || !reusableSignIn(node, kind)) continue;
+      const value = kind === "username" ? login.username : login.password;
+      if (typeof value !== "string" || !value) continue;
+      filled.add(node);
+      setValue.call(node, value);
+      node.dispatchEvent(new Event("input", { bubbles: true }));
+      node.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  };
+  let queued = false;
+  const later = () => {
+    if (queued) return;
+    queued = true;
+    setTimeout(() => { queued = false; fill(); }, 50);
+  };
+  fill();
+  new MutationObserver(later).observe(document, {
+    childList: true, subtree: true, attributes: true, attributeFilter: ["class", "style", "hidden", "type", "disabled"],
+  });
+}
+""".replace("  __FIELD_CLASSIFICATION__\n", _FIELD_CLASSIFICATION_SCRIPT).strip()
+
+
+async def fill_sign_in(frame: Any, login: RecordingLogin | None) -> None:
+    """Fill ``login`` into ``frame`` when the frame's origin is one of the saved sign-in's origins."""
+    if login is None or url_origin(getattr(frame, "url", "")) not in login.origins:
+        return
+    values = {
+        "origins": login.origins,
+        "username": login.username.get_secret_value() if login.username is not None else None,
+        "password": login.password.get_secret_value(),
+    }
+    try:
+        await frame.evaluate(SIGN_IN_FILL_SCRIPT, values)
+    except Exception as error:
+        # Usually the frame navigated on; its next document is filled when it commits. Only the type is logged.
+        logger.debug("recording_sign_in_fill_skipped error_type=%s", type(error).__name__)
+
+
+def install_sign_in_fill(
+    page: Any, login: Callable[[], RecordingLogin | None], track: Callable[[Awaitable[None]], None]
+) -> None:
+    """Fill the saved sign-in into every matching document ``page`` shows, now and after each navigation.
+
+    ``login`` is read at fill time, so a session that dropped its sign-in after the recording ended fills nothing.
+    """
+    page.on("framenavigated", lambda frame: track(fill_sign_in(frame, login())))
+    for frame in page.frames:
+        track(fill_sign_in(frame, login()))
 
 
 def page_event(event: object) -> object:

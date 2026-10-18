@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+
+from .security import url_origin
 
 
 class FixedDateRule(BaseModel):
@@ -109,8 +112,37 @@ class RecordedDownload(BaseModel):
     state: Literal["started", "completed", "failed"]
 
 
+class RecordingLogin(BaseModel):
+    """A saved sign-in the demonstration browser fills in for the person. Values never appear in a repr,
+    a log, an event or a response, and the browser session drops them when the recording ends."""
+
+    model_config = ConfigDict(hide_input_in_errors=True)
+
+    # Pages and frames on exactly these origins (scheme://host[:port]) get their sign-in form filled.
+    origins: list[Annotated[str, Field(max_length=2000)]] = Field(min_length=1, max_length=10)
+    username: Annotated[SecretStr, Field(max_length=2000)] | None = None
+    password: Annotated[SecretStr, Field(min_length=1, max_length=2000)]
+
+    @field_validator("origins")
+    @classmethod
+    def _canonical_origins(cls, origins: list[str]) -> list[str]:
+        canonical: list[str] = []
+        for origin in origins:
+            value = url_origin(origin)
+            if value is None:
+                raise ValueError("Each origin must be an HTTP(S) origin such as https://app.example.com.")
+            parts = urlsplit(origin)
+            if parts.path not in {"", "/"} or parts.query or parts.fragment:
+                raise ValueError("Each origin must be an HTTP(S) origin such as https://app.example.com.")
+            canonical.append(value)
+        return canonical
+
+
 class CreateRecordingRequest(BaseModel):
     url: str
+    # A Browserbase context holding a saved Google session. The recording reads it and never changes or deletes it.
+    context_id: str | None = Field(default=None, min_length=1, max_length=200)
+    login: RecordingLogin | None = None
 
 
 class NavigateRecordingRequest(BaseModel):

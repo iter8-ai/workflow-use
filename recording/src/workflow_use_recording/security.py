@@ -7,6 +7,8 @@ import time
 from typing import Any
 from urllib.parse import urlsplit
 
+import idna
+
 
 def is_public_http_url(url: str) -> bool:
     """Accept only a public HTTP(S) host with no embedded credentials."""
@@ -25,6 +27,27 @@ def is_public_http_url(url: str) -> bool:
         return ipaddress.ip_address(hostname).is_global
     except ValueError:
         return True
+
+
+def url_origin(url: str) -> str | None:
+    """The canonical ``scheme://host[:port]`` of an HTTP(S) URL, lowercase and without a default port."""
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+    except ValueError:
+        return None
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+        return None
+    host = parsed.hostname.lower()
+    if ":" in host:
+        host = f"[{host}]"
+    elif not host.isascii():
+        try:
+            host = idna.encode(host, uts46=True, transitional=False).decode("ascii")
+        except idna.IDNAError:
+            return None
+    default = 80 if parsed.scheme == "http" else 443
+    return f"{parsed.scheme}://{host}" + (f":{port}" if port is not None and port != default else "")
 
 
 def is_google_sign_in(url: str) -> bool:
