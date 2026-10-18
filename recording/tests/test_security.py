@@ -2,7 +2,20 @@ from __future__ import annotations
 
 import pytest
 
-from workflow_use_recording.security import has_google_session, is_google_sign_in, safe_public_url
+from workflow_use_recording.security import has_google_session, is_google_sign_in, safe_public_url, url_origin
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://BÜCHER.example./login", "https://xn--bcher-kva.example."),
+        ("https://BÜCHER.example:443/login", "https://xn--bcher-kva.example"),
+        ("http://[2001:db8::1]:8080/login", "http://[2001:db8::1]:8080"),
+    ],
+    ids=["idna_with_trailing_dot", "idna_with_default_port", "ipv6_with_port"],
+)
+def test_url_origin_matches_browser_host_format(url: str, expected: str) -> None:
+    assert url_origin(url) == expected
 
 
 def test_safe_public_url_preserves_query_and_fragment() -> None:

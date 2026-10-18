@@ -807,6 +807,47 @@ def test_create_without_a_saved_sign_in_passes_nothing() -> None:
     assert provider.options == [{"context_id": None, "login": None}]
 
 
+def test_create_canonicalizes_unicode_and_trailing_dot_login_origins() -> None:
+    provider = FakeProvider()
+    with client(provider) as http:
+        response = http.post(
+            "/recordings",
+            json={
+                "url": "https://example.com",
+                "login": {"origins": ["https://BÜCHER.example./"], "password": SAVED_PASSWORD},
+            },
+            headers=headers(),
+        )
+
+    assert response.status_code == 201
+    assert provider.options[0]["login"].origins == ["https://xn--bcher-kva.example."]
+
+
+def test_create_rejects_malformed_ipv6_origin_without_echoing_host() -> None:
+    provider = FakeProvider()
+    with client(provider) as http:
+        response = http.post(
+            "/recordings",
+            json={
+                "url": "https://example.com",
+                "login": {"origins": ["https://[private-marker]/"], "password": SAVED_PASSWORD},
+            },
+            headers=headers(),
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == [
+        {
+            "type": "value_error",
+            "loc": ["body", "login", "origins"],
+            "msg": "Value error, Each origin must be an HTTP(S) origin such as https://app.example.com.",
+        }
+    ]
+    assert "private-marker" not in response.text
+    assert SAVED_PASSWORD not in response.text
+    assert provider.options == []
+
+
 @pytest.mark.parametrize(
     "extra",
     [

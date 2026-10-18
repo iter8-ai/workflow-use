@@ -36,9 +36,14 @@ def url_origin(url: str) -> str | None:
         return None
     if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
         return None
-    host = parsed.hostname.rstrip(".").lower()
+    host = parsed.hostname.lower()
     if ":" in host:
         host = f"[{host}]"
+    else:
+        try:
+            host = host.encode("idna").decode("ascii")
+        except UnicodeError:
+            return None
     default = 80 if parsed.scheme == "http" else 443
     return f"{parsed.scheme}://{host}" + (f":{port}" if port is not None and port != default else "")
 

@@ -129,8 +129,10 @@ class RecordingLogin(BaseModel):
         canonical: list[str] = []
         for origin in origins:
             value = url_origin(origin)
+            if value is None:
+                raise ValueError("Each origin must be an HTTP(S) origin such as https://app.example.com.")
             parts = urlsplit(origin)
-            if value is None or parts.path not in {"", "/"} or parts.query or parts.fragment:
+            if parts.path not in {"", "/"} or parts.query or parts.fragment:
                 raise ValueError("Each origin must be an HTTP(S) origin such as https://app.example.com.")
             canonical.append(value)
         return canonical

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 from typing import Any
 from urllib.parse import quote
 
@@ -9,6 +10,7 @@ import pytest
 
 from workflow_use_recording.capture import (
     CAPTURE_SCRIPT,
+    SIGN_IN_FILL_SCRIPT,
     fill_sign_in,
     install_sign_in_capture,
     install_sign_in_fill,
@@ -473,6 +475,62 @@ def _saved_login(*origins: str) -> Any:
     from workflow_use_recording.models import RecordingLogin
 
     return RecordingLogin(origins=list(origins), username=_SAVED_USERNAME, password=_SAVED_PASSWORD)
+
+
+def test_saved_sign_in_guards_use_current_origin_despite_page_array_override() -> None:
+    harness = r"""
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const vm = require("node:vm");
+const source = fs.readFileSync(0, "utf8");
+let queries = 0;
+let observe;
+class HTMLInputElement {}
+Object.defineProperty(HTMLInputElement.prototype, "value", { set() {} });
+const sandbox = {
+  location: { origin: "https://other.example.test" },
+  window: {},
+  document: { querySelectorAll() { queries++; return []; } },
+  HTMLInputElement,
+  MutationObserver: class { constructor(callback) { observe = callback; } observe() {} },
+  setTimeout(callback) { callback(); },
+};
+const context = vm.createContext(sandbox);
+vm.runInContext('var login = { origins: ["https://login.example.test"], password: "saved" }; ' +
+  'Array.prototype.includes = () => true; (' + source + ')(login)', context);
+assert.equal(queries, 0);
+assert.equal(sandbox.window.__workflowUseSignInFillInstalled, undefined);
+sandbox.location.origin = "https://login.example.test";
+vm.runInContext('Array.prototype.includes = () => false; (' + source + ')(login)', context);
+assert.equal(queries, 1);
+assert.equal(typeof observe, "function");
+sandbox.location.origin = "https://other.example.test";
+vm.runInContext('Array.prototype.includes = () => true', context);
+observe();
+assert.equal(queries, 1);
+"""
+    subprocess.run(["node", "-e", harness], input=SIGN_IN_FILL_SCRIPT, text=True, check=True, capture_output=True)
+
+
+@pytest.mark.asyncio
+async def test_saved_sign_in_matches_unicode_dotted_frame_origin() -> None:
+    class Frame:
+        url = "https://xn--bcher-kva.example./login"
+
+        def __init__(self) -> None:
+            self.values: dict[str, Any] | None = None
+
+        async def evaluate(self, _script: str, values: dict[str, Any]) -> None:
+            self.values = values
+
+    frame = Frame()
+    await fill_sign_in(frame, _saved_login("https://bücher.example."))
+
+    assert frame.values == {
+        "origins": ["https://xn--bcher-kva.example."],
+        "username": _SAVED_USERNAME,
+        "password": _SAVED_PASSWORD,
+    }
 
 
 async def _sign_in_browser(runtime: Any, login: Any) -> tuple[Any, Any, list[Any], list[dict[str, str]]]:
