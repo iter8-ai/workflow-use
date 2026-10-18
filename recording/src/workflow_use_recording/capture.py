@@ -1,5 +1,7 @@
 """Browser-side capture code. It sends semantic, bounded events to Python."""
 
+from __future__ import annotations
+
 import json
 import logging
 from collections.abc import Awaitable, Callable
