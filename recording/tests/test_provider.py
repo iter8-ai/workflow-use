@@ -124,11 +124,13 @@ async def test_browserbase_session_disables_provider_recording_and_logs(monkeypa
                 "viewport": {"width": 1280, "height": 720},
                 "record_session": False,
                 "log_session": False,
+                "solve_captchas": False,
                 "context": {"id": "context-secret", "persist": True},
             },
         }
     ]
     assert page.goto_urls == ["https://example.com/reports"]
+    assert (session.network, session.proxy_country, session.start_page_blocked) == ("direct", None, False)
 
     await session.close()
 
@@ -661,7 +663,7 @@ async def test_start_page_timeout_closes_browser_and_releases_session(
 
     class Page(FakePage):
         async def goto(self, url: str, **kwargs: Any) -> None:
-            assert kwargs["timeout"] == 45_000
+            assert kwargs["timeout"] == 20_000
             raise PlaywrightTimeoutError("wss://connect.example/?signingKey=must-not-leak")
 
     browser = FakeBrowser(FakeContext(Page()))
@@ -1151,3 +1153,251 @@ async def test_local_provider_ignores_a_saved_context_without_logging_it(
 
     assert "recording_saved_context_ignored" in caplog.text
     assert "context-saved" not in caplog.text
+
+
+class ResponsePage(FakePage):
+    """A page whose start navigation answers with the given HTTP status (None: no main response)."""
+
+    def __init__(self, status: int | None) -> None:
+        super().__init__()
+        self.status = status
+        self.timeouts: list[int] = []
+
+    async def goto(self, url: str, **kwargs: Any) -> Any:
+        self.goto_urls.append(url)
+        self.timeouts.append(kwargs["timeout"])
+        return None if self.status is None else SimpleNamespace(status=self.status)
+
+
+def _attempts(
+    monkeypatch: pytest.MonkeyPatch, statuses: list[int | None], *, borrowed: bool = False
+) -> tuple[list[FakeRuntime], SimpleNamespace]:
+    """One fresh fake browser per startup attempt, answering the start page with ``statuses`` in order."""
+    runtimes = [FakeRuntime(FakeBrowser(FakeContext(ResponsePage(status)))) for status in statuses]
+    pending = list(runtimes)
+
+    async def start() -> FakeRuntime:
+        return pending.pop(0)
+
+    calls = SimpleNamespace(sessions=[], releases=[], deleted=[], contexts=0)
+
+    class Client:
+        def __init__(self) -> None:
+            self.contexts = SimpleNamespace(create=self.create_context)
+            self.sessions = SimpleNamespace(create=self.create_session, debug=self.debug, update=self.update)
+
+        async def create_context(self, **_kwargs: Any) -> Any:
+            calls.contexts += 1
+            return SimpleNamespace(id=f"context-{calls.contexts}")
+
+        async def create_session(self, **kwargs: Any) -> Any:
+            calls.sessions.append(kwargs)
+            return SimpleNamespace(
+                id=f"session-{len(calls.sessions)}", connect_url="wss://connect.example/?signingKey=must-not-leak"
+            )
+
+        async def debug(self, session_id: str) -> Any:
+            return SimpleNamespace(debugger_fullscreen_url=f"https://live.example/{session_id}")
+
+        async def update(self, session_id: str, **_kwargs: Any) -> None:
+            calls.releases.append(session_id)
+
+        async def delete(self, path: str, **_kwargs: Any) -> None:
+            calls.deleted.append(path)
+
+        async def __aexit__(self, *_args: Any) -> None:
+            pass
+
+    browserbase = ModuleType("browserbase")
+    browserbase.AsyncBrowserbase = Client  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "browserbase", browserbase)
+    monkeypatch.setattr("workflow_use_recording.provider._start_playwright_runtime", start)
+    monkeypatch.delenv("BROWSERBASE_PROXY_COUNTRY", raising=False)
+    return runtimes, calls
+
+
+EE_PROXY = [{"type": "browserbase", "geolocation": {"country": "EE"}}]
+
+
+@pytest.mark.asyncio
+async def test_a_blocked_start_page_is_retried_once_over_a_geolocated_proxy(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    runtimes, calls = _attempts(monkeypatch, [403, 200])
+
+    with caplog.at_level("WARNING", logger="workflow_use_recording.provider"):
+        session = await BrowserbaseProvider(project_id="project-1").create("https://www.example.com/en", _ignore_event)
+
+    # The blocked session and the context made for it are gone; the proxied one is the recording's.
+    assert "proxies" not in calls.sessions[0]
+    assert calls.sessions[1]["proxies"] == EE_PROXY
+    assert calls.sessions[1]["browser_settings"]["solve_captchas"] is False
+    assert calls.sessions[1]["browser_settings"]["context"] == {"id": "context-2", "persist": True}
+    assert calls.releases == ["session-1"]
+    assert calls.deleted == ["/v1/contexts/context-1"]
+    assert runtimes[0]._browser.closed and runtimes[0].stopped
+    assert not runtimes[1]._browser.closed and not runtimes[1].stopped
+    assert session.live_view_url == "https://live.example/session-2"
+    assert session.context_id == "context-2"
+    assert (session.network, session.proxy_country) == ("proxy", "EE")
+    assert session.start_page_blocked is False and session.start_page_failed is False
+    for runtime in runtimes:
+        page = runtime._browser.contexts[0]._page
+        assert page.goto_urls == ["https://www.example.com/en"] and page.timeouts == [20_000]
+    assert "recording_start_page_blocked status=403 network=direct" in caplog.text
+    assert "recording_browser_start_failed" not in caplog.text
+    assert "example.com" not in caplog.text and "must-not-leak" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_start_page_blocked_over_the_proxy_too_stays_open_and_is_marked_blocked(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    runtimes, calls = _attempts(monkeypatch, [429, 503])
+
+    with caplog.at_level("WARNING", logger="workflow_use_recording.provider"):
+        session = await BrowserbaseProvider(project_id="project-1").create("https://example.com", _ignore_event)
+
+    assert len(calls.sessions) == 2 and calls.sessions[1]["proxies"] == EE_PROXY
+    assert calls.releases == ["session-1"] and calls.deleted == ["/v1/contexts/context-1"]
+    assert not runtimes[1]._browser.closed and not runtimes[1].stopped
+    assert (session.network, session.proxy_country, session.start_page_blocked) == ("proxy", "EE", True)
+    assert session.start_page_failed is False
+    assert "recording_start_page_blocked status=429 network=direct" in caplog.text
+    assert "recording_start_page_blocked status=503 network=proxy" in caplog.text
+
+    # The next page the person opens clears the block, unless that page is blocked too.
+    page = runtimes[1]._browser.contexts[0]._page
+    await session.navigate("https://example.com/login")
+    assert session.start_page_blocked is True
+    page.status = 200
+    await session.navigate("https://example.com/login")
+    assert session.start_page_blocked is False
+
+
+@pytest.mark.asyncio
+async def test_a_start_page_that_loads_directly_uses_one_direct_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    runtimes, calls = _attempts(monkeypatch, [200, 200])
+
+    session = await BrowserbaseProvider(project_id="project-1").create("https://example.com", _ignore_event)
+
+    assert len(calls.sessions) == 1 and "proxies" not in calls.sessions[0]
+    assert calls.releases == [] and calls.deleted == []
+    assert (session.network, session.proxy_country, session.start_page_blocked) == ("direct", None, False)
+    assert not runtimes[0]._browser.closed
+
+
+@pytest.mark.asyncio
+async def test_a_blocked_start_page_with_a_borrowed_sign_in_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    runtimes, calls = _attempts(monkeypatch, [403, 200])
+
+    with caplog.at_level("WARNING", logger="workflow_use_recording.provider"):
+        session = await BrowserbaseProvider(project_id="project-1").create(
+            "https://example.com", _ignore_event, context_id="context-saved"
+        )
+
+    assert len(calls.sessions) == 1 and "proxies" not in calls.sessions[0]
+    assert calls.contexts == 0 and calls.releases == [] and calls.deleted == []
+    assert not runtimes[0]._browser.closed
+    assert (session.network, session.proxy_country, session.start_page_blocked) == ("direct", None, True)
+    assert "recording_start_page_blocked status=403 network=direct" in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("requested", "env", "expected"),
+    [("de", "LV", "DE"), (None, "lv", "LV"), (None, None, "EE")],
+)
+async def test_the_proxy_country_comes_from_the_request_then_the_environment_then_estonia(
+    monkeypatch: pytest.MonkeyPatch, requested: str | None, env: str | None, expected: str
+) -> None:
+    _, calls = _attempts(monkeypatch, [403, 200])
+    if env is not None:
+        monkeypatch.setenv("BROWSERBASE_PROXY_COUNTRY", env)
+
+    session = await BrowserbaseProvider(project_id="project-1").create(
+        "https://example.com", _ignore_event, country=requested
+    )
+
+    assert calls.sessions[1]["proxies"] == [{"type": "browserbase", "geolocation": {"country": expected}}]
+    assert session.proxy_country == expected
+
+
+@pytest.mark.parametrize("value", ["EST", "E1", "E", "e-"])
+def test_an_invalid_proxy_country_in_the_environment_is_rejected_at_startup(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("BROWSERBASE_PROXY_COUNTRY", value)
+    with pytest.raises(ValueError):
+        BrowserbaseProvider(project_id="project-1")
+
+
+def test_an_empty_proxy_country_in_the_environment_means_the_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BROWSERBASE_PROXY_COUNTRY", "")
+    assert BrowserbaseProvider(project_id="project-1").proxy_country == "EE"
+
+
+@pytest.mark.asyncio
+async def test_a_blocked_page_load_does_not_clear_the_block_but_a_later_page_does(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from workflow_use_recording import provider
+
+    async def no_capture(*_args: Any) -> None:
+        pass
+
+    monkeypatch.setattr(provider, "install_sign_in_capture", no_capture)
+    events: list[dict[str, Any]] = []
+
+    async def record(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    class Page(FakePage):
+        def __init__(self) -> None:
+            super().__init__()
+            self.handlers: dict[str, Any] = {}
+            self.context = object()
+            self.main_frame = SimpleNamespace(url="https://example.com/")
+            self.url = "https://example.com/"
+
+        def on(self, event: str, callback: Any) -> None:
+            self.handlers[event] = callback
+
+        def respond(self, status: int, *, main: bool = True) -> None:
+            request = SimpleNamespace(is_navigation_request=lambda: main)
+            frame = self.main_frame if main else SimpleNamespace(url="https://cdn.example/frame")
+            self.handlers["response"](
+                SimpleNamespace(status=status, request=request, frame=frame, url="https://example.com/")
+            )
+
+    session = provider.PlaywrightRecordingSession(browser=object(), runtime=object(), live_view_url=None)
+    session.start_page_blocked = True
+    page = Page()
+    await provider._install_page_events(session, page, record)
+
+    # The block page itself loads fine as far as the browser is concerned; a 403 document is not a loaded page.
+    page.respond(403)
+    page.handlers["domcontentloaded"]()
+    await asyncio.gather(*session._tasks)
+    assert session.start_page_blocked is True
+    assert events == [{"type": "page_blocked", "status": 403}]
+    events.clear()
+
+    # A subresource or frame answering 200 does not stand in for the main document.
+    page.respond(200, main=False)
+    page.handlers["domcontentloaded"]()
+    assert session.start_page_blocked is True
+
+    page.respond(200)
+    page.handlers["domcontentloaded"]()
+    await asyncio.gather(*session._tasks)
+    assert session.start_page_blocked is False
+    assert events == [{"type": "page_loaded", "url": "https://example.com/"}]
+
+    # Akamai lets the first document through, then its challenge script re-requests the page and gets 403.
+    page.respond(403)
+    await asyncio.gather(*session._tasks)
+    assert session.start_page_blocked is True
+    assert events[-1] == {"type": "page_blocked", "status": 403}

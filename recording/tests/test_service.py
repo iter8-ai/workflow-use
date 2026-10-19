@@ -735,7 +735,7 @@ async def test_a_borrowed_saved_sign_in_context_is_never_deleted_or_lent(signed_
     owner = RecordingOwner("iter7", "owner@iter7.example")
     recording = await service.create(owner, "https://example.com", context_id="saved-google-context")
 
-    assert provider.options == [{"context_id": "saved-google-context", "login": None}]
+    assert provider.options == [{"context_id": "saved-google-context", "login": None, "country": None}]
     assert recording.context_id is None
     if ending == "expiry":
         recording.expires_at = datetime.now(UTC) - timedelta(seconds=1)
@@ -813,3 +813,37 @@ async def test_same_saved_context_stays_reserved_when_release_fails() -> None:
     finally:
         close.side_effect = None
         await service.close()
+
+
+@pytest.mark.asyncio
+async def test_the_response_carries_the_browser_network_and_block_from_the_provider_session() -> None:
+    class ProxiedSession(ContextSession):
+        network = "proxy"
+        proxy_country = "EE"
+        start_page_blocked = True
+
+    class Provider(ContextProvider):
+        async def create(
+            self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]], **options: Any
+        ) -> BrowserSession:
+            self.options = options
+            session = ProxiedSession()
+            self.sessions.append(session)
+            return session
+
+    provider = Provider()
+    service = RecordingService(provider)
+    owner = RecordingOwner("iter7", "owner@iter7.example")
+
+    recording = await service.create(owner, "https://example.com", country="EE")
+    created = RecordingService.response(recording)
+    stopped = RecordingService.response(await service.stop(recording.id, owner))
+
+    assert provider.options == {"context_id": None, "login": None, "country": "EE"}
+    assert (created.network, created.proxy_country, created.start_page_blocked) == ("proxy", "EE", True)
+    assert created.model_dump(by_alias=True)["startPageBlocked"] is True
+    assert (stopped.network, stopped.proxy_country) == ("proxy", "EE")
+    # A session that reports nothing is a direct one, like every provider before this field existed.
+    plain = await RecordingService(ContextProvider()).create(owner, "https://example.com")
+    response = RecordingService.response(plain)
+    assert (response.network, response.proxy_country, response.start_page_blocked) == ("direct", None, False)

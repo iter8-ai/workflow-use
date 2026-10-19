@@ -6,11 +6,12 @@ import os
 import re
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 from urllib.parse import urlsplit
 from uuid import uuid4
 
 from .capture import CAPTURE_SCRIPT, console_event, install_sign_in_capture, install_sign_in_fill
+from .models import country_code
 from .security import (
     has_google_session,
     is_google_sign_in,
@@ -23,22 +24,38 @@ if TYPE_CHECKING:
     from .models import RecordingLogin
 
 EventSink = Callable[[dict[str, Any]], Awaitable[None]]
+Network = Literal["direct", "proxy"]
 logger = logging.getLogger(__name__)
 LIVE_VIEW_SWITCH_TIMEOUT_SECONDS = 15
 NAVIGATE_TIMEOUT_MS = 30_000
 NAVIGATE_ATTEMPTS = 3
+# The service's create deadline. A direct start-page attempt and a proxied retry must both fit inside it.
 START_PAGE_TIMEOUT_SECONDS = 45
+START_PAGE_ATTEMPT_TIMEOUT_SECONDS = 20
 CLEANUP_TIMEOUT_SECONDS = 2
+# A site that answers the main document with one of these is refusing the browser, not failing.
+BLOCKED_STATUSES = frozenset({403, 429, 503})
+DEFAULT_PROXY_COUNTRY = "EE"
 
 
 def _same_page(current: str, target: str) -> bool:
     return current.rstrip("/") == target.rstrip("/")
 
 
+def _blocked_status(response: Any) -> int | None:
+    """The main document's status when it is a block page, else None (also for no response at all)."""
+    status = getattr(response, "status", None)
+    return status if isinstance(status, int) and status in BLOCKED_STATUSES else None
+
+
 class BrowserSession(Protocol):
     live_view_url: str | None
     # True while the start page failed to load and no page has been opened since.
     start_page_failed: bool
+    # True while the site answers the shown page with a block page and no other page has loaded since.
+    start_page_blocked: bool
+    network: Network
+    proxy_country: str | None
 
     async def close(self) -> None: ...
 
@@ -59,14 +76,24 @@ class BrowserProvider(Protocol):
         *,
         context_id: str | None = None,
         login: RecordingLogin | None = None,
+        country: str | None = None,
     ) -> BrowserSession:
         """Start a recording browser on ``start_url``.
 
         ``context_id`` is a borrowed Browserbase context with a saved sign-in: demonstrated sign-ins persist,
         but the session reports no context of its own, so nothing ever deletes it. ``login`` is filled into matching
-        sign-in forms while the session is open.
+        sign-in forms while the session is open. ``country`` (ISO 3166-1 alpha-2) picks the proxy exit used
+        when the site blocks the direct browser.
         """
         ...
+
+
+class _StartPageBlocked(Exception):
+    """The site answered the start page with a block status; the caller retries over a proxy."""
+
+    def __init__(self, status: int) -> None:
+        super().__init__("Recording start page blocked")
+        self.status = status
 
 
 class _PendingContextCleanup(Exception):
@@ -98,11 +125,18 @@ class PlaywrightRecordingSession:
         context_id: str | None = None,
         delete_context: Callable[[str], Awaitable[None]] | None = None,
         login: RecordingLogin | None = None,
+        network: Network = "direct",
+        proxy_country: str | None = None,
     ) -> None:
         self.browser = browser
         self.runtime = runtime
         self.live_view_url = live_view_url
         self.start_page_failed = False
+        self.start_page_blocked = False
+        self.network = network
+        self.proxy_country = proxy_country
+        # Status of each tab's latest main document, so a block page's own load does not count as a loaded page.
+        self._main_status: dict[Any, int] = {}
         self._first_live_view_url = live_view_url
         # Tabs opened during the demonstration (e.g. a "Continue with Google" window), oldest first, each with
         # its own live view. The person demonstrating sees the newest one still open.
@@ -142,6 +176,7 @@ class PlaywrightRecordingSession:
 
     def forget_tab(self, page: Any) -> None:
         self.finish_tab(page)
+        self._main_status.pop(page, None)
         self._opened_tabs = [(tab, url) for tab, url in self._opened_tabs if tab is not page]
         self.live_view_url = self._opened_tabs[-1][1] if self._opened_tabs else self._first_live_view_url
 
@@ -149,6 +184,12 @@ class PlaywrightRecordingSession:
         task = asyncio.create_task(coroutine)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+
+    def note_main_response(self, page: Any, status: int) -> None:
+        self._main_status[page] = status
+
+    def page_blocked(self, page: Any) -> bool:
+        return self._main_status.get(page) in BLOCKED_STATUSES
 
     def watch(self, coroutine: Awaitable[None]) -> None:
         task = asyncio.create_task(coroutine)
@@ -225,9 +266,10 @@ class PlaywrightRecordingSession:
             page = await context.new_page()
         from playwright.async_api import Error as PlaywrightError
 
+        response: Any = None
         for attempt in range(NAVIGATE_ATTEMPTS):
             try:
-                await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+                response = await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
                 break
             except PlaywrightError as error:
                 # Right after a page fails to load, Chromium is still committing its error page, and that
@@ -243,6 +285,7 @@ class PlaywrightRecordingSession:
                 if attempt == NAVIGATE_ATTEMPTS - 1:
                     raise
         self.start_page_failed = False
+        self.start_page_blocked = _blocked_status(response) is not None
 
     async def delete_context(self) -> None:
         if self.context_id is not None and self._delete_context is not None:
@@ -288,7 +331,8 @@ async def _install_page_events(session: PlaywrightRecordingSession, page: Any, o
 
     def on_console(message: Any) -> None:
         event = console_event(message)
-        if event is None:
+        # Browser-only status comes from Python response/load listeners, never page JavaScript.
+        if event is None or event.get("type") in {"page_blocked", "page_loaded"}:
             return
         # Signing in to Google is not a step an agent repeats: it uses the agent's connected Google account.
         if is_google_sign_in(page.url):
@@ -302,10 +346,21 @@ async def _install_page_events(session: PlaywrightRecordingSession, page: Any, o
             return
         session.track(on_event({"type": "navigation", "url": frame.url}))
 
+    def on_response(response: Any) -> None:
+        if not response.request.is_navigation_request() or response.frame != page.main_frame:
+            return
+        session.note_main_response(page, response.status)
+        # A site can let the first document through and block the one its challenge script requests next.
+        if _blocked_status(response) is not None and is_public_http_url(response.url):
+            session.start_page_blocked = True
+            session.track(on_event({"type": "page_blocked", "status": response.status}))
+
     def on_page_loaded() -> None:
-        if not is_public_http_url(page.url) or is_google_sign_in(page.url):
+        # A 403 or similar block page renders like any other, but it is not the page the person asked for.
+        if not is_public_http_url(page.url) or is_google_sign_in(page.url) or session.page_blocked(page):
             return
         session.start_page_failed = False
+        session.start_page_blocked = False
         session.track(on_event({"type": "page_loaded", "url": page.url}))
 
     def on_download(download: Any) -> None:
@@ -315,6 +370,7 @@ async def _install_page_events(session: PlaywrightRecordingSession, page: Any, o
 
     page.on("console", on_console)
     page.on("framenavigated", on_navigation)
+    page.on("response", on_response)
     page.on("domcontentloaded", on_page_loaded)
     # The live view shows no download bar, so the recorder reports each download to the person demonstrating.
     page.on("download", on_download)
@@ -407,10 +463,16 @@ class BrowserbaseProvider:
         project_id: str | None = None,
         region: str = "eu-central-1",
         timeout_seconds: int = 900,
+        proxy_country: str | None = None,
     ) -> None:
         self.project_id = project_id or os.environ.get("BROWSERBASE_PROJECT_ID")
         self.region = region
         self.timeout_seconds = min(max(timeout_seconds, 1), 900)
+        # Where the residential proxy exits for the retry after a blocked start page. A bad value fails here,
+        # at startup, rather than on the first blocked site.
+        self.proxy_country = country_code(
+            proxy_country or os.environ.get("BROWSERBASE_PROXY_COUNTRY") or DEFAULT_PROXY_COUNTRY
+        )
 
     async def create(
         self,
@@ -419,19 +481,48 @@ class BrowserbaseProvider:
         *,
         context_id: str | None = None,
         login: RecordingLogin | None = None,
+        country: str | None = None,
     ) -> BrowserSession:
         if not is_public_http_url(start_url):
             raise ValueError("The recording URL must be a public HTTP(S) URL.")
         if not self.project_id:
             raise RuntimeError("BROWSERBASE_PROJECT_ID is required.")
+        retry_country = country_code(country) if country is not None else self.proxy_country
+        try:
+            # A borrowed sign-in context is not retried: Browserbase lets one session hold a context at a time,
+            # and the released session may still be shutting down when the retry would open it again.
+            return await self._start(
+                start_url, on_event, saved_context_id=context_id, login=login, retry_when_blocked=context_id is None
+            )
+        except _StartPageBlocked as blocked:
+            logger.warning("recording_start_page_blocked status=%s network=direct", blocked.status)
+        return await self._start(
+            start_url, on_event, saved_context_id=context_id, login=login, proxy_country=retry_country
+        )
 
+    async def _start(
+        self,
+        start_url: str,
+        on_event: EventSink,
+        *,
+        saved_context_id: str | None,
+        login: RecordingLogin | None,
+        proxy_country: str | None = None,
+        retry_when_blocked: bool = False,
+    ) -> PlaywrightRecordingSession:
+        """One startup attempt: a Browserbase session, the attached browser and the start page navigation.
+
+        With ``proxy_country`` the session's traffic exits through Browserbase's residential proxy in that
+        country. With ``retry_when_blocked`` a start page answered with a block status tears the attempt down
+        (the same cleanup as any startup failure) and raises ``_StartPageBlocked`` for the caller to retry.
+        """
         from browserbase import AsyncBrowserbase
 
         client = AsyncBrowserbase()
-        # Save demonstrated website sign-ins into the authorized credential's shared context. It remains
-        # borrowed, never deleted here or by the service. Only a context created here is the session's own.
-        saved_context_id = context_id
-        context_id = None
+        network: Network = "direct" if proxy_country is None else "proxy"
+        # A saved sign-in's context persists demonstrated website sign-ins but remains borrowed: only a
+        # context this call creates is owned and may be deleted by this provider or the service.
+        context_id: str | None = None
         created: Any | None = None
         runtime: Any | None = None
         browser: Any | None = None
@@ -453,18 +544,23 @@ class BrowserbaseProvider:
                 context_id = (await client.contexts.create(project_id=self.project_id)).id
                 stage = "create_session"
             browser_context = {"id": saved_context_id or context_id, "persist": True}
-            created = await client.sessions.create(
-                project_id=self.project_id,
-                keep_alive=True,
-                region=self.region,
-                api_timeout=max(self.timeout_seconds, 60),
-                browser_settings={
+            session_settings: dict[str, Any] = {
+                "project_id": self.project_id,
+                "keep_alive": True,
+                "region": self.region,
+                "api_timeout": max(self.timeout_seconds, 60),
+                "browser_settings": {
                     "viewport": {"width": 1280, "height": 720},
                     "record_session": False,
                     "log_session": False,
+                    # A person is in the live view and solves challenges; Browserbase's solver would fight them.
+                    "solve_captchas": False,
                     "context": browser_context,
                 },
-            )
+            }
+            if proxy_country is not None:
+                session_settings["proxies"] = [{"type": "browserbase", "geolocation": {"country": proxy_country}}]
+            created = await client.sessions.create(**session_settings)
             stage = "debug_session"
             debug = await client.sessions.debug(created.id)
             stage = "start_runtime"
@@ -488,6 +584,8 @@ class BrowserbaseProvider:
                 context_id=context_id,
                 delete_context=delete_context,
                 login=login,
+                network=network,
+                proxy_country=proxy_country,
             )
             context = contexts[0]
             await _configure_context(context, on_event)
@@ -506,7 +604,9 @@ class BrowserbaseProvider:
             from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
             try:
-                await page.goto(start_url, wait_until="domcontentloaded", timeout=START_PAGE_TIMEOUT_SECONDS * 1000)
+                response = await page.goto(
+                    start_url, wait_until="domcontentloaded", timeout=START_PAGE_ATTEMPT_TIMEOUT_SECONDS * 1000
+                )
             except PlaywrightTimeoutError:
                 raise RecordingStartTimeout("The recording start page did not load in time.") from None
             except PlaywrightError as error:
@@ -514,10 +614,19 @@ class BrowserbaseProvider:
                 # carry the connect URL.
                 logger.warning("recording_start_page_failed error_type=%s", type(error).__name__)
                 session.start_page_failed = True
+            else:
+                blocked = _blocked_status(response)
+                if blocked is not None and retry_when_blocked:
+                    raise _StartPageBlocked(blocked)
+                if blocked is not None:
+                    # The browser stays up on the block page; the person may open another page.
+                    logger.warning("recording_start_page_blocked status=%s network=%s", blocked, network)
+                    session.start_page_blocked = True
             return session
         except BaseException as error:
-            # Only the stage and type: provider messages can carry the connect URL and its signing key.
-            logger.warning("recording_browser_start_failed stage=%s error_type=%s", stage, type(error).__name__)
+            if not isinstance(error, _StartPageBlocked):
+                # Only the stage and type: provider messages can carry the connect URL and its signing key.
+                logger.warning("recording_browser_start_failed stage=%s error_type=%s", stage, type(error).__name__)
             timed_out = isinstance(error, TimeoutError)
             cleanup_pending = False
             if browser is not None:
@@ -578,6 +687,7 @@ class LocalPlaywrightProvider:
         *,
         context_id: str | None = None,
         login: RecordingLogin | None = None,
+        country: str | None = None,
     ) -> BrowserSession:
         if not is_public_http_url(start_url):
             raise ValueError("The recording URL must be a public HTTP(S) URL.")
@@ -597,9 +707,12 @@ class LocalPlaywrightProvider:
         from playwright.async_api import Error as PlaywrightError
 
         try:
-            await page.goto(start_url, wait_until="domcontentloaded")
+            response = await page.goto(start_url, wait_until="domcontentloaded")
         except PlaywrightError as error:
             logger.warning("recording_start_page_failed error_type=%s", type(error).__name__)
             session.start_page_failed = True
+        else:
+            # No proxy to retry over locally; the block is only reported.
+            session.start_page_blocked = _blocked_status(response) is not None
         self.last_session = session
         return session

@@ -85,6 +85,9 @@ class Recording:
     downloads: list[RecordedDownload] = field(default_factory=list)
     organizing: bool = False
     start_page_failed: bool = False
+    start_page_blocked: bool = False
+    network: Literal["direct", "proxy"] = "direct"
+    proxy_country: str | None = None
     # Sign-in values typed during the demonstration, by kind. Never part of steps, responses or logs;
     # handed to the host once on stop, then forgotten.
     credentials: dict[str, str] = field(default_factory=dict, repr=False)
@@ -142,6 +145,7 @@ class RecordingService:
         context_id: str | None = None,
         login: RecordingLogin | None = None,
         website_session: RecordingWebsiteSession | None = None,
+        country: str | None = None,
     ) -> Recording:
         """Start a recording, reserving a borrowed context separately from cleanup/claim ownership."""
         if self._closed:
@@ -183,9 +187,15 @@ class RecordingService:
 
         try:
             async with asyncio.timeout(CREATE_TIMEOUT_SECONDS) as deadline:
-                browser = await self.provider.create(start_url, on_event, context_id=context_id, login=login)
+                browser = await self.provider.create(
+                    start_url, on_event, context_id=context_id, login=login, country=country
+                )
             if await self._attach_browser(recording, browser):
                 raise RuntimeError("Recording stopped before the browser became available.")
+            recording.network = getattr(browser, "network", "direct")
+            recording.proxy_country = getattr(browser, "proxy_country", None)
+            # Assigned, not or-ed: a blocked attempt the provider already discarded may have reported its block.
+            recording.start_page_blocked = bool(getattr(browser, "start_page_blocked", False))
             # Browser events are authoritative, including redirects and actions during startup.
             # Seed the configured URL only when startup succeeded and no steps were captured.
             if getattr(browser, "start_page_failed", False):
@@ -239,6 +249,8 @@ class RecordingService:
             logger.warning("recording_navigate_failed error_type=%s", type(error).__name__)
             raise PageNotOpened("The page could not be opened.") from None
         recording.start_page_failed = False
+        # The opened page can itself be a block page; the session knows from its response status.
+        recording.start_page_blocked = bool(getattr(recording.browser, "start_page_blocked", False))
         return recording
 
     async def stop(self, recording_id: str, owner: RecordingOwner) -> Recording | None:
@@ -282,6 +294,10 @@ class RecordingService:
                 url = event.get("url")
                 if isinstance(url, str) and is_public_http_url(url) and not is_google_sign_in(url):
                     recording.start_page_failed = False
+                    recording.start_page_blocked = False
+                return
+            if event.get("type") == "page_blocked":
+                recording.start_page_blocked = True
                 return
             if recording.blocked_reason is not None:
                 return
@@ -689,6 +705,9 @@ class RecordingService:
             downloads=recording.downloads,
             organizing=recording.organizing,
             start_page_failed=recording.start_page_failed,
+            start_page_blocked=recording.start_page_blocked,
+            network=recording.network,
+            proxy_country=recording.proxy_country,
             google=None if recording.status == "recording" else RecordingGoogle(signed_in=recording.google_signed_in),
         )
 
