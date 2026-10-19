@@ -333,6 +333,7 @@ def test_page_events_never_carry_browser_only_events() -> None:
     }
     assert page_event({"type": "sign_in_value", "value": "password", "secret": "forged"}) == {}
     assert page_event({"type": "page_loaded", "url": "https://example.com/login"}) == {}
+    assert page_event({"type": "page_blocked", "status": 403}) == {}
 
 
 @pytest.mark.asyncio

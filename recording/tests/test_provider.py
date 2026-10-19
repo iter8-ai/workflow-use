@@ -1220,6 +1220,39 @@ EE_PROXY = [{"type": "browserbase", "geolocation": {"country": "EE"}}]
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "blocked"),
+    [(403, True), (429, True), (503, True), (200, False)],
+    ids=["forbidden", "rate_limited", "unavailable", "loaded"],
+)
+async def test_navigate_keeps_main_document_block_status_when_interruption_lands(
+    monkeypatch: pytest.MonkeyPatch, status: int, blocked: bool
+) -> None:
+    from playwright.async_api import Error as PlaywrightError
+
+    runtimes, _ = _attempts(monkeypatch, [200])
+    session = await BrowserbaseProvider(project_id="project-1").create("https://example.com", _ignore_event)
+    page = runtimes[0]._browser.contexts[0]._page
+    page.status = status
+    goto = page.goto
+
+    async def interrupted_goto(url: str, **kwargs: Any) -> None:
+        response = await goto(url, **kwargs)
+        session.note_main_response(page, response.status)
+        page.url = url
+        raise PlaywrightError(
+            'Page.goto: Navigation is interrupted by another navigation to "chrome-error://chromewebdata/"'
+        )
+
+    page.goto = interrupted_goto
+    await session.navigate("https://example.com/login")
+
+    assert page.goto_urls == ["https://example.com", "https://example.com/login"]
+    assert session.start_page_blocked is blocked
+    await session.close()
+
+
+@pytest.mark.asyncio
 async def test_a_blocked_start_page_is_retried_once_over_a_geolocated_proxy(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -1268,6 +1301,14 @@ async def test_a_start_page_blocked_over_the_proxy_too_stays_open_and_is_marked_
 
     # The next page the person opens clears the block, unless that page is blocked too.
     page = runtimes[1]._browser.contexts[0]._page
+    goto = page.goto
+
+    async def responding_goto(url: str, **kwargs: Any) -> Any:
+        response = await goto(url, **kwargs)
+        session.note_main_response(page, response.status)
+        return response
+
+    page.goto = responding_goto
     await session.navigate("https://example.com/login")
     assert session.start_page_blocked is True
     page.status = 200

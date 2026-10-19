@@ -266,10 +266,9 @@ class PlaywrightRecordingSession:
             page = await context.new_page()
         from playwright.async_api import Error as PlaywrightError
 
-        response: Any = None
         for attempt in range(NAVIGATE_ATTEMPTS):
             try:
-                response = await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+                await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
                 break
             except PlaywrightError as error:
                 # Right after a page fails to load, Chromium is still committing its error page, and that
@@ -285,7 +284,7 @@ class PlaywrightRecordingSession:
                 if attempt == NAVIGATE_ATTEMPTS - 1:
                     raise
         self.start_page_failed = False
-        self.start_page_blocked = _blocked_status(response) is not None
+        self.start_page_blocked = self.page_blocked(page)
 
     async def delete_context(self) -> None:
         if self.context_id is not None and self._delete_context is not None:
