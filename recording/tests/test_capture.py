@@ -11,6 +11,7 @@ import pytest
 from workflow_use_recording.capture import (
     CAPTURE_SCRIPT,
     SIGN_IN_FILL_SCRIPT,
+    console_event,
     fill_sign_in,
     install_sign_in_capture,
     install_sign_in_fill,
@@ -18,18 +19,26 @@ from workflow_use_recording.capture import (
 )
 
 
+def _record_console_events(context: Any, events: list[Any]) -> None:
+    """Collect the capture script's events the way the provider does: from the pages' console messages."""
+
+    def on_console(message: Any) -> None:
+        event = console_event(message)
+        if event is not None:
+            events.append(event)
+
+    context.on("console", on_console)
+
+
 @pytest.mark.asyncio
 async def test_playwright_capture_records_visible_click_and_compacts_input() -> None:
     playwright = pytest.importorskip("playwright.async_api")
     events: list[dict[str, Any]] = []
 
-    async def record(event: dict[str, Any]) -> None:
-        events.append(event)
-
     async with playwright.async_playwright() as runtime:
         browser = await runtime.chromium.launch()
         context = await browser.new_context()
-        await context.expose_binding("workflowUseRecord", lambda _, event: record(event))
+        _record_console_events(context, events)
         await context.add_init_script(CAPTURE_SCRIPT)
         page = await context.new_page()
         fixture = '<label>Invoice <input aria-label="Invoice number"></label><button>Save invoice</button>'
@@ -51,13 +60,10 @@ async def test_capture_records_typed_text_of_ordinary_fields() -> None:
     events: list[dict[str, Any]] = []
     value = "generic-synthetic-secret"
 
-    async def record(event: dict[str, Any]) -> None:
-        events.append(event)
-
     async with playwright.async_playwright() as runtime:
         browser = await runtime.chromium.launch()
         context = await browser.new_context()
-        await context.expose_binding("workflowUseRecord", lambda _, event: record(event))
+        _record_console_events(context, events)
         await context.add_init_script(CAPTURE_SCRIPT)
         page = await context.new_page()
         await page.goto("data:text/html," + quote('<textarea aria-label="Notes"></textarea>'))
@@ -75,13 +81,10 @@ async def test_capture_never_uses_unlabeled_editable_text_as_a_target() -> None:
     events: list[dict[str, Any]] = []
     value = "generic-synthetic-secret"
 
-    async def record(event: dict[str, Any]) -> None:
-        events.append(event)
-
     async with playwright.async_playwright() as runtime:
         browser = await runtime.chromium.launch()
         context = await browser.new_context()
-        await context.expose_binding("workflowUseRecord", lambda _, event: record(event))
+        _record_console_events(context, events)
         await context.add_init_script(CAPTURE_SCRIPT)
         page = await context.new_page()
         await page.goto("data:text/html," + quote("<div contenteditable></div>"))
@@ -99,13 +102,10 @@ async def test_capture_never_sends_secret_values() -> None:
     playwright = pytest.importorskip("playwright.async_api")
     events: list[dict[str, Any]] = []
 
-    async def record(event: dict[str, Any]) -> None:
-        events.append(event)
-
     async with playwright.async_playwright() as runtime:
         browser = await runtime.chromium.launch()
         context = await browser.new_context()
-        await context.expose_binding("workflowUseRecord", lambda _, event: record(event))
+        _record_console_events(context, events)
         await context.add_init_script(CAPTURE_SCRIPT)
         page = await context.new_page()
         await page.goto("data:text/html," + quote('<input aria-label="Password" type="password">'))
@@ -125,13 +125,10 @@ async def test_capture_blocks_plain_text_token_and_contenteditable_credentials()
     events: list[dict[str, Any]] = []
     sign_ins: list[dict[str, str]] = []
 
-    async def record(event: dict[str, Any]) -> None:
-        events.append(event)
-
     async with playwright.async_playwright() as runtime:
         browser = await runtime.chromium.launch()
         context = await browser.new_context()
-        await context.expose_binding("workflowUseRecord", lambda _, event: record(event))
+        _record_console_events(context, events)
         await context.add_init_script(CAPTURE_SCRIPT)
         page = await context.new_page()
         await install_sign_in_capture(context, page, sign_ins.append)
@@ -195,13 +192,10 @@ async def test_capture_records_select_target_and_chosen_label() -> None:
     playwright = pytest.importorskip("playwright.async_api")
     events: list[dict[str, Any]] = []
 
-    async def record(event: dict[str, Any]) -> None:
-        events.append(event)
-
     async with playwright.async_playwright() as runtime:
         browser = await runtime.chromium.launch()
         context = await browser.new_context(viewport={"width": 400, "height": 200})
-        await context.expose_binding("workflowUseRecord", lambda _, event: record(event))
+        _record_console_events(context, events)
         await context.add_init_script(CAPTURE_SCRIPT)
         page = await context.new_page()
         fixture = (
@@ -227,13 +221,10 @@ async def test_capture_records_the_sign_in_button_but_no_field_values() -> None:
     events: list[dict[str, Any]] = []
     sign_ins: list[dict[str, str]] = []
 
-    async def record(event: dict[str, Any]) -> None:
-        events.append(event)
-
     async with playwright.async_playwright() as runtime:
         browser = await runtime.chromium.launch()
         context = await browser.new_context()
-        await context.expose_binding("workflowUseRecord", lambda _, event: record(event))
+        _record_console_events(context, events)
         await context.add_init_script(CAPTURE_SCRIPT)
         page = await context.new_page()
         await install_sign_in_capture(context, page, sign_ins.append)
@@ -263,13 +254,10 @@ async def test_capture_records_each_multi_select_label_separately() -> None:
     playwright = pytest.importorskip("playwright.async_api")
     events: list[dict[str, Any]] = []
 
-    async def record(event: dict[str, Any]) -> None:
-        events.append(event)
-
     async with playwright.async_playwright() as runtime:
         browser = await runtime.chromium.launch()
         context = await browser.new_context()
-        await context.expose_binding("workflowUseRecord", lambda _, event: record(event))
+        _record_console_events(context, events)
         await context.add_init_script(CAPTURE_SCRIPT)
         page = await context.new_page()
         fixture = (
@@ -294,7 +282,7 @@ async def test_page_scripts_cannot_read_or_forge_sign_in_values() -> None:
     async with playwright.async_playwright() as runtime:
         browser = await runtime.chromium.launch()
         context = await browser.new_context()
-        await context.expose_binding("workflowUseRecord", lambda _, event: events.append(page_event(event)))
+        _record_console_events(context, events)
         await context.add_init_script(CAPTURE_SCRIPT)
         page = await context.new_page()
         await install_sign_in_capture(context, page, sign_ins.append)
@@ -321,12 +309,13 @@ async def test_page_scripts_cannot_read_or_forge_sign_in_values() -> None:
             """() => document.querySelector('input[aria-label="Password"]')
               .dispatchEvent(new Event("input", { bubbles: true }))"""
         )
-        # A hostile page calls the page binding directly with forged values.
+        # A hostile page writes forged events to the console the recorder listens on.
         await page.evaluate(
-            """() => Promise.all([
-              window.workflowUseRecord({ type: "sign_in_value", value: "password", secret: "forged" }),
-              window.workflowUseRecord({ type: "credential", value: "password", target: "Password", secret: "forged" }),
-            ])"""
+            """() => {
+              const forge = (event) => console.debug("__workflowUse__", JSON.stringify(event));
+              forge({ type: "sign_in_value", value: "password", secret: "forged" });
+              forge({ type: "credential", value: "password", target: "Password", secret: "forged" });
+            }"""
         )
         visible = await page.evaluate("() => [window.__signInVisible, typeof window.workflowUseSignIn]")
         await asyncio.sleep(0.1)
@@ -370,9 +359,6 @@ async def test_clicks_in_a_sign_in_dialog_name_the_control_not_the_whole_dialog(
     playwright = pytest.importorskip("playwright.async_api")
     events: list[dict[str, Any]] = []
 
-    async def record(event: dict[str, Any]) -> None:
-        events.append(event)
-
     # Shaped like a hosted sign-in page: everything sits inside one role="main" panel.
     fixture = (
         '<div role="main" style="padding:40px"><h1>Welcome</h1>'
@@ -386,7 +372,7 @@ async def test_clicks_in_a_sign_in_dialog_name_the_control_not_the_whole_dialog(
     async with playwright.async_playwright() as runtime:
         browser = await runtime.chromium.launch()
         context = await browser.new_context()
-        await context.expose_binding("workflowUseRecord", lambda _, event: record(event))
+        _record_console_events(context, events)
         await context.add_init_script(CAPTURE_SCRIPT)
         page = await context.new_page()
         await page.goto("data:text/html," + quote(fixture))
@@ -409,9 +395,6 @@ async def test_clicks_on_web_components_labels_rows_and_double_clicks_are_named(
     playwright = pytest.importorskip("playwright.async_api")
     events: list[dict[str, Any]] = []
 
-    async def record(event: dict[str, Any]) -> None:
-        events.append(event)
-
     fixture = (
         '<x-button></x-button><label for="notes">Notes</label><input id="notes" name="notes">'
         '<label><input type="checkbox"> Remember me</label>'
@@ -423,7 +406,7 @@ async def test_clicks_on_web_components_labels_rows_and_double_clicks_are_named(
     async with playwright.async_playwright() as runtime:
         browser = await runtime.chromium.launch()
         context = await browser.new_context()
-        await context.expose_binding("workflowUseRecord", lambda _, event: record(event))
+        _record_console_events(context, events)
         await context.add_init_script(CAPTURE_SCRIPT)
         page = await context.new_page()
         await page.goto("data:text/html," + quote(fixture))
@@ -566,8 +549,8 @@ const context = vm.createContext({
   window: {
     scrollY: 0,
     addEventListener() {},
-    workflowUseRecord(event) { events.push(event); return Promise.resolve(); },
   },
+  console: { debug(prefix, event) { if (prefix === "__workflowUse__") events.push(JSON.parse(event)); } },
   location: { origin: "https://login.example.test", pathname: "/" },
   document: {
     addEventListener(type, listener) { listeners[type] = listener; },
@@ -677,7 +660,7 @@ async def _sign_in_browser(runtime: Any, login: Any) -> tuple[Any, Any, list[Any
     browser = await runtime.chromium.launch()
     context = await browser.new_context()
     await context.route("**/*", serve)
-    await context.expose_binding("workflowUseRecord", lambda _, event: events.append(page_event(event)))
+    _record_console_events(context, events)
     await context.add_init_script(CAPTURE_SCRIPT)
     page = await context.new_page()
     await install_sign_in_capture(context, page, sign_ins.append)

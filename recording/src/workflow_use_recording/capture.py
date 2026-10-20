@@ -72,6 +72,9 @@ _FIELD_CLASSIFICATION_SCRIPT = r"""
 """.lstrip("\n")
 
 
+# First console argument of every recorded page event; the second is the event as one JSON object.
+CONSOLE_PREFIX = "__workflowUse__"
+
 CAPTURE_SCRIPT = r"""
 (() => {
   if (window.__workflowUseRecordingInstalled) return;
@@ -121,10 +124,9 @@ CAPTURE_SCRIPT = r"""
     const peers = Array.from(document.querySelectorAll(node.tagName));
     return `${location.origin}${location.pathname}|${node.tagName}:${peers.indexOf(node)}`;
   };
-  const emit = (event) => {
-    if (typeof window.workflowUseRecord !== "function") return;
-    void window.workflowUseRecord(event).catch(() => undefined);
-  };
+  // Events travel in a console message, not a Playwright binding: a binding leaves
+  // `__playwright__binding__` globals on the page, which Cloudflare's bot checks detect and block.
+  const emit = (event) => console.debug(__CONSOLE_PREFIX__, JSON.stringify(event));
   document.addEventListener("click", (event) => {
     const path = clickPath(event);
     const control = path.find((node) => node.matches(CLICKABLE)) || null;
@@ -186,7 +188,9 @@ CAPTURE_SCRIPT = r"""
     emit({ type: "scroll", value: direction });
   }, true);
 })();
-""".replace("  __FIELD_CLASSIFICATION__\n", _FIELD_CLASSIFICATION_SCRIPT)
+""".replace("  __FIELD_CLASSIFICATION__\n", _FIELD_CLASSIFICATION_SCRIPT).replace(
+    "__CONSOLE_PREFIX__", json.dumps(CONSOLE_PREFIX)
+)
 
 
 SIGN_IN_WORLD = "workflow-use-sign-in"
@@ -293,6 +297,30 @@ def install_sign_in_fill(
     page.on("framenavigated", lambda frame: track(fill_sign_in(frame, login())))
     for frame in page.frames:
         track(fill_sign_in(frame, login()))
+
+
+def console_event(message: Any) -> dict[str, Any] | None:
+    """Turn a page's console message into a recorder event, or ``None`` for any other console output.
+
+    Page scripts can write such messages too, so nothing arriving this way may carry a sign-in value.
+    """
+    try:
+        if message.type != "debug" or len(message.args) != 2:
+            return None
+        text = message.text
+    except Exception:
+        return None
+    prefix = f"{CONSOLE_PREFIX} "
+    if not isinstance(text, str) or not text.startswith(prefix):
+        return None
+    try:
+        event = json.loads(text[len(prefix) :])
+    except ValueError:
+        return None
+    if not isinstance(event, dict):
+        return None
+    filtered = page_event(event)
+    return filtered if isinstance(filtered, dict) else None
 
 
 def page_event(event: object) -> object:
