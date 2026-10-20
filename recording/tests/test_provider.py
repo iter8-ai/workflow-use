@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from types import ModuleType, SimpleNamespace
 from typing import Any
@@ -33,9 +34,6 @@ class FakeContext:
         self._page = page
 
     async def route(self, _pattern: str, _handler: Any) -> None:
-        pass
-
-    async def expose_binding(self, _name: str, _callback: Any) -> None:
         pass
 
     async def add_init_script(self, _script: str) -> None:
@@ -956,6 +954,88 @@ async def test_only_a_loaded_public_main_page_clears_the_start_failure(monkeypat
     await asyncio.gather(*session._tasks)
     assert session.start_page_failed is False
     assert events[-1] == {"type": "page_loaded", "url": "https://example.com/login"}
+
+
+class _ConsoleMessage(SimpleNamespace):
+    """What Playwright hands a ``page.on("console")`` listener: the message type, text and argument handles."""
+
+    def __init__(self, *args: Any, type: str = "debug") -> None:
+        super().__init__(type=type, args=list(args), text=" ".join(args))
+
+
+@pytest.mark.asyncio
+async def test_a_console_message_with_the_recorder_prefix_becomes_a_step_and_garbage_is_ignored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from workflow_use_recording import provider
+
+    async def no_capture(*_args: Any) -> None:
+        pass
+
+    monkeypatch.setattr(provider, "install_sign_in_capture", no_capture)
+    events: list[dict[str, Any]] = []
+
+    async def record(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    class Page(FakePage):
+        def __init__(self) -> None:
+            super().__init__()
+            self.handlers: dict[str, Any] = {}
+            self.context = object()
+            self.url = "https://example.com/login"
+
+        def on(self, event: str, callback: Any) -> None:
+            self.handlers[event] = callback
+
+    session = provider.PlaywrightRecordingSession(browser=object(), runtime=object(), live_view_url=None)
+    page = Page()
+    await provider._install_page_events(session, page, record)
+    on_console = page.handlers["console"]
+
+    on_console(_ConsoleMessage("__workflowUse__", json.dumps({"type": "click", "target": "Sign in"})))
+    # Malformed or foreign console output: not JSON, not an object, the wrong prefix, no prefix, extra arguments,
+    # another console level. None of it is a step.
+    on_console(_ConsoleMessage("__workflowUse__", "{not json"))
+    on_console(_ConsoleMessage("__workflowUse__", json.dumps(["click"])))
+    on_console(_ConsoleMessage("__workflowUse__", json.dumps("click")))
+    on_console(_ConsoleMessage("__workflowUse__"))
+    on_console(_ConsoleMessage("__workflowUse__", json.dumps({"type": "click"}), "extra"))
+    on_console(_ConsoleMessage("__workflowUse__", json.dumps({"type": "click"}), type="log"))
+    on_console(_ConsoleMessage("__workflowUseX__", json.dumps({"type": "click"})))
+    on_console(_ConsoleMessage(json.dumps({"type": "click", "target": "Plain log"})))
+    on_console(_ConsoleMessage("Uncaught TypeError: x is not a function", type="error"))
+    # A page can forge browser-only events; they arrive empty, as they did through the binding.
+    on_console(_ConsoleMessage("__workflowUse__", json.dumps({"type": "page_loaded", "url": "https://x.test"})))
+    await asyncio.gather(*session._tasks)
+    assert events == [{"type": "click", "target": "Sign in"}, {}]
+
+    # Nothing demonstrated on Google's own sign-in page is a step.
+    page.url = "https://accounts.google.com/signin"
+    on_console(_ConsoleMessage("__workflowUse__", json.dumps({"type": "click", "target": "Next"})))
+    await asyncio.gather(*session._tasks)
+    assert len(events) == 2
+
+
+@pytest.mark.asyncio
+async def test_the_recording_context_exposes_no_playwright_binding() -> None:
+    """A Playwright binding leaves ``__playwright__binding__`` globals on every page; Cloudflare blocks them."""
+    from workflow_use_recording import provider
+
+    async def record(_event: dict[str, Any]) -> None:
+        pass
+
+    calls: list[str] = []
+
+    class Context:
+        def __getattr__(self, name: str) -> Any:
+            async def call(*_args: Any, **_kwargs: Any) -> None:
+                calls.append(name)
+
+            return call
+
+    await provider._configure_context(Context(), record)
+    assert calls == ["route", "add_init_script"]
 
 
 @pytest.mark.asyncio

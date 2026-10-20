@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import uuid4
 
-from .capture import CAPTURE_SCRIPT, install_sign_in_capture, install_sign_in_fill, page_event
+from .capture import CAPTURE_SCRIPT, console_event, install_sign_in_capture, install_sign_in_fill
 from .security import (
     has_google_session,
     is_google_sign_in,
@@ -214,16 +214,9 @@ async def _configure_context(context: Any, on_event: EventSink) -> None:
             return
         await route.continue_()
 
-    async def record(source: dict[str, Any], event: object) -> None:
-        # Signing in to Google is not a step an agent repeats: it uses the agent's connected Google account.
-        frame = source.get("frame")
-        if frame is not None and is_google_sign_in(frame.url):
-            return
-        await on_event(page_event(event))
-
     await context.route("**/*", guarded_route)
-    # Page scripts can call this binding too, so nothing arriving through it may carry a sign-in value.
-    await context.expose_binding("workflowUseRecord", record)
+    # No expose_binding here: it leaves `__playwright__binding__` globals on every page, and Cloudflare's bot
+    # management blocks the site's own requests once it sees them. Page events arrive as console messages.
     await context.add_init_script(CAPTURE_SCRIPT)
 
 
@@ -231,9 +224,18 @@ async def _install_page_events(session: PlaywrightRecordingSession, page: Any, o
     if page.is_closed():
         return
 
+    def on_console(message: Any) -> None:
+        event = console_event(message)
+        if event is None:
+            return
+        # Signing in to Google is not a step an agent repeats: it uses the agent's connected Google account.
+        if is_google_sign_in(page.url):
+            return
+        session.track(on_event(event))
+
     def on_navigation(frame: Any) -> None:
         # Embedded documents load on their own; they are not instructions to navigate the browser.
-        # Their demonstrated interactions still arrive through the context's capture binding.
+        # Their demonstrated interactions still arrive as console messages of the page that embeds them.
         if frame != page.main_frame or not is_public_http_url(frame.url) or is_google_sign_in(frame.url):
             return
         session.track(on_event({"type": "navigation", "url": frame.url}))
@@ -249,6 +251,7 @@ async def _install_page_events(session: PlaywrightRecordingSession, page: Any, o
             return
         session.watch(_report_download(download, on_event))
 
+    page.on("console", on_console)
     page.on("framenavigated", on_navigation)
     page.on("domcontentloaded", on_page_loaded)
     # The live view shows no download bar, so the recorder reports each download to the person demonstrating.
