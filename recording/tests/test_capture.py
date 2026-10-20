@@ -495,6 +495,44 @@ assert.equal(queries, 1);
     subprocess.run(["node", "-e", harness], input=SIGN_IN_FILL_SCRIPT, text=True, check=True, capture_output=True)
 
 
+def test_capture_events_reach_original_console_when_page_replaces_debug() -> None:
+    harness = r"""
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const vm = require("node:vm");
+const capture = fs.readFileSync(0, "utf8");
+const listeners = {};
+const original = [];
+const intercepted = [];
+const console = {
+  debug(prefix, event) {
+    assert.equal(this, console);
+    original.push([prefix, event]);
+  },
+};
+const context = vm.createContext({
+  console,
+  window: { scrollY: 0, addEventListener() {} },
+  document: { addEventListener(type, listener) { listeners[type] = listener; } },
+  Element: class {},
+  HTMLInputElement: class {},
+  HTMLTextAreaElement: class {},
+  HTMLElement: class {},
+});
+vm.runInContext(capture, context);
+console.debug = () => {};
+listeners.keydown({ target: null, key: "Enter" });
+console.debug = (...args) => intercepted.push(args);
+listeners.keydown({ target: null, key: "Escape" });
+assert.deepEqual(original, [
+  ["__workflowUse__", '{"type":"key_press","target":"","value":"Enter"}'],
+  ["__workflowUse__", '{"type":"key_press","target":"","value":"Escape"}'],
+]);
+assert.deepEqual(intercepted, []);
+"""
+    subprocess.run(["node", "-e", harness], input=CAPTURE_SCRIPT, text=True, check=True, capture_output=True)
+
+
 def test_saved_sign_in_fills_only_identified_username_fields() -> None:
     harness = r"""
 const assert = require("node:assert/strict");

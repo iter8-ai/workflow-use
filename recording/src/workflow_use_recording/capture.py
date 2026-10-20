@@ -126,7 +126,8 @@ CAPTURE_SCRIPT = r"""
   };
   // Events travel in a console message, not a Playwright binding: a binding leaves
   // `__playwright__binding__` globals on the page, which Cloudflare's bot checks detect and block.
-  const emit = (event) => console.debug(__CONSOLE_PREFIX__, JSON.stringify(event));
+  const debug = console.debug.bind(console);
+  const emit = (event) => debug(__CONSOLE_PREFIX__, JSON.stringify(event));
   document.addEventListener("click", (event) => {
     const path = clickPath(event);
     const control = path.find((node) => node.matches(CLICKABLE)) || null;
