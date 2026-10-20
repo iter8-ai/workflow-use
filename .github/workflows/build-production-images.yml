@@ -150,6 +150,11 @@ jobs:
           SOURCE_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
+          current_main_sha="$(git ls-remote --exit-code origin refs/heads/main | cut -f1)"
+          if [ "$SOURCE_SHA" != "$current_main_sha" ]; then
+            echo "::notice::Skipping deploy dispatch for $SOURCE_SHA because main is $current_main_sha"
+            exit 0
+          fi
           # Same contract as commercials-flow-editor deploy_editor.yml: the
           # infrastructure deploy-service.yml workflow listens for
           # repository_dispatch type "deploy-services" and rolls the Helm
