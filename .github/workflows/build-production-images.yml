@@ -39,6 +39,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Resolve immutable image tag
         id: image
@@ -150,9 +152,11 @@ jobs:
           SOURCE_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          current_main_sha="$(git ls-remote --exit-code origin refs/heads/main | cut -f1)"
-          if [ "$SOURCE_SHA" != "$current_main_sha" ]; then
-            echo "::notice::Skipping deploy dispatch for $SOURCE_SHA because main is $current_main_sha"
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$SOURCE_SHA" FETCH_HEAD
+          later_change="$(git log --first-parent --full-history --diff-merges=first-parent -1 --format=%H "$SOURCE_SHA..FETCH_HEAD" -- recording/ .github/workflows/build-production-images.yml)"
+          if [ -n "$later_change" ]; then
+            echo "::notice::Skipping deploy dispatch for $SOURCE_SHA because $later_change changed recording or its workflow"
             exit 0
           fi
           # Same contract as commercials-flow-editor deploy_editor.yml: the
