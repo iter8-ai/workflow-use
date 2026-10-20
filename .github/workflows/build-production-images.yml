@@ -13,7 +13,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: workflow-use-production-images-${{ github.sha }}
+  group: workflow-use-production-images
   cancel-in-progress: false
 
 env:
