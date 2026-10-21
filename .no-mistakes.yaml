@@ -15,10 +15,13 @@ test:
     install Playwright browsers (`playwright install` in any form), never use Browserbase, and
     never call the deployed recorder; the gate's browser is the installed Google Chrome, driven
     through Playwright with `channel="chrome"`.
-    1. Recording service (recording/): `scripts/gate-test.sh serve` runs it in the foreground on
-       http://127.0.0.1:8090 with the local Playwright provider in a visible Google Chrome window
-       and prints WORKFLOW_USE_BASE_URL and WORKFLOW_USE_SERVICE_KEY. Start it in the background,
-       wait for `GET /health` to return `{"status":"ok"}`, drive each scenario through the HTTP API
+    1. Recording service (recording/): choose a free port for this run and start
+       `WORKFLOW_USE_PORT=18090 scripts/gate-test.sh serve` in the background, replacing 18090
+       with that port. It runs the local Playwright provider in a visible Google Chrome window
+       and prints WORKFLOW_USE_BASE_URL and WORKFLOW_USE_SERVICE_KEY. Use the printed
+       WORKFLOW_USE_BASE_URL for `GET /health` and every HTTP API call. After health returns
+       `{"status":"ok"}`, confirm the background process is still running so a failed bind cannot
+       pass against another server. Drive each scenario through the HTTP API
        (`X-Workflow-Key: gate`, `x-organization: gate-<run>`, `x-user-email: gate@example.com`) and
        through the Chrome window the service opened, using `uv run --no-sync python` with
        `playwright.async_api` or `httpx` from recording/'s dev group. Public demonstration targets
