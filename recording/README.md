@@ -1,8 +1,8 @@
 # Workflow Use recording service
 
-This service records a user's browser demonstration in an ephemeral Browserbase session. It does not execute workflows or expose a CDP endpoint.
+In production, this service records a user's browser demonstration in an ephemeral Browserbase session. It does not execute workflows or expose a CDP endpoint.
 
-ICE calls the service with `X-Workflow-Key`, `x-organization`, and `x-user-email`. Set these exact environment variables before running it:
+ICE calls the service with `X-Workflow-Key`, `x-organization`, and `x-user-email`. Set these environment variables for the production Browserbase provider:
 
 - `WORKFLOW_USE_SERVICE_KEY`, a non-empty shared key used by ICE.
 - `BROWSERBASE_API_KEY` and `BROWSERBASE_PROJECT_ID`.
@@ -19,6 +19,8 @@ uv run playwright install chromium
 WORKFLOW_USE_SERVICE_KEY=... uv run python -m workflow_use_recording
 uv run pytest
 ```
+
+For local gate validation, `scripts/gate-test.sh serve` runs the recorder with the local Playwright provider in the installed Google Chrome. See [`.no-mistakes.yaml`](../.no-mistakes.yaml) for gate commands and live validation instructions.
 
 Build and run the production image with one worker and a non-root user:
 

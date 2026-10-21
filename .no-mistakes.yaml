@@ -7,8 +7,37 @@ commands:
 
 test:
   instructions: |
-    commands.test (scripts/gate-test.sh test) is the validation for this repository. It runs the
-    recording service tests (recording/) when that area changes. Never install Playwright
-    browsers. Live provider runs (Browserbase, the deployed recorder) and staging E2E happen
-    outside the gate; report those scenarios untested with that reason. The agent setup wizard
-    lives in commercials-flow-editor, a separate repository; do not check it out here.
+    commands.test (scripts/gate-test.sh test) is the automated validation: the recording service
+    tests (recording/) when that area changes. Use `cd recording && uv run --no-sync pytest -q
+    <path>` for any extra focused test.
+
+    Live validation runs the changed service from this checkout against disposable data. Never
+    install Playwright browsers (`playwright install` in any form), never use Browserbase, and
+    never call the deployed recorder; the gate's browser is the installed Google Chrome, driven
+    through Playwright with `channel="chrome"`.
+    1. Recording service (recording/): choose a free port for this run and start
+       `WORKFLOW_USE_PORT=18090 scripts/gate-test.sh serve` in the background, replacing 18090
+       with that port. It runs the local Playwright provider in a visible Google Chrome window
+       and prints WORKFLOW_USE_BASE_URL and WORKFLOW_USE_SERVICE_KEY. Use the printed
+       WORKFLOW_USE_BASE_URL for `GET /health` and every HTTP API call. After health returns
+       `{"status":"ok"}`, confirm the background process is still running so a failed bind cannot
+       pass against another server. Drive each scenario through the HTTP API
+       (`X-Workflow-Key: gate`, `x-organization: gate-<run>`, `x-user-email: gate@example.com`) and
+       through the Chrome window the service opened, using `uv run --no-sync python` with
+       `playwright.async_api` or `httpx` from recording/'s dev group. Public demonstration targets
+       such as https://example.com are disposable; a sign-in during a scenario uses a throwaway
+       account or test credentials, never a real user's. Stop the service when done. Recordings
+       live only in process memory, so the run leaves nothing behind.
+    2. Workflow engine and extension (workflows/, extension/): `cd workflows && uv run python
+       cli.py ...` and `cd extension && npm run build` exercise the changed path locally against
+       a public page; drive the browser with `channel="chrome"`.
+    Record what each scenario did and what proved it (response bodies, step lists, screenshots)
+    in the evidence directory. A scenario is untested only when disposable data cannot reach it:
+    it needs Browserbase (saved sign-in contexts, the live view URL), the deployed recorder, or a
+    real target site that blocks automation. The host and the browser are never the reason. Each
+    untested row names what to verify in production after merge; the PR's Post-merge verification
+    list is built from those rows. The agent setup wizard lives in commercials-flow-editor, a
+    separate repository; do not check it out here.
+
+pr:
+  template: .github/no-mistakes-pr-template.md

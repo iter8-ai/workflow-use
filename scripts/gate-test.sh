@@ -3,6 +3,8 @@
 # Changed areas are compared with the merge base of HEAD and origin/main.
 # test mirrors the CI "Recording" workflow's recording job for touched areas (Playwright browsers are never installed);
 # lint mirrors the lint checks of the CI "Lint" and "Recording" workflows for touched areas.
+# serve runs the recording service from this checkout on loopback with the installed Google Chrome
+# (no Browserbase, no Playwright browser install) for the gate's live validation.
 set -euo pipefail
 
 root="$(git rev-parse --show-toplevel)"
@@ -59,6 +61,24 @@ case "${1:-}" in
     has recording || echo "no recording changes"
     exit $status
     ;;
+  serve)
+    # Foreground. Service key "gate" is for this disposable local run only; recordings live in process memory.
+    port="${WORKFLOW_USE_PORT:-8090}"
+    echo "WORKFLOW_USE_BASE_URL=http://127.0.0.1:$port"
+    echo "WORKFLOW_USE_SERVICE_KEY=gate"
+    cd recording && uv sync -q --frozen --group dev && exec uv run --no-sync python - "$port" <<'PY'
+import sys
+
+import uvicorn
+
+from workflow_use_recording.api import RecordingConfig, create_app
+from workflow_use_recording.provider import LocalPlaywrightProvider
+
+port = int(sys.argv[1])
+provider = LocalPlaywrightProvider(channel="chrome", headless=False)
+uvicorn.run(create_app(provider, RecordingConfig(service_key="gate")), host="127.0.0.1", port=port)
+PY
+    ;;
   lint)
     "$0" prepare
     status=0
@@ -79,7 +99,7 @@ case "${1:-}" in
     exit $status
     ;;
   *)
-    echo "usage: scripts/gate-test.sh prepare|test|lint" >&2
+    echo "usage: scripts/gate-test.sh prepare|test|lint|serve" >&2
     exit 2
     ;;
 esac
