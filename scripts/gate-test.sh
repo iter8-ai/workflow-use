@@ -64,10 +64,9 @@ case "${1:-}" in
   serve)
     # Foreground. Service key "gate" is for this disposable local run only; recordings live in process memory.
     port="${WORKFLOW_USE_PORT:-8090}"
-    channel="${WORKFLOW_USE_BROWSER_CHANNEL:-chrome}"
     echo "WORKFLOW_USE_BASE_URL=http://127.0.0.1:$port"
     echo "WORKFLOW_USE_SERVICE_KEY=gate"
-    cd recording && uv sync -q --frozen --group dev && WORKFLOW_USE_SERVICE_KEY=gate exec uv run --no-sync python - "$port" "$channel" <<'PY'
+    cd recording && uv sync -q --frozen --group dev && exec uv run --no-sync python - "$port" <<'PY'
 import sys
 
 import uvicorn
@@ -75,8 +74,8 @@ import uvicorn
 from workflow_use_recording.api import RecordingConfig, create_app
 from workflow_use_recording.provider import LocalPlaywrightProvider
 
-port, channel = int(sys.argv[1]), sys.argv[2]
-provider = LocalPlaywrightProvider(channel=channel or None, headless=False)
+port = int(sys.argv[1])
+provider = LocalPlaywrightProvider(channel="chrome", headless=False)
 uvicorn.run(create_app(provider, RecordingConfig(service_key="gate")), host="127.0.0.1", port=port)
 PY
     ;;
