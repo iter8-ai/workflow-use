@@ -20,6 +20,8 @@ WORKFLOW_USE_SERVICE_KEY=... uv run python -m workflow_use_recording
 uv run pytest
 ```
 
+To run the service without Browserbase, `scripts/gate-test.sh serve` (from the repository root) starts it on `http://127.0.0.1:8090` with the local Playwright provider in a visible Google Chrome window and the service key `gate`. The no-mistakes gate uses this for live validation; see `.no-mistakes.yaml`.
+
 Build and run the production image with one worker and a non-root user:
 
 ```bash

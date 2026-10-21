@@ -502,10 +502,16 @@ class BrowserbaseProvider:
 
 
 class LocalPlaywrightProvider:
-    """Local provider used only by tests and development capture checks."""
+    """Local provider used only by tests and development capture checks.
 
-    def __init__(self) -> None:
+    ``channel="chrome"`` launches the installed Google Chrome instead of Playwright's bundled Chromium, and
+    ``headless=False`` shows the window, so a local run can be driven by hand or by the gate's Test agent.
+    """
+
+    def __init__(self, *, channel: str | None = None, headless: bool = True) -> None:
         self.last_session: PlaywrightRecordingSession | None = None
+        self.channel = channel
+        self.headless = headless
 
     async def create(
         self,
@@ -523,7 +529,7 @@ class LocalPlaywrightProvider:
         from playwright.async_api import async_playwright
 
         runtime = await async_playwright().start()
-        browser = await runtime.chromium.launch()
+        browser = await runtime.chromium.launch(channel=self.channel, headless=self.headless)
         context = await browser.new_context()
         session = PlaywrightRecordingSession(browser=browser, runtime=runtime, live_view_url=None, login=login)
         await _configure_context(context, on_event)
