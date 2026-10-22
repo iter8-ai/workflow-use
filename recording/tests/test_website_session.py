@@ -298,6 +298,115 @@ async def test_expired_recording_never_returns_website_handoff() -> None:
     await service.close()
 
 
+@pytest.mark.parametrize("action", ["expiry", "delete", "stop"], ids=["expiry", "delete", "explicit_stop"])
+async def test_website_context_is_deleted_after_failed_close_retry(action: str) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from workflow_use_recording.models import RecordingWebsiteSession
+    from workflow_use_recording.service import RecordingOwner, RecordingService
+
+    class RetryCloseSession(WebsiteSession):
+        fail_close = True
+
+        async def close(self) -> None:
+            if self.fail_close:
+                self.fail_close = False
+                raise RuntimeError("Close failed once")
+            await super().close()
+
+    class RetryCloseProvider(WebsiteProvider):
+        async def create(self, start_url: str, on_event: Any, **options: Any) -> RetryCloseSession:
+            session = RetryCloseSession(on_event)
+            session.signed_in = True
+            self.sessions.append(session)
+            return session
+
+    provider = RetryCloseProvider()
+    service = RecordingService(provider)
+    owner = RecordingOwner("staging", "owner@example.com")
+    try:
+        recording = await service.create(
+            owner, WEBSITE["origin"], website_session=RecordingWebsiteSession(**WEBSITE)
+        )
+        if action == "expiry":
+            recording.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+            await service.cleanup()
+        else:
+            with pytest.raises(RuntimeError, match="Close failed once"):
+                await getattr(service, action)(recording.id, owner)
+        assert provider.sessions[0].closed is False
+        if action != "stop":
+            assert recording.website_session is None
+            assert recording.website_session_payload is None
+        assert await service.claim_google_context(recording.id, owner) == ""
+        assert provider.sessions[0].closed is True
+        assert provider.sessions[0].deleted is True
+        assert await service.adopt_google_context(recording.id, owner) is False
+        assert await service.return_google_context(recording.id, owner) is False
+        if action == "delete":
+            assert await service.delete(recording.id, owner) is True
+            assert await service.get(recording.id, owner) is None
+    finally:
+        await service.close()
+
+
+async def test_capture_diagnostics_contain_only_counts_and_cookie_domains(caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+    from types import SimpleNamespace
+
+    from workflow_use_recording.provider import PlaywrightRecordingSession
+
+    class DiagnosticContext(StorageContext):
+        async def storage_state(self) -> dict[str, Any]:
+            state = await super().storage_state()
+            state["cookies"].append(
+                {
+                    "name": "private-cookie-name",
+                    "value": "private-cookie-value",
+                    "domain": "evil.example/?query-secret#fragment-secret",
+                    "path": "/",
+                    "expires": -1,
+                }
+            )
+            state["origins"].append(
+                {
+                    "origin": "https://evil.example/?query-secret#fragment-secret",
+                    "localStorage": [{"name": "private-storage-name", "value": WEBSITE["grant"]}],
+                }
+            )
+            return state
+
+    page = IdentityPage(["Google Account: person@example.com"])
+    session = PlaywrightRecordingSession(
+        browser=SimpleNamespace(contexts=[DiagnosticContext(page)]), runtime=None, live_view_url=None
+    )
+    with caplog.at_level(logging.WARNING, logger="workflow_use_recording.provider"):
+        email, state = await session.capture_website_session(WEBSITE["origin"])
+    assert email == "person@example.com"
+    assert state["cookies"] == STATE["cookies"]
+    messages = [record.getMessage() for record in caplog.records if record.name == "workflow_use_recording.provider"]
+    assert messages == [
+        "recording_website_capture raw_cookie_count=10 retained_cookie_count=1 "
+        "dropped_cookie_domains=['.example.com', '.google.com', 'api.example.com', 'app.example.com'] "
+        "raw_local_storage_origin_count=5 retained_local_storage_origin_count=1"
+    ]
+    for secret in (
+        WEBSITE["grant"],
+        "site-secret",
+        "google-secret",
+        "site-token",
+        "sibling-secret",
+        "http-secret",
+        "private-cookie-name",
+        "private-cookie-value",
+        "private-storage-name",
+        "query-secret",
+        "fragment-secret",
+        "person@example.com",
+    ):
+        assert secret not in caplog.text
+
+
 async def test_handoff_is_cleared_after_retry_window() -> None:
     from datetime import UTC, datetime, timedelta
 

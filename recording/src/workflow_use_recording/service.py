@@ -91,6 +91,7 @@ class Recording:
     website_session: RecordingWebsiteSession | None = field(default=None, repr=False)
     website_session_payload: dict[str, Any] | None = field(default=None, repr=False)
     website_session_status: Literal["captured", "unavailable", "rejected"] | None = None
+    website_only: bool = False
     close_requested: Literal["stopped", "expired"] | None = None
     closing: bool = False
     creating: bool = True
@@ -137,8 +138,6 @@ class RecordingService:
         website_session: RecordingWebsiteSession | None = None,
     ) -> Recording:
         """Start a recording, reserving a borrowed context separately from cleanup/claim ownership."""
-        if website_session is not None and (context_id is not None or login is not None):
-            raise InvalidRecordingUrl("website_session cannot be combined with context_id or login.")
         if self._closed:
             raise RuntimeError("Recording service is shutting down.")
         if not is_public_http_url(start_url):
@@ -168,6 +167,7 @@ class RecordingService:
                 owner=owner,
                 saved_context_id=context_id,
                 website_session=website_session,
+                website_only=website_session is not None,
                 expires_at=datetime.now(UTC) + timedelta(seconds=self.timeout_seconds),
             )
             self._recordings[recording.id] = recording
@@ -248,6 +248,10 @@ class RecordingService:
         recording = await self.get(recording_id, owner)
         if recording is None:
             return False
+        async with recording.lock:
+            recording.website_session = None
+            recording.website_session_payload = None
+            recording.website_session_status = None
         await self._stop(recording, expired=False)
         async with recording.lock:
             recording.deleted = True
@@ -474,6 +478,7 @@ class RecordingService:
                 )
                 or recording.status == "recording"
                 or recording.deleted
+                or recording.website_only
                 or recording.context_delete_pending
             ):
                 return ""
@@ -487,6 +492,8 @@ class RecordingService:
         if recording is None:
             return None
         async with recording.lock:
+            if recording.website_only:
+                return False
             if (
                 self._recordings.get(recording_id) is not recording
                 and self._handoffs.get(recording_id) is not recording
@@ -508,6 +515,8 @@ class RecordingService:
         if recording is None:
             return None
         async with recording.lock:
+            if recording.website_only:
+                return False
             if (
                 self._recordings.get(recording_id) is not recording
                 and self._handoffs.get(recording_id) is not recording
@@ -554,7 +563,6 @@ class RecordingService:
                 raise RuntimeError("Recording close is already in progress.")
             if recording.close_requested is None:
                 recording.close_requested = "expired" if expired else "stopped"
-            website_mode = recording.website_session is not None
             if recording.close_requested == "expired":
                 recording.website_session = None
                 recording.website_session_payload = None
@@ -595,8 +603,8 @@ class RecordingService:
                         cancelled = True
                     except Exception as error:
                         logger.warning("recording_website_capture_failed error_type=%s", type(error).__name__)
-            signed_in = recording.google_signed_in
-            if not signed_in and not website_mode:
+            signed_in = False if recording.website_only else recording.google_signed_in
+            if not signed_in and not recording.website_only:
                 try:
                     signed_in = await browser.google_signed_in()
                 except Exception:
@@ -606,7 +614,7 @@ class RecordingService:
         except BaseException as error:
             async with recording.lock:
                 recording.closing = False
-                if isinstance(error, asyncio.CancelledError) and website_mode:
+                if isinstance(error, asyncio.CancelledError) and recording.website_only:
                     recording.website_session_payload = None
                     recording.website_session_status = "unavailable"
             raise
@@ -622,7 +630,7 @@ class RecordingService:
                 recording.website_session = None
                 recording.website_session_payload = None
                 recording.website_session_status = None
-        if not signed_in or website_mode:
+        if not signed_in:
             await self._delete_context(recording)
         if cancelled:
             raise asyncio.CancelledError

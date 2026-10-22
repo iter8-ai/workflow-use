@@ -165,6 +165,24 @@ class PlaywrightRecordingSession:
         context = self.browser.contexts[0]
         state = await context.storage_state()
         filtered = website_state(state, origin)
+        logger.warning(
+            "recording_website_capture raw_cookie_count=%s retained_cookie_count=%s "
+            "dropped_cookie_domains=%s raw_local_storage_origin_count=%s retained_local_storage_origin_count=%s",
+            len(state.get("cookies", [])),
+            len(filtered["cookies"]),
+            sorted(
+                {
+                    cookie["domain"].lower()
+                    for cookie in state.get("cookies", [])
+                    if cookie not in filtered["cookies"]
+                    and isinstance(cookie.get("domain"), str)
+                    and len(cookie["domain"]) <= 254
+                    and re.fullmatch(r"\.?[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*", cookie["domain"])
+                }
+            ),
+            sum(bool(item.get("localStorage")) for item in state.get("origins", [])),
+            len(filtered["origins"]),
+        )
         if not has_google_session(state.get("cookies", [])):
             return None, filtered
         page = await context.new_page()
