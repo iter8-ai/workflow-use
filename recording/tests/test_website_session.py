@@ -55,6 +55,62 @@ def test_stop_returns_same_handoff_until_deleted() -> None:
         assert http.post(path + "/stop", headers=headers()).status_code == 404
 
 
+@pytest.mark.parametrize("fail_close", [False, True], ids=["close_succeeds", "close_retried"])
+async def test_stop_during_startup_reports_unavailable_without_retaining_grant(
+    fail_close: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    from workflow_use_recording.models import RecordingWebsiteSession
+    from workflow_use_recording.service import RecordingOwner, RecordingService
+
+    monkeypatch.setattr("workflow_use_recording.service.uuid4", lambda: "starting-recording")
+    started, release = asyncio.Event(), asyncio.Event()
+
+    class DeferredSession(WebsiteSession):
+        async def close(self) -> None:
+            nonlocal fail_close
+            if fail_close:
+                fail_close = False
+                raise RuntimeError("Close failed once")
+            await super().close()
+
+    class DeferredProvider(WebsiteProvider):
+        async def create(self, start_url: str, on_event: Any, **options: Any) -> DeferredSession:
+            session = DeferredSession(on_event)
+            self.sessions.append(session)
+            started.set()
+            await release.wait()
+            return session
+
+    provider = DeferredProvider()
+    service = RecordingService(provider)
+    owner = RecordingOwner("staging", "owner@example.com")
+    task = asyncio.create_task(
+        service.create(owner, WEBSITE["origin"], website_session=RecordingWebsiteSession(**WEBSITE))
+    )
+    try:
+        await started.wait()
+        with pytest.raises(RuntimeError, match="Recording browser is still starting"):
+            await service.stop("starting-recording", owner)
+        release.set()
+        with pytest.raises(RuntimeError, match="stopped before the browser became available|Close failed once"):
+            await task
+        for _ in range(2):
+            stopped = await service.stop("starting-recording", owner)
+            assert stopped.status == "stopped"
+            assert stopped.website_session_status == "unavailable"
+            assert stopped.website_session_payload is None
+            assert stopped.website_session is None
+        assert provider.sessions[0].closed is True
+        assert provider.sessions[0].deleted is True
+        assert await service.claim_google_context("starting-recording", owner) == ""
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        await service.close()
+
+
 @pytest.mark.parametrize("failure", ["identity", "capture"], ids=["missing_identity", "capture_error"])
 def test_stop_reports_no_handoff_when_capture_is_unusable(failure: str) -> None:
     provider = WebsiteProvider()
@@ -452,6 +508,7 @@ async def test_cancelled_capture_closes_recording_without_handoff() -> None:
     assert stopped.status == "stopped"
     assert stopped.website_session_status == "unavailable"
     assert stopped.website_session_payload is None
+    assert stopped.website_session is None
     assert await service.claim_google_context(recording.id, owner) == ""
     await service.close()
 
@@ -523,4 +580,5 @@ async def test_cancelled_close_discards_captured_handoff_before_retry() -> None:
     assert stopped.status == "stopped"
     assert stopped.website_session_payload is None
     assert stopped.website_session_status == "unavailable"
+    assert stopped.website_session is None
     await service.close()
