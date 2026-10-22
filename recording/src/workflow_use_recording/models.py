@@ -173,7 +173,7 @@ class RecordingWebsiteSession(BaseModel):
 
 class CreateRecordingRequest(BaseModel):
     url: str
-    # A Browserbase context holding a saved Google session. The recording reads it and never changes or deletes it.
+    # Saved-profile persistence and ownership: see recording/README.md.
     context_id: str | None = Field(default=None, min_length=1, max_length=200)
     login: RecordingLogin | None = None
     website_session: RecordingWebsiteSession | None = Field(default=None, repr=False)
