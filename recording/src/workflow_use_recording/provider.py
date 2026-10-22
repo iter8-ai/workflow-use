@@ -160,6 +160,8 @@ class PlaywrightRecordingSession:
 
     async def capture_website_session(self, origin: str) -> tuple[str | None, dict[str, Any]]:
         """Capture before identity navigation; only a trusted Google page identifies the account."""
+        from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
         context = self.browser.contexts[0]
         state = await context.storage_state()
         filtered = website_state(state, origin)
@@ -172,7 +174,10 @@ class PlaywrightRecordingSession:
             if urlsplit(page.url).hostname != "myaccount.google.com" or urlsplit(page.url).scheme != "https":
                 return None, filtered
             account = page.locator("[aria-label*='Google Account']")
-            await account.first.wait_for(state="attached", timeout=2_000)
+            try:
+                await account.first.wait_for(state="attached", timeout=2_000)
+            except PlaywrightTimeoutError:
+                return None, filtered
             labels = await account.evaluate_all(
                 "elements => elements.map(element => element.getAttribute('aria-label'))"
             )

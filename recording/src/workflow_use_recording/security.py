@@ -120,7 +120,8 @@ _CLOUDFLARE_COOKIES = re.compile(r"^(cf_clearance|__cf_bm|_cfuvid|__cflb|cf_chl_
 
 def is_google_origin(origin: str) -> bool:
     host = (urlsplit(origin).hostname or "").rstrip(".").lower()
-    return host == "google.com" or host.endswith(".google.com") or is_google_sign_in(origin)
+    parts = host.split(".")
+    return any(is_google_sign_in("https://accounts." + ".".join(parts[index:])) for index in range(len(parts)))
 
 
 def website_state(state: dict[str, Any], origin: str) -> dict[str, Any]:

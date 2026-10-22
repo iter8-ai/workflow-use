@@ -127,7 +127,10 @@ class IdentityPage:
         return self
 
     async def wait_for(self, **_options: Any) -> None:
-        pass
+        if not self.labels:
+            from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
+            raise PlaywrightTimeoutError("Account label missing")
 
     async def evaluate_all(self, _script: str) -> list[str]:
         return self.labels
@@ -181,10 +184,11 @@ class StorageContext:
         (["Google Account: Person (Person@example.com)"], "https://myaccount.google.com/", "person@example.com"),
         (["Google Account: first@example.com second@example.com"], "https://myaccount.google.com/", None),
         (["Google Account: Person"], "https://myaccount.google.com/", None),
+        ([], "https://myaccount.google.com/", None),
         (["Google Account: person@example.com"], "https://myaccount.google.com.evil.example/", None),
         (["Google Account: person@example.com"], "http://myaccount.google.com/", None),
     ],
-    ids=["verified", "ambiguous", "unknown", "untrusted_host", "insecure"],
+    ids=["verified", "ambiguous", "unknown", "missing_label", "untrusted_host", "insecure"],
 )
 async def test_provider_returns_only_site_state_with_trusted_unique_identity(
     labels: list[str], url: str, email: str | None
@@ -206,6 +210,73 @@ async def test_provider_returns_only_site_state_with_trusted_unique_identity(
             ],
         },
     )
+    assert page.closed is True
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["google.com", "www.google.fi", "google.co.uk", "mail.google.co.uk", "youtube.com", "www.youtube.com"],
+    ids=["google", "google_country", "google_country_apex", "google_country_subdomain", "youtube", "youtube_subdomain"],
+)
+def test_google_website_state_is_excluded_when_origin_is_requested(host: str) -> None:
+    from workflow_use_recording.security import website_state
+
+    origin = "https://" + host
+    with client(WebsiteProvider()) as http:
+        assert start(http, website_session={**WEBSITE, "origin": origin}).status_code == 422
+    state = {
+        "cookies": [{"name": "session", "value": "secret", "domain": "." + host, "path": "/", "expires": -1}],
+        "origins": [{"origin": origin, "localStorage": [{"name": "token", "value": "secret"}]}],
+    }
+    assert website_state(state, origin) == {"cookies": [], "origins": []}
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["google.com.evil.example", "www.google.fi.evil.example", "youtube.com.evil.example", "notgoogle.com"],
+    ids=["google_suffix", "country_suffix", "youtube_suffix", "google_prefix"],
+)
+def test_non_google_website_state_is_preserved_when_host_resembles_google(host: str) -> None:
+    from workflow_use_recording.models import RecordingWebsiteSession
+    from workflow_use_recording.security import website_state
+
+    origin = "https://" + host
+    assert RecordingWebsiteSession(**{**WEBSITE, "origin": origin}).origin == origin
+    state = {
+        "cookies": [{"name": "session", "value": "site", "domain": host, "path": "/", "expires": -1}],
+        "origins": [{"origin": origin, "localStorage": [{"name": "token", "value": "site"}]}],
+    }
+    assert website_state(state, origin) == state
+
+
+@pytest.mark.parametrize(
+    ("failure", "status"),
+    [("missing_label", "rejected"), ("goto", "unavailable"), ("evaluate_all", "unavailable")],
+    ids=["missing_label_rejected", "navigation_timeout_unavailable", "evaluation_timeout_unavailable"],
+)
+def test_stop_classifies_identity_capture_failure(failure: str, status: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
+    from workflow_use_recording.provider import PlaywrightRecordingSession
+
+    page = IdentityPage([] if failure == "missing_label" else ["Google Account: person@example.com"])
+    if failure != "missing_label":
+        monkeypatch.setattr(page, failure, AsyncMock(side_effect=PlaywrightTimeoutError("Browser timed out")))
+    capture = PlaywrightRecordingSession(
+        browser=SimpleNamespace(contexts=[StorageContext(page)]), runtime=None, live_view_url=None
+    )
+    provider = WebsiteProvider()
+    with client(provider) as http:
+        created = start(http).json()
+        monkeypatch.setattr(provider.sessions[0], "capture_website_session", capture.capture_website_session)
+        response = http.post(f"/recordings/{created['id']}/stop", headers=headers())
+        assert response.status_code == 200
+        assert response.json()["websiteSessionStatus"] == status
+        assert "websiteSession" not in response.json()
+    assert page.closed is True
 
 
 async def test_expired_recording_never_returns_website_handoff() -> None:
