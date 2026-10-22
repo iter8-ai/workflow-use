@@ -1274,9 +1274,9 @@ async def test_a_blocked_start_page_is_retried_once_over_a_geolocated_proxy(
     assert session.context_id == "context-2"
     assert (session.network, session.proxy_country) == ("proxy", "EE")
     assert session.start_page_blocked is False and session.start_page_failed is False
-    for runtime in runtimes:
+    for runtime, timeout in zip(runtimes, [20_000, 45_000], strict=True):
         page = runtime._browser.contexts[0]._page
-        assert page.goto_urls == ["https://www.example.com/en"] and page.timeouts == [20_000]
+        assert page.goto_urls == ["https://www.example.com/en"] and page.timeouts == [timeout]
     assert "recording_start_page_blocked status=403 network=direct" in caplog.text
     assert "recording_browser_start_failed" not in caplog.text
     assert "example.com" not in caplog.text and "must-not-leak" not in caplog.text
@@ -1326,6 +1326,7 @@ async def test_a_start_page_that_loads_directly_uses_one_direct_session(monkeypa
     assert calls.releases == [] and calls.deleted == []
     assert (session.network, session.proxy_country, session.start_page_blocked) == ("direct", None, False)
     assert not runtimes[0]._browser.closed
+    assert runtimes[0]._browser.contexts[0]._page.timeouts == [20_000]
 
 
 @pytest.mark.asyncio
@@ -1343,6 +1344,7 @@ async def test_a_blocked_start_page_with_a_borrowed_sign_in_is_not_retried(
     assert calls.contexts == 0 and calls.releases == [] and calls.deleted == []
     assert not runtimes[0]._browser.closed
     assert (session.network, session.proxy_country, session.start_page_blocked) == ("direct", None, True)
+    assert runtimes[0]._browser.contexts[0]._page.timeouts == [45_000]
     assert "recording_start_page_blocked status=403 network=direct" in caplog.text
 
 

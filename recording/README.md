@@ -11,7 +11,7 @@ ICE calls the service with `X-Workflow-Key`, `x-organization`, and `x-user-email
 - `WORKFLOW_USE_HOST`, optional, defaults to `127.0.0.1`. Use `0.0.0.0` only in the container.
 - `WORKFLOW_USE_PORT`, optional, defaults to `8090`.
 
-The service runs one worker. Its recording TTL caps at 15 minutes, and Browserbase receives the same cap. Creating a recording has a separate 45-second browser startup deadline; a create that misses it releases the browser and Browserbase session and returns HTTP 504 with `The recording start page did not load in time.` Each start page navigation has a 20-second timeout within that deadline. Browser setup and cleanup also take time, so the 45-second deadline can expire before both direct and proxied attempts finish. It binds to loopback by default.
+The service runs one worker. Its recording TTL caps at 15 minutes, and Browserbase receives the same cap. Creating a recording has a separate 45-second browser startup deadline; a create that misses it releases the browser and Browserbase session and returns HTTP 504 with `The recording start page did not load in time.` A direct start page navigation eligible for proxy retry has a 20-second timeout; a borrowed-context navigation and the final proxied navigation use a 45-second timeout. The overall startup deadline bounds all attempts. Browser setup and cleanup also take time, so the 45-second deadline can expire before both direct and proxied attempts finish. It binds to loopback by default.
 
 ```bash
 cd recording

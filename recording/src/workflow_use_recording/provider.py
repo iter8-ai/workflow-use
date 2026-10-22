@@ -604,7 +604,10 @@ class BrowserbaseProvider:
 
             try:
                 response = await page.goto(
-                    start_url, wait_until="domcontentloaded", timeout=START_PAGE_ATTEMPT_TIMEOUT_SECONDS * 1000
+                    start_url,
+                    wait_until="domcontentloaded",
+                    timeout=(START_PAGE_ATTEMPT_TIMEOUT_SECONDS if retry_when_blocked else START_PAGE_TIMEOUT_SECONDS)
+                    * 1000,
                 )
             except PlaywrightTimeoutError:
                 raise RecordingStartTimeout("The recording start page did not load in time.") from None
