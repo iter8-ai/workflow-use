@@ -88,7 +88,11 @@ def create_app(provider: BrowserProvider, config: RecordingConfig, organizer: St
     ) -> JSONResponse:
         try:
             recording = await service.create(
-                recording_owner, request.url, context_id=request.context_id, login=request.login
+                recording_owner,
+                request.url,
+                context_id=request.context_id,
+                login=request.login,
+                website_session=request.website_session,
             )
         except InvalidRecordingUrl as error:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
@@ -147,7 +151,12 @@ def create_app(provider: BrowserProvider, config: RecordingConfig, organizer: St
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording not found.")
         # Only the stop response carries captured sign-in values, once; the host stores them encrypted.
         credentials = service.take_credentials(recording)
-        response = _response(service.response(recording), credentials=credentials or None)
+        response = _response(
+            service.response(recording),
+            credentials=credentials or None,
+            website_session=recording.website_session_payload,
+            website_session_status=recording.website_session_status,
+        )
         response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -205,11 +214,17 @@ def _response(
     *,
     status_code: int = status.HTTP_200_OK,
     credentials: dict[str, str] | None = None,
+    website_session: dict[str, Any] | None = None,
+    website_session_status: str | None = None,
 ) -> JSONResponse:
     body = recording.model_dump(mode="json", by_alias=True)
     body["steps"] = [_step_body(step) for step in recording.steps]
     if credentials:
         body["credentials"] = credentials
+    if website_session is not None:
+        body["websiteSession"] = website_session
+    if website_session_status is not None:
+        body["websiteSessionStatus"] = website_session_status
     return JSONResponse(status_code=status_code, content=body)
 
 

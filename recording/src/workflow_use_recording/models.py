@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 from .security import url_origin
 
@@ -138,11 +138,51 @@ class RecordingLogin(BaseModel):
         return canonical
 
 
+class RecordingWebsiteSession(BaseModel):
+    """Opaque FIRE grant, retained only for the server-to-server stop handoff."""
+
+    model_config = ConfigDict(hide_input_in_errors=True)
+
+    grant: SecretStr = Field(min_length=1, max_length=16000)
+    origin: str = Field(max_length=2000)
+
+    @field_validator("origin")
+    @classmethod
+    def _website_origin(cls, origin: str) -> str:
+        from .security import is_google_origin, is_public_http_url
+
+        canonical = url_origin(origin)
+        parts = urlsplit(origin)
+        if (
+            canonical is None
+            or origin != origin.strip()
+            or any(ord(char) < 32 or ord(char) == 127 or char == "\\" for char in origin)
+            or any(char in parts.netloc for char in (" ", "%"))
+            or parts.netloc.endswith(":")
+            or parts.username is not None
+            or parts.password is not None
+            or not is_public_http_url(origin)
+            or parts.path not in {"", "/"}
+            or parts.query
+            or parts.fragment
+            or is_google_origin(canonical)
+        ):
+            raise ValueError("A public non-Google HTTP(S) origin is required.")
+        return canonical
+
+
 class CreateRecordingRequest(BaseModel):
     url: str
-    # A Browserbase context holding a saved Google session. The recording reads it and never changes or deletes it.
+    # Saved-profile persistence and ownership: see recording/README.md.
     context_id: str | None = Field(default=None, min_length=1, max_length=200)
     login: RecordingLogin | None = None
+    website_session: RecordingWebsiteSession | None = Field(default=None, repr=False)
+
+    @model_validator(mode="after")
+    def _exclusive_website_session(self) -> CreateRecordingRequest:
+        if self.website_session is not None and (self.context_id is not None or self.login is not None):
+            raise ValueError("website_session cannot be combined with context_id or login.")
+        return self
 
 
 class NavigateRecordingRequest(BaseModel):
@@ -178,6 +218,19 @@ class CapturedCredentials(BaseModel):
     password: str | None = None
 
 
+class WebsiteSessionHandoff(BaseModel):
+    grant: str = Field(repr=False)
+    origin: str
+    googleEmail: str = Field(repr=False)
+    state: dict[str, Any] = Field(repr=False)
+
+
 class StoppedRecordingResponse(RecordingResponse):
+    website_session: WebsiteSessionHandoff | None = Field(
+        default=None, serialization_alias="websiteSession", repr=False
+    )
+    website_session_status: Literal["captured", "unavailable", "rejected"] | None = Field(
+        default=None, serialization_alias="websiteSessionStatus"
+    )
     # Present once, on the stop response only, when the demonstration captured sign-in values.
     credentials: CapturedCredentials | None = None

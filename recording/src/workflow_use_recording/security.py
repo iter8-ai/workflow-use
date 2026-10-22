@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import re
 import socket
 import time
 from typing import Any
@@ -111,3 +112,44 @@ async def resolves_to_public_host(url: str) -> bool:
         return all(ipaddress.ip_address(address[4][0]).is_global for address in addresses)
     except ValueError:
         return False
+
+
+# Copy of FIRE web_agent/adapters/executor.py; challenge verdicts are session/IP specific.
+_CLOUDFLARE_COOKIES = re.compile(r"^(cf_clearance|__cf_bm|_cfuvid|__cflb|cf_chl_.*)$")
+
+
+def is_google_origin(origin: str) -> bool:
+    host = (urlsplit(origin).hostname or "").rstrip(".").lower()
+    parts = host.split(".")
+    return any(is_google_sign_in("https://accounts." + ".".join(parts[index:])) for index in range(len(parts)))
+
+
+def website_state(state: dict[str, Any], origin: str) -> dict[str, Any]:
+    """Copy of FIRE website_state: site cookies and exact-origin localStorage only."""
+    if is_google_origin(origin):
+        return {"cookies": [], "origins": []}
+    host = urlsplit(origin).hostname or ""
+    now = time.time()
+    cookies = []
+    for cookie in state.get("cookies", []):
+        domain = cookie.get("domain", "").lower()
+        bare = domain.lstrip(".")
+        if not bare or is_google_origin("https://" + bare):
+            continue
+        applicable = host == bare or domain.startswith(".") and host.endswith("." + bare)
+        expiry = cookie.get("expires", -1)
+        if (
+            applicable
+            and cookie.get("path")
+            and (expiry <= 0 or expiry > now)
+            and not _CLOUDFLARE_COOKIES.fullmatch(cookie.get("name", ""))
+        ):
+            cookies.append(cookie)
+    return {
+        "cookies": cookies,
+        "origins": [
+            {"origin": origin, "localStorage": item.get("localStorage", [])}
+            for item in state.get("origins", [])
+            if item.get("origin") == origin and item.get("localStorage")
+        ],
+    }
