@@ -183,7 +183,7 @@ class RecordingWebsiteSession(BaseModel):
 
 class CreateRecordingRequest(BaseModel):
     url: str
-    # Saved-profile persistence and ownership: see recording/README.md.
+    # Borrowed context, never deleted here; see recording/README.md for saved sign-in persistence.
     context_id: str | None = Field(default=None, min_length=1, max_length=200)
     login: RecordingLogin | None = None
     website_session: RecordingWebsiteSession | None = Field(default=None, repr=False)
@@ -226,8 +226,7 @@ class RecordingResponse(BaseModel):
     google: RecordingGoogle | None = None
     # True when the start page did not load; the person opens another page with the navigate endpoint.
     start_page_failed: bool = Field(default=False, serialization_alias="startPageFailed")
-    # True while the site answers the start page with a block page (403, 429 or 503), also after the proxied
-    # retry; cleared like start_page_failed by a loaded public page or a successful navigate.
+    # Block-state semantics are documented in recording/README.md under "Blocked start pages".
     start_page_blocked: bool = Field(default=False, serialization_alias="startPageBlocked")
     # The network the demonstration browser is on. "proxy" after a retry over a geolocated residential proxy;
     # the host saves it on the agent so its runs use the same network.

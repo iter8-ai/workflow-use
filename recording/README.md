@@ -98,3 +98,18 @@ Navigate returns 404 for an unknown or foreign recording, 409 for an inactive re
 An invalid recording URL returns HTTP 422. Other recording startup failures return HTTP 503 with `{"detail":"Recording service is temporarily unavailable."}`. During Browserbase context or session creation and browser setup, the provider logs a WARNING `recording_browser_start_failed stage=<stage> error_type=<type>` if startup fails. The API logs a WARNING `recording_start_failed error_type=<type>` for startup failures that return 503. These diagnostics omit exception messages and tracebacks because a Browserbase connect URL can contain a signing key.
 
 `GET /health` returns `{"status":"ok"}` without exposing configuration or credentials.
+For a Google credential without a connected profile, ICE can explicitly request a website-only handoff:
+
+```json
+{"url":"https://app.example.com","website_session":{"grant":"<opaque FIRE grant>","origin":"https://app.example.com"}}
+```
+
+`website_session` cannot be combined with `context_id` or `login`. Its origin must be a public non-Google HTTP(S) origin without a path, query, fragment or userinfo; it is canonicalized like login origins. The grant is held only in memory and never logged. This mode uses a fresh recorder-owned context and does not adopt a Google profile.
+
+Only explicit Stop captures the website storage state, before browser close or identity navigation. If qualifying Google session cookies are present, a bounded temporary HTTPS `myaccount.google.com` tab verifies one unambiguous Google account email using Google's account label. A Google cookie alone is insufficient. Only cookies applicable to the requested host and exact-origin localStorage are retained. Expired cookies, Google identity state, Cloudflare challenge cookies, unrelated origins and IndexedDB are excluded. The owned context is deleted after close even when capture fails. Failed closes and context deletions remain pending for cleanup retries. A nonsecret website-only marker survives handoff clearing, so retries cannot retain or lend the context as a Google profile.
+
+The server-only stop response adds `websiteSessionStatus` with `captured`, `rejected` for missing identity or empty filtered state, or `unavailable` for capture failure, cancellation or a stop before browser startup completes. Only `captured` also includes `websiteSession: {grant, origin, googleEmail, state}`. ICE must consume this payload server-to-server and strip it before responding to the frontend. FIRE must validate the grant and compare the reported identity to the credential before saving. Capture does not prove the website session is authenticated or reusable; a subsequent test run must verify that.
+
+After filtering storage state, the provider logs WARNING `recording_website_capture` with raw and retained cookie counts, validated dropped cookie domains, and raw and retained counts of origins with nonempty localStorage. Capture errors log WARNING `recording_website_capture_failed error_type=<type>`. These diagnostics omit cookie and localStorage names and values, account emails, grants, URLs, exception messages and tracebacks.
+
+Repeated Stop calls return the same captured payload for up to 60 minutes after stop, so a lost ICE response can be retried. Delete, retirement, shutdown and active-recording expiry clear the handoff. Expiry and delete never capture it. Create, GET and legacy recordings never return these fields. Stop remains `Cache-Control: no-store`, and existing typed sign-in credentials are still returned only once.
