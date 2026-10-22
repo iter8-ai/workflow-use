@@ -11,7 +11,15 @@ from typing import Any, Literal
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-from .models import RecordedDownload, RecordingGoogle, RecordingLogin, RecordingResponse, SetupStep, StepDate
+from .models import (
+    RecordedDownload,
+    RecordingGoogle,
+    RecordingLogin,
+    RecordingResponse,
+    RecordingWebsiteSession,
+    SetupStep,
+    StepDate,
+)
 from .organize import OrganizedStep, StepOrganizer
 from .provider import (
     START_PAGE_TIMEOUT_SECONDS,
@@ -80,6 +88,9 @@ class Recording:
     # Sign-in values typed during the demonstration, by kind. Never part of steps, responses or logs;
     # handed to the host once on stop, then forgotten.
     credentials: dict[str, str] = field(default_factory=dict, repr=False)
+    website_session: RecordingWebsiteSession | None = field(default=None, repr=False)
+    website_session_payload: dict[str, Any] | None = field(default=None, repr=False)
+    website_session_status: Literal["captured", "unavailable", "rejected"] | None = None
     close_requested: Literal["stopped", "expired"] | None = None
     closing: bool = False
     creating: bool = True
@@ -123,8 +134,11 @@ class RecordingService:
         *,
         context_id: str | None = None,
         login: RecordingLogin | None = None,
+        website_session: RecordingWebsiteSession | None = None,
     ) -> Recording:
         """Start a recording, reserving a borrowed context separately from cleanup/claim ownership."""
+        if website_session is not None and (context_id is not None or login is not None):
+            raise InvalidRecordingUrl("website_session cannot be combined with context_id or login.")
         if self._closed:
             raise RuntimeError("Recording service is shutting down.")
         if not is_public_http_url(start_url):
@@ -153,6 +167,7 @@ class RecordingService:
                 id=str(uuid4()),
                 owner=owner,
                 saved_context_id=context_id,
+                website_session=website_session,
                 expires_at=datetime.now(UTC) + timedelta(seconds=self.timeout_seconds),
             )
             self._recordings[recording.id] = recording
@@ -219,7 +234,7 @@ class RecordingService:
         recording = await self.get(recording_id, owner)
         if recording is None:
             return None
-        await self._stop(recording, expired=False)
+        await self._stop(recording, expired=False, capture_website=True)
         self._start_organizing(recording)
         return recording
 
@@ -367,6 +382,10 @@ class RecordingService:
                 # Values nobody collected do not outlive the recording.
                 recording.credentials = {}
             if recording.status != "recording":
+                if recording.stopped_at and now >= recording.stopped_at + HANDOFF_RETRY_WINDOW:
+                    recording.website_session = None
+                    recording.website_session_payload = None
+                    recording.website_session_status = None
                 if recording.deleted:
                     await self._retire(recording)
                 elif recording.context_delete_pending or (
@@ -402,6 +421,10 @@ class RecordingService:
                 await self._delete_context(recording)
             except Exception:
                 logger.warning("recording_shutdown_close_failed")
+            finally:
+                recording.website_session = None
+                recording.website_session_payload = None
+                recording.website_session_status = None
         for recording in list(self._handoffs.values()):
             await self._delete_context(recording)
 
@@ -414,6 +437,9 @@ class RecordingService:
                 return
 
     async def _retire(self, recording: Recording) -> bool:
+        recording.website_session = None
+        recording.website_session_payload = None
+        recording.website_session_status = None
         while True:
             if not await self._delete_context(recording):
                 return False
@@ -520,7 +546,7 @@ class RecordingService:
             recording.context_delete_pending = False
             return True
 
-    async def _stop(self, recording: Recording, *, expired: bool) -> None:
+    async def _stop(self, recording: Recording, *, expired: bool, capture_website: bool = False) -> None:
         async with recording.lock:
             if recording.status != "recording":
                 return
@@ -528,6 +554,11 @@ class RecordingService:
                 raise RuntimeError("Recording close is already in progress.")
             if recording.close_requested is None:
                 recording.close_requested = "expired" if expired else "stopped"
+            website_mode = recording.website_session is not None
+            if recording.close_requested == "expired":
+                recording.website_session = None
+                recording.website_session_payload = None
+                recording.website_session_status = None
             browser = recording.browser
             if browser is None:
                 if recording.creating:
@@ -536,18 +567,48 @@ class RecordingService:
                 recording.close_requested = None
                 return
             recording.closing = True
+        cancelled = False
         try:
+            if (
+                capture_website
+                and recording.close_requested == "stopped"
+                and recording.website_session is not None
+                and recording.website_session_status is None
+            ):
+                recording.website_session_status = "unavailable"
+                if recording.saved_context_id is None and recording.context_state == "owned":
+                    try:
+                        async with asyncio.timeout(20):
+                            email, state = await browser.capture_website_session(recording.website_session.origin)
+                        if email is None or not (state.get("cookies") or state.get("origins")):
+                            recording.website_session_status = "rejected"
+                        else:
+                            recording.website_session_payload = {
+                                "grant": recording.website_session.grant.get_secret_value(),
+                                "origin": recording.website_session.origin,
+                                "googleEmail": email,
+                                "state": state,
+                            }
+                            recording.website_session_status = "captured"
+                    except asyncio.CancelledError:
+                        # Finish browser cleanup, but never hand off a cancelled capture.
+                        cancelled = True
+                    except Exception as error:
+                        logger.warning("recording_website_capture_failed error_type=%s", type(error).__name__)
             signed_in = recording.google_signed_in
-            if not signed_in:
+            if not signed_in and not website_mode:
                 try:
                     signed_in = await browser.google_signed_in()
                 except Exception:
                     signed_in = False
             recording.google_signed_in = signed_in
             await browser.close()
-        except BaseException:
+        except BaseException as error:
             async with recording.lock:
                 recording.closing = False
+                if isinstance(error, asyncio.CancelledError) and website_mode:
+                    recording.website_session_payload = None
+                    recording.website_session_status = "unavailable"
             raise
         async with recording.lock:
             recording.browser = None
@@ -558,8 +619,13 @@ class RecordingService:
             recording.closing = False
             if recording.status == "expired":
                 recording.credentials = {}
-        if not signed_in:
+                recording.website_session = None
+                recording.website_session_payload = None
+                recording.website_session_status = None
+        if not signed_in or website_mode:
             await self._delete_context(recording)
+        if cancelled:
+            raise asyncio.CancelledError
 
     async def _attach_browser(self, recording: Recording, browser: BrowserSession) -> bool:
         """Attach a newly created browser only while its recording remains live."""

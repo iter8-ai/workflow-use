@@ -3,8 +3,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from typing import TYPE_CHECKING, Any, Protocol
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from .capture import CAPTURE_SCRIPT, console_event, install_sign_in_capture, install_sign_in_fill
@@ -13,6 +16,7 @@ from .security import (
     is_google_sign_in,
     is_public_http_url,
     resolves_to_public_host,
+    website_state,
 )
 
 if TYPE_CHECKING:
@@ -39,6 +43,8 @@ class BrowserSession(Protocol):
     async def close(self) -> None: ...
 
     async def google_signed_in(self) -> bool: ...
+
+    async def capture_website_session(self, origin: str) -> tuple[str | None, dict[str, Any]]: ...
 
     async def delete_context(self) -> None: ...
 
@@ -151,6 +157,39 @@ class PlaywrightRecordingSession:
 
     async def google_signed_in(self) -> bool:
         return has_google_session(await self.browser.contexts[0].cookies())
+
+    async def capture_website_session(self, origin: str) -> tuple[str | None, dict[str, Any]]:
+        """Capture before identity navigation; only a trusted Google page identifies the account."""
+        context = self.browser.contexts[0]
+        state = await context.storage_state()
+        filtered = website_state(state, origin)
+        if not has_google_session(state.get("cookies", [])):
+            return None, filtered
+        page = await context.new_page()
+        try:
+            await page.goto("https://myaccount.google.com/", wait_until="domcontentloaded", timeout=10_000)
+            # Copy of FIRE adapters/google_session.py complete(), with ambiguous labels rejected.
+            if urlsplit(page.url).hostname != "myaccount.google.com" or urlsplit(page.url).scheme != "https":
+                return None, filtered
+            account = page.locator("[aria-label*='Google Account']")
+            await account.first.wait_for(state="attached", timeout=2_000)
+            labels = await account.evaluate_all(
+                "elements => elements.map(element => element.getAttribute('aria-label'))"
+            )
+            emails = {
+                email.lower()
+                for label in labels
+                if isinstance(label, str)
+                for email in re.findall(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", label)
+            }
+            # Recheck after reading to reject a navigation away from the trusted document.
+            if urlsplit(page.url).hostname != "myaccount.google.com" or urlsplit(page.url).scheme != "https":
+                return None, filtered
+            return (next(iter(emails)) if len(emails) == 1 else None), filtered
+        finally:
+            with suppress(Exception):
+                async with asyncio.timeout(2):
+                    await page.close()
 
     async def navigate(self, url: str, *, timeout_ms: int = NAVIGATE_TIMEOUT_MS) -> None:
         """Open a page in the tab the live view shows. Raises Playwright's own errors."""
