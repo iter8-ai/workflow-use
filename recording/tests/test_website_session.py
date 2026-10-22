@@ -381,9 +381,7 @@ async def test_website_context_is_deleted_after_failed_close_retry(action: str) 
     service = RecordingService(provider)
     owner = RecordingOwner("staging", "owner@example.com")
     try:
-        recording = await service.create(
-            owner, WEBSITE["origin"], website_session=RecordingWebsiteSession(**WEBSITE)
-        )
+        recording = await service.create(owner, WEBSITE["origin"], website_session=RecordingWebsiteSession(**WEBSITE))
         if action == "expiry":
             recording.expires_at = datetime.now(UTC) - timedelta(seconds=1)
             await service.cleanup()
