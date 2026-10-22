@@ -1392,10 +1392,6 @@ async def test_a_blocked_page_load_does_not_clear_the_block_but_a_later_page_doe
         pass
 
     monkeypatch.setattr(provider, "install_sign_in_capture", no_capture)
-    events: list[dict[str, Any]] = []
-
-    async def record(event: dict[str, Any]) -> None:
-        events.append(event)
 
     class Page(FakePage):
         def __init__(self) -> None:
@@ -1415,18 +1411,18 @@ async def test_a_blocked_page_load_does_not_clear_the_block_but_a_later_page_doe
                 SimpleNamespace(status=status, request=request, frame=frame, url="https://example.com/")
             )
 
-    session = provider.PlaywrightRecordingSession(browser=object(), runtime=object(), live_view_url=None)
-    session.start_page_blocked = True
     page = Page()
-    await provider._install_page_events(session, page, record)
+    context = FakeContext(page)
+    context.pages = [page]
+    _browserbase_with(monkeypatch, FakeRuntime(FakeBrowser(context)))
+    events: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    session = await BrowserbaseProvider(project_id="project-1").create("https://example.com/", events.put)
 
     # The block page itself loads fine as far as the browser is concerned; a 403 document is not a loaded page.
     page.respond(403)
     page.handlers["domcontentloaded"]()
-    await asyncio.gather(*session._tasks)
+    assert await asyncio.wait_for(events.get(), 1) == {"type": "page_blocked", "status": 403}
     assert session.start_page_blocked is True
-    assert events == [{"type": "page_blocked", "status": 403}]
-    events.clear()
 
     # A subresource or frame answering 200 does not stand in for the main document.
     page.respond(200, main=False)
@@ -1435,12 +1431,11 @@ async def test_a_blocked_page_load_does_not_clear_the_block_but_a_later_page_doe
 
     page.respond(200)
     page.handlers["domcontentloaded"]()
-    await asyncio.gather(*session._tasks)
+    assert await asyncio.wait_for(events.get(), 1) == {"type": "page_loaded", "url": "https://example.com/"}
     assert session.start_page_blocked is False
-    assert events == [{"type": "page_loaded", "url": "https://example.com/"}]
 
     # Akamai lets the first document through, then its challenge script re-requests the page and gets 403.
     page.respond(403)
-    await asyncio.gather(*session._tasks)
+    assert await asyncio.wait_for(events.get(), 1) == {"type": "page_blocked", "status": 403}
     assert session.start_page_blocked is True
-    assert events[-1] == {"type": "page_blocked", "status": 403}
+    await session.close()
