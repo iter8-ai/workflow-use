@@ -758,3 +758,58 @@ async def test_a_borrowed_saved_sign_in_context_is_never_deleted_or_lent(signed_
 
     assert provider.sessions[0].closed
     assert all(session.delete_attempts == 0 for session in provider.sessions)
+
+
+@pytest.mark.asyncio
+async def test_same_saved_context_is_rejected_until_recording_closes() -> None:
+    provider = BorrowingProvider(signed_in=True)
+    service = RecordingService(provider)
+    owner = RecordingOwner("iter7", "owner@iter7.example")
+    first = await service.create(owner, "https://example.com", context_id="shared-context")
+
+    with pytest.raises(RuntimeError, match="saved sign-in is already in use"):
+        await service.create(owner, "https://example.org", context_id="shared-context")
+    assert len(provider.sessions) == 1
+    # A different credential can still record concurrently.
+    other = await service.create(owner, "https://example.org", context_id="other-context")
+    await service.stop(first.id, owner)
+    again = await service.create(owner, "https://example.com", context_id="shared-context")
+    assert again.status == other.status == "recording"
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_same_saved_context_is_rejected_while_browser_is_starting() -> None:
+    provider = DeferredProvider()
+    service = RecordingService(provider)
+    owner = RecordingOwner("iter7", "owner@iter7.example")
+    pending = asyncio.create_task(service.create(owner, "https://example.com", context_id="shared-context"))
+    await provider.started.wait()
+    try:
+        with pytest.raises(RuntimeError, match="saved sign-in is already in use"):
+            await service.create(owner, "https://example.org", context_id="shared-context")
+    finally:
+        provider.release.set()
+        await pending
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_same_saved_context_stays_reserved_when_release_fails() -> None:
+    from unittest.mock import AsyncMock
+
+    provider = BorrowingProvider(signed_in=True)
+    service = RecordingService(provider)
+    owner = RecordingOwner("iter7", "owner@iter7.example")
+    first = await service.create(owner, "https://example.com", context_id="shared-context")
+    close = AsyncMock(side_effect=RuntimeError("transient-provider-close-failure"))
+    provider.sessions[0].close = close
+    with pytest.raises(RuntimeError, match="transient-provider-close-failure"):
+        await service.stop(first.id, owner)
+    try:
+        with pytest.raises(RuntimeError, match="saved sign-in is already in use"):
+            await service.create(owner, "https://example.org", context_id="shared-context")
+        assert len(provider.sessions) == 1
+    finally:
+        close.side_effect = None
+        await service.close()

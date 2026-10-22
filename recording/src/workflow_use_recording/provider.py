@@ -56,8 +56,8 @@ class BrowserProvider(Protocol):
     ) -> BrowserSession:
         """Start a recording browser on ``start_url``.
 
-        ``context_id`` is a borrowed Browserbase context with a saved sign-in: it is opened read-only and the
-        session reports no context of its own, so nothing ever deletes it. ``login`` is filled into matching
+        ``context_id`` is a borrowed Browserbase context with a saved sign-in: demonstrated sign-ins persist,
+        but the session reports no context of its own, so nothing ever deletes it. ``login`` is filled into matching
         sign-in forms while the session is open.
         """
         ...
@@ -366,8 +366,8 @@ class BrowserbaseProvider:
         from browserbase import AsyncBrowserbase
 
         client = AsyncBrowserbase()
-        # A saved sign-in's context is borrowed: opened without persisting, and never deleted here or by the
-        # service. Only a context this call creates is the session's own.
+        # Save demonstrated website sign-ins into the authorized credential's shared context. It remains
+        # borrowed, never deleted here or by the service. Only a context created here is the session's own.
         saved_context_id = context_id
         context_id = None
         created: Any | None = None
@@ -390,11 +390,7 @@ class BrowserbaseProvider:
             if saved_context_id is None:
                 context_id = (await client.contexts.create(project_id=self.project_id)).id
                 stage = "create_session"
-            browser_context = (
-                {"id": context_id, "persist": True}
-                if saved_context_id is None
-                else {"id": saved_context_id, "persist": False}
-            )
+            browser_context = {"id": saved_context_id or context_id, "persist": True}
             created = await client.sessions.create(
                 project_id=self.project_id,
                 keep_alive=True,
