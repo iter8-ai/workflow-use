@@ -1092,7 +1092,9 @@ def _borrowing_browserbase(monkeypatch: pytest.MonkeyPatch, *, fail_session: boo
 
 
 @pytest.mark.asyncio
-async def test_a_saved_sign_in_context_is_opened_read_only_and_never_deleted(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_saved_sign_in_context_persists_demonstrated_login_without_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from workflow_use_recording.models import RecordingLogin
 
     page = FakePage()
@@ -1106,14 +1108,14 @@ async def test_a_saved_sign_in_context_is_opened_read_only_and_never_deleted(mon
     )
 
     assert calls.contexts_created == 0
-    assert calls.sessions[0]["browser_settings"]["context"] == {"id": "context-saved", "persist": False}
+    assert calls.sessions[0]["browser_settings"]["context"] == {"id": "context-saved", "persist": True}
     # The service sees no context of the session's own, so no stop, expiry or claim path can delete or lend it.
     assert session.context_id is None
     assert session.login is login
     await session.close()
     await session.delete_context()
     assert calls.deleted == []
-    # The saved sign-in does not outlive the browser.
+    # Autofill plaintext does not outlive the browser.
     assert session.login is None
 
 

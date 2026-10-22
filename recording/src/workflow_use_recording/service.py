@@ -85,6 +85,8 @@ class Recording:
     creating: bool = True
     google_signed_in: bool = False
     stopped_at: datetime | None = None
+    # Only reserves concurrent use in this recorder process; never confers context ownership.
+    saved_context_id: str | None = field(default=None, repr=False)
     context_id: str | None = field(default=None, repr=False)
     context_delete: Callable[[], Awaitable[None]] | None = field(default=None, repr=False)
     context_state: Literal["owned", "lent", "released"] = "owned"
@@ -122,8 +124,7 @@ class RecordingService:
         context_id: str | None = None,
         login: RecordingLogin | None = None,
     ) -> Recording:
-        """Start a recording. ``context_id`` and ``login`` go to the provider only and are not kept here: a
-        borrowed context is never recorded as the recording's own, so no stop, expiry or claim path deletes it."""
+        """Start a recording, reserving a borrowed context separately from cleanup/claim ownership."""
         if self._closed:
             raise RuntimeError("Recording service is shutting down.")
         if not is_public_http_url(start_url):
@@ -139,12 +140,19 @@ class RecordingService:
                 raise RuntimeError("Recording service is shutting down.")
             await self.cleanup()
             await self._evict_completed()
+            # ponytail: one recorder worker. Cross-service exclusion belongs to the credential owner;
+            # this prevents two demonstrations from overwriting the same saved profile here.
+            if context_id is not None and any(
+                item.saved_context_id == context_id and item.status == "recording" for item in self._recordings.values()
+            ):
+                raise RuntimeError("The saved sign-in is already in use by another recording.")
             if len(self._recordings) >= self.max_sessions:
                 raise RuntimeError("Recording capacity is full. Stop an existing recording first.")
 
             recording = Recording(
                 id=str(uuid4()),
                 owner=owner,
+                saved_context_id=context_id,
                 expires_at=datetime.now(UTC) + timedelta(seconds=self.timeout_seconds),
             )
             self._recordings[recording.id] = recording
