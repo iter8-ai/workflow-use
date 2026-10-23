@@ -1344,7 +1344,9 @@ async def test_cancelled_event_drain_cleans_up_owned_direct_attempt(monkeypatch:
 
 
 @pytest.mark.asyncio
-async def test_kept_direct_attempt_reports_ordered_startup_and_later_tab_events(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_kept_direct_attempt_reports_ordered_startup_and_later_tab_events(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from workflow_use_recording import provider
 
     runtimes, _ = _event_attempts(monkeypatch, [200])
