@@ -622,6 +622,8 @@ class BrowserbaseProvider:
                     raise _StartPageBlocked(session._main_status[page]) from None
                 raise RecordingStartTimeout("The recording start page did not load in time.") from None
             except PlaywrightError as error:
+                if retry_when_blocked and session.page_blocked(page):
+                    raise _StartPageBlocked(session._main_status[page]) from None
                 # The browser is up; the person can still open another page. Only the type: the message can
                 # carry the connect URL.
                 logger.warning("recording_start_page_failed error_type=%s", type(error).__name__)

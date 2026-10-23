@@ -1461,6 +1461,74 @@ async def test_start_timeout_stays_fatal_without_retryable_direct_block(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("statuses", "interrupted_attempt", "borrowed", "expected"),
+    [
+        ([403, 200], 0, False, ("proxy", False, False, [{"type": "click", "target": "proxy"}])),
+        ([429, 200], 0, False, ("proxy", False, False, [{"type": "click", "target": "proxy"}])),
+        ([503, 200], 0, False, ("proxy", False, False, [{"type": "click", "target": "proxy"}])),
+        ([200], 0, False, ("direct", True, False, [{"type": "click", "target": "direct"}])),
+        ([None], 0, False, ("direct", True, False, [{"type": "click", "target": "direct"}])),
+        (
+            [403],
+            0,
+            True,
+            ("direct", True, True, [{"type": "click", "target": "direct"}, {"type": "page_blocked", "status": 403}]),
+        ),
+        (
+            [403, 503],
+            1,
+            False,
+            ("proxy", True, True, [{"type": "click", "target": "proxy"}, {"type": "page_blocked", "status": 503}]),
+        ),
+    ],
+    ids=["blocked-403", "blocked-429", "blocked-503", "unblocked-200", "no-response", "borrowed", "proxy"],
+)
+async def test_generic_start_error_retries_only_recorded_owned_direct_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    statuses: list[int | None],
+    interrupted_attempt: int,
+    borrowed: bool,
+    expected: tuple[str, bool, bool, list[dict[str, Any]]],
+) -> None:
+    from playwright.async_api import Error as PlaywrightError
+
+    from workflow_use_recording import provider
+
+    runtimes, calls = _event_attempts(monkeypatch, statuses)
+    page = runtimes[interrupted_attempt]._browser.contexts[0]._page
+    goto = page.goto
+
+    async def interrupted_goto(url: str, **kwargs: Any) -> Any:
+        await goto(url, **kwargs)
+        raise PlaywrightError("navigation interrupted")
+
+    page.goto = interrupted_goto
+
+    async def no_capture(*_args: Any) -> None:
+        pass
+
+    monkeypatch.setattr(provider, "install_sign_in_capture", no_capture)
+    events: list[dict[str, Any]] = []
+
+    async def record(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    with caplog.at_level("WARNING", logger="workflow_use_recording.provider"):
+        session = await BrowserbaseProvider(project_id="project-1").create(
+            "https://example.com/", record, context_id="saved-context" if borrowed else None
+        )
+
+    assert (session.network, session.start_page_failed, session.start_page_blocked, events) == expected
+    assert len(calls.sessions) == len(statuses)
+    if len(statuses) == 2:
+        assert f"recording_start_page_blocked status={statuses[0]} network=direct" in caplog.text
+        assert runtimes[0]._browser.closed and runtimes[0].stopped
+    await session.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("status", "blocked"),
     [(403, True), (429, True), (503, True), (200, False)],
     ids=["forbidden", "rate_limited", "unavailable", "loaded"],
