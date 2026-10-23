@@ -330,8 +330,7 @@ async def _install_page_events(session: PlaywrightRecordingSession, page: Any, o
 
     def on_console(message: Any) -> None:
         event = console_event(message)
-        # Browser-only status comes from Python response/load listeners, never page JavaScript.
-        if event is None or event.get("type") in {"page_blocked", "page_loaded"}:
+        if event is None:
             return
         # Signing in to Google is not a step an agent repeats: it uses the agent's connected Google account.
         if is_google_sign_in(page.url):
