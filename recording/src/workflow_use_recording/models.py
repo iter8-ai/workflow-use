@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
@@ -7,6 +8,15 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 from .security import url_origin
+
+_COUNTRY_CODE = re.compile(r"[A-Za-z]{2}")
+
+
+def country_code(value: str) -> str:
+    """Return ``value`` as an upper-case ISO 3166-1 alpha-2 country code, or raise ``ValueError``."""
+    if not isinstance(value, str) or _COUNTRY_CODE.fullmatch(value) is None:
+        raise ValueError("country must be an ISO 3166-1 alpha-2 code such as EE.")
+    return value.upper()
 
 
 class FixedDateRule(BaseModel):
@@ -173,10 +183,17 @@ class RecordingWebsiteSession(BaseModel):
 
 class CreateRecordingRequest(BaseModel):
     url: str
-    # Saved-profile persistence and ownership: see recording/README.md.
+    # Borrowed context, never deleted here; see recording/README.md for saved sign-in persistence.
     context_id: str | None = Field(default=None, min_length=1, max_length=200)
     login: RecordingLogin | None = None
     website_session: RecordingWebsiteSession | None = Field(default=None, repr=False)
+    # Where the residential proxy exits when the site blocks the direct browser; ISO 3166-1 alpha-2.
+    country: str | None = None
+
+    @field_validator("country")
+    @classmethod
+    def _alpha_2(cls, value: str | None) -> str | None:
+        return None if value is None else country_code(value)
 
     @model_validator(mode="after")
     def _exclusive_website_session(self) -> CreateRecordingRequest:
@@ -209,6 +226,12 @@ class RecordingResponse(BaseModel):
     google: RecordingGoogle | None = None
     # True when the start page did not load; the person opens another page with the navigate endpoint.
     start_page_failed: bool = Field(default=False, serialization_alias="startPageFailed")
+    # Block-state semantics are documented in recording/README.md under "Blocked start pages".
+    start_page_blocked: bool = Field(default=False, serialization_alias="startPageBlocked")
+    # The network the demonstration browser is on. "proxy" after a retry over a geolocated residential proxy;
+    # the host saves it on the agent so its runs use the same network.
+    network: Literal["direct", "proxy"] = "direct"
+    proxy_country: str | None = Field(default=None, serialization_alias="proxyCountry")
 
 
 class CapturedCredentials(BaseModel):
