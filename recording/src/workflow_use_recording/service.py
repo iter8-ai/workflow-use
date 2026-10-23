@@ -194,7 +194,6 @@ class RecordingService:
                 raise RuntimeError("Recording stopped before the browser became available.")
             recording.network = getattr(browser, "network", "direct")
             recording.proxy_country = getattr(browser, "proxy_country", None)
-            # Assigned, not or-ed: a blocked attempt the provider already discarded may have reported its block.
             recording.start_page_blocked = bool(getattr(browser, "start_page_blocked", False))
             # Browser events are authoritative, including redirects and actions during startup.
             # Seed the configured URL only when startup succeeded and no steps were captured.
