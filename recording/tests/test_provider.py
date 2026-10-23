@@ -1190,6 +1190,7 @@ class EventPage(ResponsePage):
         response = await super().goto(url, **kwargs)
         self.click(self.name)
         if self.download:
+
             async def failure() -> None:
                 return None
 
