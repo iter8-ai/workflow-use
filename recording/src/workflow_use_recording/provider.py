@@ -524,6 +524,15 @@ class BrowserbaseProvider:
         created: Any | None = None
         runtime: Any | None = None
         browser: Any | None = None
+        buffered_events: list[dict[str, Any]] = []
+        event_state = "buffer" if retry_when_blocked else "live"
+
+        async def attempt_event(event: dict[str, Any]) -> None:
+            if event_state == "buffer":
+                buffered_events.append(event)
+            elif event_state == "live":
+                await on_event(event)
+
         # The API reports every startup failure as a generic 503, so the log must say where startup stopped.
         stage = "create_context" if saved_context_id is None else "create_session"
 
@@ -586,14 +595,14 @@ class BrowserbaseProvider:
                 proxy_country=proxy_country,
             )
             context = contexts[0]
-            await _configure_context(context, on_event)
+            await _configure_context(context, attempt_event)
             page = context.pages[0] if context.pages else await context.new_page()
             for existing_page in context.pages:
-                await _install_page_events(session, existing_page, on_event)
+                await _install_page_events(session, existing_page, attempt_event)
 
             def on_new_page(new_page: Any) -> None:
                 session.open_tab(new_page)
-                session.track(_install_page_events(session, new_page, on_event))
+                session.track(_install_page_events(session, new_page, attempt_event))
                 session.watch(_show_opened_tab(session, client, created.id, new_page))
 
             context.on("page", on_new_page)
@@ -609,6 +618,8 @@ class BrowserbaseProvider:
                     * 1000,
                 )
             except PlaywrightTimeoutError:
+                if retry_when_blocked and session.page_blocked(page):
+                    raise _StartPageBlocked(session._main_status[page]) from None
                 raise RecordingStartTimeout("The recording start page did not load in time.") from None
             except PlaywrightError as error:
                 # The browser is up; the person can still open another page. Only the type: the message can
@@ -623,8 +634,15 @@ class BrowserbaseProvider:
                     # The browser stays up on the block page; the person may open another page.
                     logger.warning("recording_start_page_blocked status=%s network=%s", blocked, network)
                     session.start_page_blocked = True
+            if retry_when_blocked:
+                for event in buffered_events:
+                    await on_event(event)
+                buffered_events.clear()
+                event_state = "live"
             return session
         except BaseException as error:
+            event_state = "discard"
+            buffered_events.clear()
             if not isinstance(error, _StartPageBlocked):
                 # Only the stage and type: provider messages can carry the connect URL and its signing key.
                 logger.warning("recording_browser_start_failed stage=%s error_type=%s", stage, type(error).__name__)

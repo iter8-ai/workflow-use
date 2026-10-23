@@ -1169,6 +1169,59 @@ class ResponsePage(FakePage):
         return None if self.status is None else SimpleNamespace(status=self.status)
 
 
+class EventPage(ResponsePage):
+    def __init__(self, status: int | None, name: str, *, timeout: bool = False, download: bool = False) -> None:
+        super().__init__(status)
+        self.name = name
+        self.timeout = timeout
+        self.download = download
+        self.handlers: dict[str, Any] = {}
+        self.url = "https://example.com/"
+        self.main_frame = SimpleNamespace(url=self.url)
+        self.context: Any = None
+
+    def on(self, event: str, callback: Any) -> None:
+        self.handlers[event] = callback
+
+    def click(self, target: str) -> None:
+        self.handlers["console"](_ConsoleMessage("__workflowUse__", json.dumps({"type": "click", "target": target})))
+
+    async def goto(self, url: str, **kwargs: Any) -> Any:
+        response = await super().goto(url, **kwargs)
+        self.click(self.name)
+        if self.download:
+            async def failure() -> None:
+                return None
+
+            self.handlers["download"](SimpleNamespace(suggested_filename="discard.csv", failure=failure))
+        if response is not None:
+            self.handlers["response"](
+                SimpleNamespace(
+                    status=response.status,
+                    request=SimpleNamespace(is_navigation_request=lambda: True),
+                    frame=self.main_frame,
+                    url=url,
+                )
+            )
+        await asyncio.sleep(0)
+        if self.timeout:
+            from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
+            raise PlaywrightTimeoutError("start page timeout")
+        return response
+
+
+class EventContext(FakeContext):
+    def __init__(self, page: EventPage) -> None:
+        super().__init__(page)
+        self.pages = [page]
+        self.handlers: dict[str, Any] = {}
+        page.context = self
+
+    def on(self, event: str, callback: Any) -> None:
+        self.handlers[event] = callback
+
+
 def _attempts(
     monkeypatch: pytest.MonkeyPatch, statuses: list[int | None], *, borrowed: bool = False
 ) -> tuple[list[FakeRuntime], SimpleNamespace]:
@@ -1216,7 +1269,194 @@ def _attempts(
     return runtimes, calls
 
 
+def _event_attempts(
+    monkeypatch: pytest.MonkeyPatch, statuses: list[int | None], *, timeouts: tuple[int, ...] = ()
+) -> tuple[list[FakeRuntime], SimpleNamespace]:
+    runtimes, calls = _attempts(monkeypatch, statuses)
+    for index, (runtime, status) in enumerate(zip(runtimes, statuses, strict=True)):
+        page = EventPage(status, "direct" if index == 0 else "proxy", timeout=index in timeouts)
+        runtime._browser.contexts[0] = EventContext(page)
+    return runtimes, calls
+
+
 EE_PROXY = [{"type": "browserbase", "geolocation": {"country": "EE"}}]
+
+
+@pytest.mark.asyncio
+async def test_discarded_direct_attempt_never_reports_its_events(monkeypatch: pytest.MonkeyPatch) -> None:
+    from workflow_use_recording import provider
+
+    runtimes, _ = _event_attempts(monkeypatch, [403, 200])
+    direct = runtimes[0]._browser.contexts[0]._page
+    direct.download = True
+    goto = direct.goto
+
+    async def blocked_goto(url: str, **kwargs: Any) -> Any:
+        direct.main_frame.url = "https://example.com/access-denied"
+        direct.handlers["framenavigated"](direct.main_frame)
+        return await goto(url, **kwargs)
+
+    direct.goto = blocked_goto
+
+    async def capture(_context: Any, page: EventPage, on_event: Any) -> None:
+        if page is direct:
+            on_event({"type": "sign_in_value", "value": "password", "secret": "discarded-secret"})
+
+    monkeypatch.setattr(provider, "install_sign_in_capture", capture)
+    events: list[dict[str, Any]] = []
+
+    async def record(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    session = await BrowserbaseProvider(project_id="project-1").create("https://example.com/", record)
+
+    assert session.network == "proxy"
+    assert events == [{"type": "click", "target": "proxy"}]
+    direct.click("late-direct")
+    await asyncio.sleep(0)
+    assert events == [{"type": "click", "target": "proxy"}]
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_event_drain_cleans_up_owned_direct_attempt(monkeypatch: pytest.MonkeyPatch) -> None:
+    from workflow_use_recording import provider
+
+    runtimes, calls = _event_attempts(monkeypatch, [200])
+
+    async def no_capture(*_args: Any) -> None:
+        pass
+
+    monkeypatch.setattr(provider, "install_sign_in_capture", no_capture)
+    seen: list[dict[str, Any]] = []
+
+    async def cancel_drain(event: dict[str, Any]) -> None:
+        seen.append(event)
+        raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await BrowserbaseProvider(project_id="project-1").create("https://example.com/", cancel_drain)
+
+    assert seen == [{"type": "click", "target": "direct"}]
+    assert runtimes[0]._browser.closed and runtimes[0].stopped
+    assert calls.releases == ["session-1"]
+    assert calls.deleted == ["/v1/contexts/context-1"]
+
+
+@pytest.mark.asyncio
+async def test_kept_direct_attempt_reports_ordered_startup_and_later_tab_events(monkeypatch: pytest.MonkeyPatch) -> None:
+    from workflow_use_recording import provider
+
+    runtimes, _ = _event_attempts(monkeypatch, [200])
+    context = runtimes[0]._browser.contexts[0]
+    page = context._page
+
+    async def no_capture(*_args: Any) -> None:
+        pass
+
+    monkeypatch.setattr(provider, "install_sign_in_capture", no_capture)
+    events: list[dict[str, Any]] = []
+
+    async def record(event: dict[str, Any]) -> None:
+        events.append(event)
+        if event == {"type": "click", "target": "direct"}:
+            page.click("during-drain")
+            await asyncio.sleep(0)
+
+    session = await BrowserbaseProvider(project_id="project-1").create("https://example.com/", record)
+    assert session.network == "direct"
+    assert events == [
+        {"type": "click", "target": "direct"},
+        {"type": "click", "target": "during-drain"},
+    ]
+
+    tab = EventPage(None, "tab")
+    tab.context = context
+    context.handlers["page"](tab)
+    await asyncio.sleep(0)
+    tab.click("new-tab")
+    page.click("later")
+    await asyncio.sleep(0)
+    assert events == [
+        {"type": "click", "target": "direct"},
+        {"type": "click", "target": "during-drain"},
+        {"type": "click", "target": "new-tab"},
+        {"type": "click", "target": "later"},
+    ]
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_blocked_main_response_before_timeout_retries_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    from workflow_use_recording import provider
+
+    runtimes, calls = _event_attempts(monkeypatch, [429, 200], timeouts=(0,))
+
+    async def no_capture(*_args: Any) -> None:
+        pass
+
+    monkeypatch.setattr(provider, "install_sign_in_capture", no_capture)
+    events: list[dict[str, Any]] = []
+
+    async def record(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    session = await BrowserbaseProvider(project_id="project-1").create("https://example.com/", record)
+
+    assert session.network == "proxy"
+    assert calls.sessions[1]["proxies"] == EE_PROXY
+    assert runtimes[0]._browser.closed and runtimes[0].stopped
+    assert events == [{"type": "click", "target": "proxy"}]
+    await session.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("statuses", "timeouts", "borrowed", "expected_events"),
+    [
+        ([200], (0,), False, []),
+        (
+            [403],
+            (0,),
+            True,
+            [{"type": "click", "target": "direct"}, {"type": "page_blocked", "status": 403}],
+        ),
+        (
+            [429, 503],
+            (1,),
+            False,
+            [{"type": "click", "target": "proxy"}, {"type": "page_blocked", "status": 503}],
+        ),
+    ],
+    ids=["ordinary-direct", "borrowed-direct", "blocked-proxy"],
+)
+async def test_start_timeout_stays_fatal_without_retryable_direct_block(
+    monkeypatch: pytest.MonkeyPatch,
+    statuses: list[int],
+    timeouts: tuple[int, ...],
+    borrowed: bool,
+    expected_events: list[dict[str, Any]],
+) -> None:
+    from workflow_use_recording import provider
+
+    _, calls = _event_attempts(monkeypatch, statuses, timeouts=timeouts)
+
+    async def no_capture(*_args: Any) -> None:
+        pass
+
+    monkeypatch.setattr(provider, "install_sign_in_capture", no_capture)
+    events: list[dict[str, Any]] = []
+
+    async def record(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    with pytest.raises(RecordingStartTimeout):
+        await BrowserbaseProvider(project_id="project-1").create(
+            "https://example.com/", record, context_id="saved-context" if borrowed else None
+        )
+
+    assert len(calls.sessions) == len(statuses)
+    assert events == expected_events
 
 
 @pytest.mark.asyncio
