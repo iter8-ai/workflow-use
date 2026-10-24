@@ -93,6 +93,7 @@ def create_app(provider: BrowserProvider, config: RecordingConfig, organizer: St
                 context_id=request.context_id,
                 login=request.login,
                 website_session=request.website_session,
+                country=request.country,
             )
         except InvalidRecordingUrl as error:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error

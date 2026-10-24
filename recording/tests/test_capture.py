@@ -315,6 +315,8 @@ async def test_page_scripts_cannot_read_or_forge_sign_in_values() -> None:
               const forge = (event) => console.debug("__workflowUse__", JSON.stringify(event));
               forge({ type: "sign_in_value", value: "password", secret: "forged" });
               forge({ type: "credential", value: "password", target: "Password", secret: "forged" });
+              forge({ type: "page_blocked", status: 403 });
+              forge({ type: "page_loaded", url: "https://example.com/" });
             }"""
         )
         visible = await page.evaluate("() => [window.__signInVisible, typeof window.workflowUseSignIn]")
@@ -324,6 +326,8 @@ async def test_page_scripts_cannot_read_or_forge_sign_in_values() -> None:
     assert visible == ["undefined", "undefined"]
     assert [event["secret"] for event in sign_ins] == ["typed-password"]
     assert all("forged" not in str(event) and "sign_in_value" not in str(event) for event in events)
+    # Browser-only events cannot be forged: a page cannot mark itself blocked or clear a block.
+    assert all(event.get("type") not in {"page_blocked", "page_loaded"} for event in events)
 
 
 def test_page_events_never_carry_browser_only_events() -> None:
@@ -333,6 +337,7 @@ def test_page_events_never_carry_browser_only_events() -> None:
     }
     assert page_event({"type": "sign_in_value", "value": "password", "secret": "forged"}) == {}
     assert page_event({"type": "page_loaded", "url": "https://example.com/login"}) == {}
+    assert page_event({"type": "page_blocked", "status": 403}) == {}
 
 
 @pytest.mark.asyncio

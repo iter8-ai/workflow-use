@@ -25,6 +25,9 @@ class FakeSession:
         self.cookie_failure = False
         self.deleted = False
         self.start_page_failed = False
+        self.start_page_blocked = False
+        self.network = "direct"
+        self.proxy_country: str | None = None
         self.navigate_error: Exception | None = None
         self.navigated: list[str] = []
 
@@ -33,6 +36,7 @@ class FakeSession:
             raise self.navigate_error
         self.navigated.append(url)
         self.start_page_failed = False
+        self.start_page_blocked = False
         await self.emit({"type": "navigation", "url": url})
 
     async def close(self) -> None:
@@ -49,11 +53,12 @@ class FakeSession:
 
 
 class FakeProvider(BrowserProvider):
-    def __init__(self, *, start_page_failed: bool = False) -> None:
+    def __init__(self, *, start_page_failed: bool = False, start_page_blocked: bool = False) -> None:
         self.sessions: list[FakeSession] = []
         self.start_urls: list[str] = []
         self.options: list[dict[str, Any]] = []
         self.start_page_failed = start_page_failed
+        self.start_page_blocked = start_page_blocked
 
     async def create(
         self, start_url: str, on_event: Callable[[dict[str, Any]], Awaitable[None]], **options: Any
@@ -62,6 +67,11 @@ class FakeProvider(BrowserProvider):
         self.options.append(options)
         session = FakeSession(on_event)
         session.start_page_failed = self.start_page_failed
+        if self.start_page_blocked:
+            # The provider retried over a proxy and the site still answered with a block page.
+            session.start_page_blocked = True
+            session.network = "proxy"
+            session.proxy_country = options.get("country") or "EE"
         self.sessions.append(session)
         return session
 
@@ -137,8 +147,83 @@ def test_create_returns_only_safe_live_view_response() -> None:
         "organizing": False,
         "google": None,
         "startPageFailed": False,
+        "startPageBlocked": False,
+        "network": "direct",
+        "proxyCountry": None,
     }
     assert "test-key" not in response.text
+    assert provider.options == [{"context_id": None, "login": None, "country": None}]
+
+
+def test_a_blocked_start_page_reports_the_proxy_and_the_stop_response_keeps_it() -> None:
+    provider = FakeProvider(start_page_blocked=True)
+    with client(provider) as http:
+        created = http.post("/recordings", json={"url": "https://example.com", "country": "de"}, headers=headers())
+        recording = created.json()
+        fetched = http.get(f"/recordings/{recording['id']}", headers=headers()).json()
+        stopped = http.post(f"/recordings/{recording['id']}/stop", headers=headers()).json()
+
+    assert created.status_code == 201
+    assert provider.options[0]["country"] == "DE"
+    assert (recording["startPageBlocked"], recording["network"], recording["proxyCountry"]) == (True, "proxy", "DE")
+    assert recording["startPageFailed"] is False and recording["status"] == "recording"
+    assert fetched["startPageBlocked"] is True
+    # The host saves the network the demonstration ended up on with the agent.
+    assert (stopped["network"], stopped["proxyCountry"]) == ("proxy", "DE")
+    assert stopped["status"] == "stopped"
+
+
+@pytest.mark.parametrize("country", ["EST", "E1", "", "E", 12, "e-"])
+def test_create_rejects_a_country_that_is_not_an_alpha_2_code(country: Any) -> None:
+    provider = FakeProvider()
+    with client(provider) as http:
+        response = http.post("/recordings", json={"url": "https://example.com", "country": country}, headers=headers())
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "country"]
+    assert provider.sessions == []
+
+
+@pytest.mark.asyncio
+async def test_a_loaded_page_or_a_navigate_clears_the_start_page_block_like_a_failed_start() -> None:
+    provider = FakeProvider(start_page_blocked=True)
+    with client(provider) as http:
+        first = create_recording(http)
+        session = provider.sessions[0]
+        await session.emit({"type": "page_loaded", "url": "https://example.com/reports"})
+        after_load = http.get(f"/recordings/{first['id']}", headers=headers()).json()
+
+        second = create_recording(http)
+        navigated = http.post(
+            f"/recordings/{second['id']}/navigate", json={"url": "https://example.com/login"}, headers=headers()
+        ).json()
+        stopped = http.post(f"/recordings/{second['id']}/stop", headers=headers()).json()
+
+    assert first["startPageBlocked"] is True and after_load["startPageBlocked"] is False
+    assert second["startPageBlocked"] is True and navigated["startPageBlocked"] is False
+    assert stopped["startPageBlocked"] is False
+    # Clearing the block does not forget which network the browser is on.
+    assert (after_load["network"], stopped["network"]) == ("proxy", "proxy")
+
+
+@pytest.mark.asyncio
+async def test_a_block_page_that_lands_after_create_marks_the_recording_blocked_until_a_page_loads() -> None:
+    provider = FakeProvider()
+    with client(provider) as http:
+        recording = create_recording(http)
+        session = provider.sessions[0]
+        # Akamai's challenge page loaded, then its script re-requested the page and was refused.
+        await session.emit({"type": "page_blocked", "status": 403})
+        blocked = http.get(f"/recordings/{recording['id']}", headers=headers()).json()
+        await session.emit({"type": "page_loaded", "url": "https://example.com/account"})
+        cleared = http.get(f"/recordings/{recording['id']}", headers=headers()).json()
+        await session.emit({"type": "page_blocked", "status": 429})
+        stopped = http.post(f"/recordings/{recording['id']}/stop", headers=headers()).json()
+
+    assert recording["startPageBlocked"] is False
+    assert blocked["startPageBlocked"] is True and blocked["steps"] == recording["steps"]
+    assert cleared["startPageBlocked"] is False
+    assert stopped["startPageBlocked"] is True and stopped["network"] == "direct"
 
 
 def test_create_with_a_failed_start_page_keeps_the_demonstration_open_without_a_step() -> None:
@@ -804,7 +889,7 @@ def test_create_without_a_saved_sign_in_passes_nothing() -> None:
     with client(provider) as http:
         create_recording(http)
 
-    assert provider.options == [{"context_id": None, "login": None}]
+    assert provider.options == [{"context_id": None, "login": None, "country": None}]
 
 
 def test_create_canonicalizes_unicode_and_trailing_dot_login_origins() -> None:

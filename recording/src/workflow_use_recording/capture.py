@@ -328,7 +328,7 @@ def page_event(event: object) -> object:
     """Browser-only events never arrive from page JavaScript."""
     if isinstance(event, dict):
         event = {key: value for key, value in event.items() if key != "secret"}
-        if event.get("type") in {"sign_in_value", "download", "page_loaded"}:
+        if event.get("type") in {"sign_in_value", "download", "page_loaded", "page_blocked"}:
             return {}
     return event
 
