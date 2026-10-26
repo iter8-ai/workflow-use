@@ -379,7 +379,8 @@ async def test_browserbase_captures_sign_in_after_current_document_evaluation(
         context_id="saved-context",
         login=(
             RecordingLogin(origins=["https://example.com"], username="demo@example.com", password="demo-password")
-            if autofill else None
+            if autofill
+            else None
         ),
     )
     if cdp_failure == "Page.addScriptToEvaluateOnNewDocument":
