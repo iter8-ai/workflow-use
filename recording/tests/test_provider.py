@@ -829,9 +829,7 @@ async def test_same_origin_popup_records_first_document_input_and_click(monkeypa
         for event in events
     )
     assert any(
-        event.get("type") == "click"
-        and event.get("target") == "Save report"
-        and event.get("tabId") == popup_tab.id
+        event.get("type") == "click" and event.get("target") == "Save report" and event.get("tabId") == popup_tab.id
         for event in events
     )
 
