@@ -264,12 +264,28 @@ async def test_browserbase_session_disables_recording_and_preserves_tab_live_vie
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("redirect", "autofill"),
-    [(False, False), (True, False), (False, True)],
-    ids=["current-document", "redirect-destroys-context", "capture-before-autofill"],
+    ("redirect", "autofill", "cdp_failure"),
+    [
+        (False, False, None),
+        (True, False, None),
+        (False, True, None),
+        (False, True, "Page.getFrameTree"),
+        (False, True, "Page.createIsolatedWorld"),
+        (False, True, "Runtime.evaluate"),
+        (False, True, "Page.addScriptToEvaluateOnNewDocument"),
+    ],
+    ids=[
+        "current-document",
+        "redirect-destroys-context",
+        "capture-before-autofill",
+        "frame-tree-redirect",
+        "isolated-world-redirect",
+        "evaluate-redirect",
+        "durable-registration-failure",
+    ],
 )
 async def test_browserbase_captures_sign_in_after_current_document_evaluation(
-    monkeypatch: pytest.MonkeyPatch, redirect: bool, autofill: bool
+    monkeypatch: pytest.MonkeyPatch, redirect: bool, autofill: bool, cdp_failure: str | None
 ) -> None:
     from workflow_use_recording.capture import CONSOLE_PREFIX
     from workflow_use_recording.models import RecordingLogin
@@ -281,6 +297,15 @@ async def test_browserbase_captures_sign_in_after_current_document_evaluation(
 
         capture_ready = False
         isolated_ready = False
+
+        async def goto(self, url: str, **kwargs: Any) -> None:
+            await super().goto(url, **kwargs)
+            if cdp_failure is not None:
+                await asyncio.sleep(0)
+                self.isolated_ready = cdp.future_capture
+                if self.isolated_ready:
+                    cdp.emit_sign_in()
+                self.events["framenavigated"](self)
 
         async def title(self) -> str:
             await asyncio.sleep(0)
@@ -307,11 +332,21 @@ async def test_browserbase_captures_sign_in_after_current_document_evaluation(
         def __init__(self) -> None:
             self.events: dict[str, Any] = {}
             self.binding = ""
+            self.future_capture = False
+
+        def emit_sign_in(self) -> None:
+            self.events["Runtime.bindingCalled"](
+                {"name": self.binding, "payload": json.dumps({"kind": "username", "value": "demo@example.com"})}
+            )
 
         def on(self, event: str, callback: Any) -> None:
             self.events[event] = callback
 
         async def send(self, command: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+            if command == cdp_failure:
+                raise RuntimeError("Execution context was destroyed")
+            if command == "Page.addScriptToEvaluateOnNewDocument":
+                self.future_capture = True
             if command == "Runtime.addBinding":
                 assert params is not None
                 self.binding = params["name"]
@@ -321,14 +356,14 @@ async def test_browserbase_captures_sign_in_after_current_document_evaluation(
                 return {"executionContextId": 1}
             if command == "Runtime.evaluate":
                 page.isolated_ready = True
-                self.events["Runtime.bindingCalled"](
-                    {"name": self.binding, "payload": json.dumps({"kind": "username", "value": "demo@example.com"})}
-                )
+                self.emit_sign_in()
             return {}
+
+    cdp = CDP()
 
     class Context(FakeContext):
         async def new_cdp_session(self, _page: Any) -> CDP:
-            return CDP()
+            return cdp
 
     page = Page()
     page.frames = [page]
@@ -338,7 +373,7 @@ async def test_browserbase_captures_sign_in_after_current_document_evaluation(
     runtime = FakeRuntime(FakeBrowser(context))
 
     _browserbase_with(monkeypatch, runtime)
-    session = await BrowserbaseProvider(project_id="project-1").create(
+    creation = BrowserbaseProvider(project_id="project-1").create(
         page.url,
         events.put,
         context_id="saved-context",
@@ -347,6 +382,11 @@ async def test_browserbase_captures_sign_in_after_current_document_evaluation(
             if autofill else None
         ),
     )
+    if cdp_failure == "Page.addScriptToEvaluateOnNewDocument":
+        with pytest.raises(RuntimeError, match="Execution context was destroyed"):
+            await creation
+        return
+    session = await creation
     try:
         assert await asyncio.wait_for(events.get(), 1) == {
             "type": "sign_in_value",

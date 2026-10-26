@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from typing import TYPE_CHECKING, Any
 
 from .security import url_origin
@@ -365,8 +366,9 @@ async def install_sign_in_capture(context: Any, page: Any, on_event: Callable[[d
     await cdp.send("Page.addScriptToEvaluateOnNewDocument", {"source": SIGN_IN_SCRIPT, "worldName": SIGN_IN_WORLD})
     # A popup may already show its first document (e.g. a sign-in window); cover it too. The script
     # guards against a second install, and the binding reaches worlds created from now on by name.
-    frame_tree = await cdp.send("Page.getFrameTree")
-    world = await cdp.send(
-        "Page.createIsolatedWorld", {"frameId": frame_tree["frameTree"]["frame"]["id"], "worldName": SIGN_IN_WORLD}
-    )
-    await cdp.send("Runtime.evaluate", {"expression": SIGN_IN_SCRIPT, "contextId": world["executionContextId"]})
+    with suppress(Exception):
+        frame_tree = await cdp.send("Page.getFrameTree")
+        world = await cdp.send(
+            "Page.createIsolatedWorld", {"frameId": frame_tree["frameTree"]["frame"]["id"], "worldName": SIGN_IN_WORLD}
+        )
+        await cdp.send("Runtime.evaluate", {"expression": SIGN_IN_SCRIPT, "contextId": world["executionContextId"]})
