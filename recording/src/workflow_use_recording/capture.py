@@ -77,8 +77,8 @@ CONSOLE_PREFIX = "__workflowUse__"
 
 CAPTURE_SCRIPT = r"""
 (() => {
-  if (window.__workflowUseRecordingInstalled) return;
-  window.__workflowUseRecordingInstalled = true;
+  if (document.__workflowUseRecordingInstalled) return;
+  document.__workflowUseRecordingInstalled = true;
 
   __FIELD_CLASSIFICATION__
   // Controls a person clicks on purpose. Landmark and container roles (dialog, form, main, ...) are not here:

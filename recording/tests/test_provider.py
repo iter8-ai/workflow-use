@@ -777,6 +777,65 @@ async def test_preloaded_popup_records_first_public_navigation_once(monkeypatch:
     ]
 
 
+@pytest.mark.asyncio
+async def test_same_origin_popup_records_first_document_input_and_click(monkeypatch: pytest.MonkeyPatch) -> None:
+    from workflow_use_recording import provider
+
+    configure = provider._configure_context
+
+    async def configure_fixture(context: Any, on_event: Any) -> None:
+        await configure(context, on_event)
+
+        async def fixture(route: Any) -> None:
+            if route.request.url.endswith("/original"):
+                body = "<button onclick=\"window.open('/gate/popup')\">Open report</button>"
+            else:
+                body = '<input aria-label="Note"><button>Save report</button>'
+            await route.fulfill(status=200, content_type="text/html", body=body)
+
+        await context.route("https://example.com/gate/**", fixture)
+
+    monkeypatch.setattr(provider, "_configure_context", configure_fixture)
+    events: list[dict[str, Any]] = []
+
+    async def record(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    session = await provider.LocalPlaywrightProvider(channel="chrome", headless=True).create(
+        "https://example.com/gate/original", record
+    )
+    try:
+        original = session.browser.contexts[0].pages[0]
+        async with original.expect_popup() as opened:
+            await original.get_by_role("button", name="Open report").click()
+        popup = await opened.value
+        popup_tab = session.tab_for(popup)
+        assert popup_tab is not None
+        await popup.wait_for_load_state()
+        await popup.get_by_label("Note").fill("First document")
+        await popup.get_by_role("button", name="Save report").click()
+        for _ in range(20):
+            if any(event.get("type") == "click" and event.get("target") == "Save report" for event in events):
+                break
+            await asyncio.sleep(0.05)
+    finally:
+        await session.close()
+
+    assert any(
+        event.get("type") == "input"
+        and event.get("target") == "Note"
+        and event.get("value") == "First document"
+        and event.get("tabId") == popup_tab.id
+        for event in events
+    )
+    assert any(
+        event.get("type") == "click"
+        and event.get("target") == "Save report"
+        and event.get("tabId") == popup_tab.id
+        for event in events
+    )
+
+
 @pytest.mark.parametrize(
     "stage",
     ["create_context", "create_session", "debug_session", "start_runtime", "connect", "configure", "navigate"],

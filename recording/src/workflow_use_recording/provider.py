@@ -492,6 +492,8 @@ async def _install_page_events(session: PlaywrightRecordingSession, page: Any, o
         install_sign_in_fill(page, lambda: session.login, session.track)
     await session.update_title(page)
     try:
+        # Chrome can reuse a popup's initial window while skipping init scripts on its first loaded document.
+        await page.evaluate(CAPTURE_SCRIPT)
         await install_sign_in_capture(page.context, page, lambda event: session.track(page_event(event)))
     except Exception:
         if not page.is_closed():
