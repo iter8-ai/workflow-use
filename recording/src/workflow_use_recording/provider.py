@@ -358,7 +358,7 @@ class PlaywrightRecordingSession:
                     await page.close()
 
     async def navigate(self, url: str, *, timeout_ms: int = NAVIGATE_TIMEOUT_MS) -> None:
-        """Open a page in the tab the live view shows. Raises Playwright's own errors."""
+        """Open a page in the active recording tab. Raises Playwright's own errors."""
         context = self.browser.contexts[0]
         if self._active_tab_id:
             page = next(tab.page for tab in self._tabs if tab.id == self._active_tab_id)
@@ -514,7 +514,7 @@ async def _report_download(download: Any, on_event: EventSink) -> None:
 async def _show_opened_tab(
     session: PlaywrightRecordingSession, client: Any, session_id: str, page: Any, generation: int
 ) -> None:
-    """Point the live view at a tab the website opened, and back once it closes.
+    """Resolve an opened tab's Live View; show it if foreground and not superseded.
 
     Browserbase's live view shows one tab. Without this, a sign-in window opened by "Continue with Google"
     stays invisible and the page looks like it ignored the click.
