@@ -263,18 +263,44 @@ async def test_browserbase_session_disables_recording_and_preserves_tab_live_vie
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("redirect", [False, True], ids=["current-document", "redirect-destroys-context"])
+@pytest.mark.parametrize(
+    ("redirect", "autofill"),
+    [(False, False), (True, False), (False, True)],
+    ids=["current-document", "redirect-destroys-context", "capture-before-autofill"],
+)
 async def test_browserbase_captures_sign_in_after_current_document_evaluation(
-    monkeypatch: pytest.MonkeyPatch, redirect: bool
+    monkeypatch: pytest.MonkeyPatch, redirect: bool, autofill: bool
 ) -> None:
+    from workflow_use_recording.capture import CONSOLE_PREFIX
+    from workflow_use_recording.models import RecordingLogin
+
     events: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
 
     class Page(FakePage):
         url = "https://example.com/login"
 
-        async def evaluate(self, _script: str) -> bool:
+        capture_ready = False
+        isolated_ready = False
+
+        async def title(self) -> str:
+            await asyncio.sleep(0)
+            return "Sign in"
+
+        async def evaluate(self, _script: str, values: dict[str, Any] | None = None) -> bool:
+            if values is not None:
+                if self.capture_ready and self.isolated_ready:
+                    for kind in ("username", "password"):
+                        if values[kind]:
+                            event = {"type": "credential", "value": kind, "target": kind}
+                            self.events["console"](
+                                SimpleNamespace(
+                                    type="debug", args=[None, None], text=f"{CONSOLE_PREFIX} {json.dumps(event)}"
+                                )
+                            )
+                return True
             if redirect:
                 raise RuntimeError("Execution context was destroyed, most likely because of a navigation")
+            self.capture_ready = True
             return True
 
     class CDP:
@@ -294,6 +320,7 @@ async def test_browserbase_captures_sign_in_after_current_document_evaluation(
             if command == "Page.createIsolatedWorld":
                 return {"executionContextId": 1}
             if command == "Runtime.evaluate":
+                page.isolated_ready = True
                 self.events["Runtime.bindingCalled"](
                     {"name": self.binding, "payload": json.dumps({"kind": "username", "value": "demo@example.com"})}
                 )
@@ -304,6 +331,7 @@ async def test_browserbase_captures_sign_in_after_current_document_evaluation(
             return CDP()
 
     page = Page()
+    page.frames = [page]
     context = Context(page)
     context.pages = [page]
     page.context = context
@@ -311,7 +339,13 @@ async def test_browserbase_captures_sign_in_after_current_document_evaluation(
 
     _browserbase_with(monkeypatch, runtime)
     session = await BrowserbaseProvider(project_id="project-1").create(
-        page.url, events.put, context_id="saved-context"
+        page.url,
+        events.put,
+        context_id="saved-context",
+        login=(
+            RecordingLogin(origins=["https://example.com"], username="demo@example.com", password="demo-password")
+            if autofill else None
+        ),
     )
     try:
         assert await asyncio.wait_for(events.get(), 1) == {
@@ -320,6 +354,11 @@ async def test_browserbase_captures_sign_in_after_current_document_evaluation(
             "secret": "demo@example.com",
             "tabId": "tab-1",
         }
+        if autofill:
+            assert [await asyncio.wait_for(events.get(), 1) for _ in range(2)] == [
+                {"type": "credential", "value": kind, "target": kind, "tabId": "tab-1"}
+                for kind in ("username", "password")
+            ]
     finally:
         await session.close()
 

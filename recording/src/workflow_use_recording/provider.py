@@ -488,8 +488,6 @@ async def _install_page_events(session: PlaywrightRecordingSession, page: Any, o
     page.on("domcontentloaded", on_page_loaded)
     # The live view shows no download bar, so the recorder reports each download to the person demonstrating.
     page.on("download", on_download)
-    if session.login is not None:
-        install_sign_in_fill(page, lambda: session.login, session.track)
     await session.update_title(page)
     with suppress(Exception):
         await page.evaluate(CAPTURE_SCRIPT)
@@ -498,6 +496,8 @@ async def _install_page_events(session: PlaywrightRecordingSession, page: Any, o
     except Exception:
         if not page.is_closed():
             raise
+    if session.login is not None:
+        install_sign_in_fill(page, lambda: session.login, session.track)
     if tab.first_navigation and is_public_http_url(getattr(page, "url", "")) and not is_google_sign_in(page.url):
         tab.first_navigation = False
         session.track(page_event({"type": "navigation", "url": page.url, "openedNewTab": True}))
