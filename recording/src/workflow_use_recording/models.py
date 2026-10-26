@@ -102,8 +102,12 @@ class SetupStep(BaseModel):
         "download",
         "agent",
         "date",
+        "switch_tab",
+        "close_tab",
     ]
     description: str
+    tab_id: str | None = Field(default=None, serialization_alias="tabId")
+    opened_new_tab: bool | None = Field(default=None, serialization_alias="openedNewTab")
     target: str | None = None
     value: str | None = None
     url: str | None = None
@@ -210,6 +214,13 @@ class RecordingGoogle(BaseModel):
     signed_in: bool = Field(serialization_alias="signedIn")
 
 
+class RecordingTab(BaseModel):
+    id: str
+    title: str
+    url: str
+    active: bool
+
+
 class RecordingResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -217,6 +228,8 @@ class RecordingResponse(BaseModel):
     status: Literal["recording", "stopped", "expired"]
     live_view_url: str | None = Field(serialization_alias="liveViewUrl")
     live_view_switching: bool = Field(serialization_alias="liveViewSwitching")
+    tabs: list[RecordingTab] = Field(default_factory=list)
+    active_tab_id: str | None = Field(default=None, serialization_alias="activeTabId")
     steps: list[SetupStep]
     expires_at: datetime = Field(serialization_alias="expiresAt")
     blocked_reason: str | None = Field(serialization_alias="blockedReason")

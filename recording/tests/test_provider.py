@@ -14,12 +14,24 @@ from workflow_use_recording.provider import BrowserbaseProvider, RecordingStartT
 class FakePage:
     def __init__(self) -> None:
         self.goto_urls: list[str] = []
+        self.events: dict[str, Any] = {}
+        self.closed = False
 
-    def on(self, _event: str, _callback: Any) -> None:
-        pass
+    def on(self, event: str, callback: Any) -> None:
+        self.events[event] = callback
 
     def is_closed(self) -> bool:
-        return False
+        return self.closed
+
+    async def close(self) -> None:
+        self.closed = True
+        self.events["close"](self)
+
+    async def bring_to_front(self) -> None:
+        pass
+
+    async def evaluate(self, _script: str) -> bool:
+        return True
 
     async def goto(self, url: str, **_kwargs: Any) -> None:
         self.goto_urls.append(url)
@@ -32,6 +44,7 @@ class FakeContext:
     def __init__(self, page: FakePage) -> None:
         self.pages: list[FakePage] = []
         self._page = page
+        self.events: dict[str, Any] = {}
 
     async def route(self, _pattern: str, _handler: Any) -> None:
         pass
@@ -39,8 +52,8 @@ class FakeContext:
     async def add_init_script(self, _script: str) -> None:
         pass
 
-    def on(self, _event: str, _callback: Any) -> None:
-        pass
+    def on(self, event: str, callback: Any) -> None:
+        self.events[event] = callback
 
     async def new_page(self) -> FakePage:
         return self._page
@@ -72,9 +85,65 @@ class FakeRuntime:
 
 
 @pytest.mark.asyncio
-async def test_browserbase_session_disables_provider_recording_and_logs(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("lookup", "close_via_api"),
+    [
+        ("resolved", True),
+        ("error", True),
+        ("error", False),
+        ("missing", False),
+        ("retry", True),
+        ("retry", False),
+        ("stale", False),
+        ("select_error", True),
+        ("select_missing", True),
+    ],
+    ids=[
+        "resolved-api-close",
+        "lookup-error-api-close",
+        "lookup-error-browser-close",
+        "lookup-missing-browser-close",
+        "retry-success-api-close",
+        "retry-success-browser-close",
+        "stale-retry-keeps-selection",
+        "selection-error-keeps-fallback",
+        "selection-missing-keeps-fallback",
+    ],
+)
+async def test_browserbase_session_disables_recording_and_preserves_tab_live_views(
+    monkeypatch: pytest.MonkeyPatch, lookup: str, close_via_api: bool
+) -> None:
     page = FakePage()
-    runtime = FakeRuntime(FakeBrowser(FakeContext(page)))
+    page.target_id = "target-1"
+    initial_lookups = 0
+    retry_started = asyncio.Event()
+    retry_finished = asyncio.Event()
+    lookup_finished: dict[Any, asyncio.Event] = {page: asyncio.Event()}
+
+    class TargetContext(FakeContext):
+        async def new_cdp_session(self, target_page: Any) -> Any:
+            nonlocal initial_lookups
+            finished = lookup_finished.setdefault(target_page, asyncio.Event())
+            if target_page is page:
+                initial_lookups += 1
+                if lookup == "stale" and initial_lookups > 1:
+                    retry_started.set()
+                    await retry_finished.wait()
+                if lookup in {"error", "select_error"} or (lookup in {"retry", "stale"} and initial_lookups == 1):
+                    finished.set()
+                    raise RuntimeError("Live view unavailable")
+
+            async def send(_command: str) -> dict[str, Any]:
+                return {"targetInfo": {"targetId": target_page.target_id}}
+
+            async def detach() -> None:
+                finished.set()
+
+            return SimpleNamespace(send=send, detach=detach)
+
+    context = TargetContext(page)
+    page.context = context
+    runtime = FakeRuntime(FakeBrowser(context))
     clients: list[Any] = []
 
     class FakeSessions:
@@ -87,7 +156,18 @@ async def test_browserbase_session_disables_provider_recording_and_logs(monkeypa
             return SimpleNamespace(id="session-1", connect_url="wss://connect.browserbase.test/session-1")
 
         async def debug(self, _session_id: str) -> Any:
-            return SimpleNamespace(debugger_fullscreen_url="https://live.browserbase.com/session-1")
+            return SimpleNamespace(
+                debugger_fullscreen_url="https://live.browserbase.com/session-1",
+                pages=[
+                    SimpleNamespace(
+                        id="target-1",
+                        debugger_fullscreen_url=(
+                            None if lookup in {"missing", "select_missing"} else "https://live.browserbase.com/target-1"
+                        ),
+                    ),
+                    SimpleNamespace(id="popup", debugger_fullscreen_url="https://live.browserbase.com/popup"),
+                ],
+            )
 
         async def update(self, session_id: str, **kwargs: str) -> None:
             self.releases.append({"session_id": session_id, **kwargs})
@@ -110,10 +190,16 @@ async def test_browserbase_session_disables_provider_recording_and_logs(monkeypa
     monkeypatch.setitem(sys.modules, "browserbase", browserbase)
     monkeypatch.setattr("workflow_use_recording.provider._start_playwright_runtime", lambda: _start(runtime))
 
+    async def no_capture(*_args: Any) -> None:
+        pass
+
+    monkeypatch.setattr("workflow_use_recording.provider.install_sign_in_capture", no_capture)
     provider = BrowserbaseProvider(project_id="project-1")
     session = await provider.create("https://example.com/reports", _ignore_event)
 
-    assert session.live_view_url == "https://live.browserbase.com/session-1"
+    fallback = "https://live.browserbase.com/session-1"
+    assert session.live_view_url == ("https://live.browserbase.com/target-1" if lookup == "resolved" else fallback)
+    assert session.active_tab_id == "tab-1"
     assert clients[0].sessions.create_calls == [
         {
             "project_id": "project-1",
@@ -132,7 +218,189 @@ async def test_browserbase_session_disables_provider_recording_and_logs(monkeypa
     assert page.goto_urls == ["https://example.com/reports"]
     assert (session.network, session.proxy_country, session.start_page_blocked) == ("direct", None, False)
 
+    popup = FakePage()
+    popup.target_id = "popup"
+    popup.context = context
+    context.events["page"](popup)
+    await asyncio.wait_for(lookup_finished.setdefault(popup, asyncio.Event()).wait(), 1)
+    assert session.active_tab_id == "tab-2"
+    assert session.live_view_url == "https://live.browserbase.com/popup"
+
+    if lookup.startswith("select_"):
+        await session.select_tab("tab-1")
+        assert session.active_tab_id == "tab-1"
+        assert session.live_view_url == fallback
+        await session.select_tab("tab-2")
+
+    lookup_finished[page].clear()
+    if close_via_api:
+        await session.close_tab("tab-2")
+    else:
+        await popup.close()
+    assert session.active_tab_id == "tab-1"
+    assert session.live_view_url == ("https://live.browserbase.com/target-1" if lookup == "resolved" else fallback)
+
+    if lookup == "stale":
+        await asyncio.wait_for(retry_started.wait(), 1)
+        other = FakePage()
+        other.target_id = "popup"
+        other.context = context
+        context.events["page"](other)
+        await session.select_tab("tab-3")
+        retry_finished.set()
+    if lookup != "resolved":
+        await asyncio.wait_for(lookup_finished[page].wait(), 1)
+    if lookup == "stale":
+        assert session.active_tab_id == "tab-3"
+        assert session.live_view_url == "https://live.browserbase.com/popup"
+        await session.select_tab("tab-1")
+        assert session.live_view_url == "https://live.browserbase.com/target-1"
+    else:
+        assert session.live_view_url == (
+            "https://live.browserbase.com/target-1" if lookup in {"resolved", "retry"} else fallback
+        )
     await session.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("redirect", "autofill", "cdp_failure"),
+    [
+        (False, False, None),
+        (True, False, None),
+        (False, True, None),
+        (False, True, "Page.getFrameTree"),
+        (False, True, "Page.createIsolatedWorld"),
+        (False, True, "Runtime.evaluate"),
+        (False, True, "Page.addScriptToEvaluateOnNewDocument"),
+    ],
+    ids=[
+        "current-document",
+        "redirect-destroys-context",
+        "capture-before-autofill",
+        "frame-tree-redirect",
+        "isolated-world-redirect",
+        "evaluate-redirect",
+        "durable-registration-failure",
+    ],
+)
+async def test_browserbase_captures_sign_in_after_current_document_evaluation(
+    monkeypatch: pytest.MonkeyPatch, redirect: bool, autofill: bool, cdp_failure: str | None
+) -> None:
+    from workflow_use_recording.capture import CONSOLE_PREFIX
+    from workflow_use_recording.models import RecordingLogin
+
+    events: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+    class Page(FakePage):
+        url = "https://example.com/login"
+
+        capture_ready = False
+        isolated_ready = False
+
+        async def goto(self, url: str, **kwargs: Any) -> None:
+            await super().goto(url, **kwargs)
+            if cdp_failure is not None:
+                await asyncio.sleep(0)
+                self.isolated_ready = cdp.future_capture
+                if self.isolated_ready:
+                    cdp.emit_sign_in()
+                self.events["framenavigated"](self)
+
+        async def title(self) -> str:
+            await asyncio.sleep(0)
+            return "Sign in"
+
+        async def evaluate(self, _script: str, values: dict[str, Any] | None = None) -> bool:
+            if values is not None:
+                if self.capture_ready and self.isolated_ready:
+                    for kind in ("username", "password"):
+                        if values[kind]:
+                            event = {"type": "credential", "value": kind, "target": kind}
+                            self.events["console"](
+                                SimpleNamespace(
+                                    type="debug", args=[None, None], text=f"{CONSOLE_PREFIX} {json.dumps(event)}"
+                                )
+                            )
+                return True
+            if redirect:
+                raise RuntimeError("Execution context was destroyed, most likely because of a navigation")
+            self.capture_ready = True
+            return True
+
+    class CDP:
+        def __init__(self) -> None:
+            self.events: dict[str, Any] = {}
+            self.binding = ""
+            self.future_capture = False
+
+        def emit_sign_in(self) -> None:
+            self.events["Runtime.bindingCalled"](
+                {"name": self.binding, "payload": json.dumps({"kind": "username", "value": "demo@example.com"})}
+            )
+
+        def on(self, event: str, callback: Any) -> None:
+            self.events[event] = callback
+
+        async def send(self, command: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+            if command == cdp_failure:
+                raise RuntimeError("Execution context was destroyed")
+            if command == "Page.addScriptToEvaluateOnNewDocument":
+                self.future_capture = True
+            if command == "Runtime.addBinding":
+                assert params is not None
+                self.binding = params["name"]
+            if command == "Page.getFrameTree":
+                return {"frameTree": {"frame": {"id": "frame-1"}}}
+            if command == "Page.createIsolatedWorld":
+                return {"executionContextId": 1}
+            if command == "Runtime.evaluate":
+                page.isolated_ready = True
+                self.emit_sign_in()
+            return {}
+
+    cdp = CDP()
+
+    class Context(FakeContext):
+        async def new_cdp_session(self, _page: Any) -> CDP:
+            return cdp
+
+    page = Page()
+    page.frames = [page]
+    context = Context(page)
+    context.pages = [page]
+    page.context = context
+    runtime = FakeRuntime(FakeBrowser(context))
+
+    _browserbase_with(monkeypatch, runtime)
+    creation = BrowserbaseProvider(project_id="project-1").create(
+        page.url,
+        events.put,
+        context_id="saved-context",
+        login=(
+            RecordingLogin(origins=["https://example.com"], username="demo@example.com", password="demo-password")
+            if autofill else None
+        ),
+    )
+    if cdp_failure == "Page.addScriptToEvaluateOnNewDocument":
+        with pytest.raises(RuntimeError, match="Execution context was destroyed"):
+            await creation
+        return
+    session = await creation
+    try:
+        assert await asyncio.wait_for(events.get(), 1) == {
+            "type": "sign_in_value",
+            "value": "username",
+            "secret": "demo@example.com",
+            "tabId": "tab-1",
+        }
+        if autofill:
+            assert [await asyncio.wait_for(events.get(), 1) for _ in range(2)] == [
+                {"type": "credential", "value": kind, "target": kind, "tabId": "tab-1"}
+                for kind in ("username", "password")
+            ]
+    finally:
+        await session.close()
 
 
 @pytest.mark.asyncio
@@ -458,7 +726,10 @@ async def test_a_sign_in_window_the_website_opens_is_shown_in_the_live_view_and_
 
     try:
         recording = await service.create(owner, "https://example.com/login")
-        assert service.response(recording).live_view_url == "https://live.browserbase.com/first-tab"
+        (first_listed,) = await tabs()
+        first_url = first_listed.debugger_fullscreen_url
+        assert service.response(recording).live_view_url == first_url
+        assert service.response(recording).active_tab_id == "tab-1"
         site = context.pages[0]
         async with site.expect_popup() as opened:
             await site.get_by_role("button", name="Continue with Google").click()
@@ -469,13 +740,18 @@ async def test_a_sign_in_window_the_website_opens_is_shown_in_the_live_view_and_
         first_tab, popup_tab = await tabs()
         assert first_tab.id != popup_tab.id
         await live_view_becomes(popup_tab.debugger_fullscreen_url)
+        assert [(tab.id, tab.active) for tab in service.response(recording).tabs] == [
+            ("tab-1", False),
+            ("tab-2", True),
+        ]
         assert service.response(recording).live_view_switching is False
 
         await google.get_by_label("Email or phone").fill("person@example.com")
         await google.get_by_label("Password").press_sequentially("google-password")
         await google.get_by_role("button", name="Next").click()
         await google.close()
-        await live_view_becomes("https://live.browserbase.com/first-tab")
+        await live_view_becomes(first_url)
+        assert [tab.id for tab in service.response(recording).tabs] == ["tab-1"]
 
         await service.stop(recording.id, owner)
         assert [(step.type, step.target) for step in recording.steps] == [
@@ -502,6 +778,201 @@ async def test_popup_live_view_switching_expires_after_fifteen_seconds(monkeypat
     assert RecordingService.response(recording).live_view_switching is True
     await asyncio.sleep(0.02)
     assert RecordingService.response(recording).live_view_switching is False
+
+
+@pytest.mark.asyncio
+async def test_tab_registry_keeps_open_order_and_returns_to_previous_on_close() -> None:
+    from workflow_use_recording.provider import PlaywrightRecordingSession
+
+    class Page:
+        def __init__(self, url: str) -> None:
+            self.url = url
+            self.closed = False
+            self.events: dict[str, Any] = {}
+
+        def on(self, event: str, callback: Any) -> None:
+            self.events[event] = callback
+
+        def is_closed(self) -> bool:
+            return self.closed
+
+        async def bring_to_front(self) -> None:
+            pass
+
+        async def close(self) -> None:
+            self.closed = True
+            self.events["close"](self)
+
+    session = PlaywrightRecordingSession(browser=object(), runtime=object(), live_view_url=None)
+    pages = [Page(f"https://example.com/{index}") for index in range(3)]
+    for index, page in enumerate(pages, 1):
+        session.register_tab(page, f"https://live.example/tab-{index}")
+    await session.select_tab("tab-3")
+    assert [tab["id"] for tab in session.tabs] == ["tab-1", "tab-2", "tab-3"]
+    assert session.active_tab_id == "tab-3"
+    await session.close_tab("tab-3")
+    assert [tab["id"] for tab in session.tabs] == ["tab-1", "tab-2"]
+    assert session.active_tab_id == "tab-2"
+    assert session.live_view_url == "https://live.example/tab-2"
+    with pytest.raises(KeyError):
+        await session.select_tab("tab-3")
+    await session.close_tab("tab-1")
+    with pytest.raises(ValueError, match="last tab"):
+        await session.close_tab("tab-2")
+
+
+@pytest.mark.asyncio
+async def test_background_popup_and_stale_resolution_do_not_take_the_live_view(monkeypatch: pytest.MonkeyPatch) -> None:
+    from workflow_use_recording import provider
+
+    class Page(FakePage):
+        def __init__(self, focused: bool) -> None:
+            super().__init__()
+            self.focused = focused
+
+        async def evaluate(self, _script: str) -> bool:
+            return self.focused
+
+        async def bring_to_front(self) -> None:
+            pass
+
+    async def live_url(*_args: Any) -> str:
+        return "https://live.example/popup"
+
+    monkeypatch.setattr(provider, "_tab_live_view", live_url)
+    session = provider.PlaywrightRecordingSession(browser=object(), runtime=object(), live_view_url="first")
+    first = Page(True)
+    background = Page(False)
+    session.register_tab(first, "first")
+    session.register_tab(background)
+    await provider._show_opened_tab(session, object(), "session", background, 0)
+    assert session.active_tab_id == "tab-1" and session.live_view_url == "first"
+    assert session.tabs[1]["active"] is False
+
+    pending = Page(True)
+    session.register_tab(pending)
+    await session.select_tab("tab-1")
+    await provider._show_opened_tab(session, object(), "session", pending, 0)
+    assert session.active_tab_id == "tab-1" and session.live_view_url == "first"
+
+
+@pytest.mark.asyncio
+async def test_page_title_is_read_when_event_listener_attaches_after_load(monkeypatch: pytest.MonkeyPatch) -> None:
+    from workflow_use_recording import provider
+
+    async def no_capture(*_args: Any) -> None:
+        pass
+
+    monkeypatch.setattr(provider, "install_sign_in_capture", no_capture)
+
+    class Page(FakePage):
+        context = object()
+
+        async def title(self) -> str:
+            return "Ready report"
+
+    session = provider.PlaywrightRecordingSession(browser=object(), runtime=object(), live_view_url=None)
+    await provider._install_page_events(session, Page(), no_capture)
+    assert session.tabs[0]["title"] == "Ready report"
+
+
+@pytest.mark.asyncio
+async def test_preloaded_popup_records_first_public_navigation_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    from workflow_use_recording import provider
+
+    async def no_capture(*_args: Any) -> None:
+        pass
+
+    monkeypatch.setattr(provider, "install_sign_in_capture", no_capture)
+    events: list[dict[str, Any]] = []
+
+    async def record(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    class Page(FakePage):
+        def __init__(self, url: str) -> None:
+            super().__init__()
+            self.url = url
+            self.main_frame = SimpleNamespace(url=url)
+            self.context = object()
+            self.handlers: dict[str, Any] = {}
+
+        def on(self, event: str, callback: Any) -> None:
+            self.handlers[event] = callback
+
+    for initial, expected in (
+        ("https://example.com/next", "https://example.com/next"),
+        ("https://accounts.google.com/signin", "https://example.com/after-auth"),
+    ):
+        page = Page(initial)
+        session = provider.PlaywrightRecordingSession(browser=object(), runtime=object(), live_view_url=None)
+        session.register_tab(page).first_navigation = True
+        await provider._install_page_events(session, page, record)
+        if initial != expected:
+            page.main_frame.url = expected
+            page.handlers["framenavigated"](page.main_frame)
+        await asyncio.gather(*session._tasks)
+    assert events == [
+        {"type": "navigation", "url": "https://example.com/next", "openedNewTab": True, "tabId": "tab-1"},
+        {"type": "navigation", "url": "https://example.com/after-auth", "openedNewTab": True, "tabId": "tab-1"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_same_origin_popup_records_first_document_input_and_click(monkeypatch: pytest.MonkeyPatch) -> None:
+    from workflow_use_recording import provider
+
+    configure = provider._configure_context
+
+    async def configure_fixture(context: Any, on_event: Any) -> None:
+        await configure(context, on_event)
+
+        async def fixture(route: Any) -> None:
+            if route.request.url.endswith("/original"):
+                body = "<button onclick=\"window.open('/gate/popup')\">Open report</button>"
+            else:
+                body = '<input aria-label="Note"><button>Save report</button>'
+            await route.fulfill(status=200, content_type="text/html", body=body)
+
+        await context.route("https://example.com/gate/**", fixture)
+
+    monkeypatch.setattr(provider, "_configure_context", configure_fixture)
+    events: list[dict[str, Any]] = []
+
+    async def record(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    session = await provider.LocalPlaywrightProvider(channel="chrome", headless=True).create(
+        "https://example.com/gate/original", record
+    )
+    try:
+        original = session.browser.contexts[0].pages[0]
+        async with original.expect_popup() as opened:
+            await original.get_by_role("button", name="Open report").click()
+        popup = await opened.value
+        popup_tab = session.tab_for(popup)
+        assert popup_tab is not None
+        await popup.wait_for_load_state()
+        await popup.get_by_label("Note").fill("First document")
+        await popup.get_by_role("button", name="Save report").click()
+        for _ in range(20):
+            if any(event.get("type") == "click" and event.get("target") == "Save report" for event in events):
+                break
+            await asyncio.sleep(0.05)
+    finally:
+        await session.close()
+
+    assert any(
+        event.get("type") == "input"
+        and event.get("target") == "Note"
+        and event.get("value") == "First document"
+        and event.get("tabId") == popup_tab.id
+        for event in events
+    )
+    assert any(
+        event.get("type") == "click" and event.get("target") == "Save report" and event.get("tabId") == popup_tab.id
+        for event in events
+    )
 
 
 @pytest.mark.parametrize(
@@ -942,7 +1413,7 @@ async def test_only_a_loaded_public_main_page_clears_the_start_failure(monkeypat
     page.handlers["framenavigated"](page.main_frame)
     await asyncio.gather(*session._tasks)
     assert session.start_page_failed is True
-    assert events == [{"type": "navigation", "url": "https://example.com/login"}]
+    assert events == [{"type": "navigation", "url": "https://example.com/login", "tabId": "tab-1"}]
 
     for url in ("about:blank", "chrome-error://chromewebdata/", "https://accounts.google.com/login"):
         page.url = url
@@ -955,7 +1426,7 @@ async def test_only_a_loaded_public_main_page_clears_the_start_failure(monkeypat
     popup.handlers["domcontentloaded"]()
     await asyncio.gather(*session._tasks)
     assert session.start_page_failed is False
-    assert events[-1] == {"type": "page_loaded", "url": "https://example.com/login"}
+    assert events[-1] == {"type": "page_loaded", "url": "https://example.com/login", "tabId": "tab-2"}
 
 
 class _ConsoleMessage(SimpleNamespace):
@@ -1010,7 +1481,7 @@ async def test_a_console_message_with_the_recorder_prefix_becomes_a_step_and_gar
     # A page can forge browser-only events; they arrive empty, as they did through the binding.
     on_console(_ConsoleMessage("__workflowUse__", json.dumps({"type": "page_loaded", "url": "https://x.test"})))
     await asyncio.gather(*session._tasks)
-    assert events == [{"type": "click", "target": "Sign in"}, {}]
+    assert events == [{"type": "click", "target": "Sign in", "tabId": "tab-1"}, {}]
 
     # Nothing demonstrated on Google's own sign-in page is a step.
     page.url = "https://accounts.google.com/signin"
@@ -1283,6 +1754,10 @@ def _event_attempts(
 EE_PROXY = [{"type": "browserbase", "geolocation": {"country": "EE"}}]
 
 
+def _without_tab_ids(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [{key: value for key, value in event.items() if key != "tabId"} for event in events]
+
+
 @pytest.mark.asyncio
 async def test_discarded_direct_attempt_never_reports_its_events(monkeypatch: pytest.MonkeyPatch) -> None:
     from workflow_use_recording import provider
@@ -1312,10 +1787,10 @@ async def test_discarded_direct_attempt_never_reports_its_events(monkeypatch: py
     session = await BrowserbaseProvider(project_id="project-1").create("https://example.com/", record)
 
     assert session.network == "proxy"
-    assert events == [{"type": "click", "target": "proxy"}]
+    assert _without_tab_ids(events) == [{"type": "click", "target": "proxy"}]
     direct.click("late-direct")
     await asyncio.sleep(0)
-    assert events == [{"type": "click", "target": "proxy"}]
+    assert _without_tab_ids(events) == [{"type": "click", "target": "proxy"}]
     await session.close()
 
 
@@ -1338,7 +1813,7 @@ async def test_cancelled_event_drain_cleans_up_owned_direct_attempt(monkeypatch:
     with pytest.raises(asyncio.CancelledError):
         await BrowserbaseProvider(project_id="project-1").create("https://example.com/", cancel_drain)
 
-    assert seen == [{"type": "click", "target": "direct"}]
+    assert _without_tab_ids(seen) == [{"type": "click", "target": "direct"}]
     assert runtimes[0]._browser.closed and runtimes[0].stopped
     assert calls.releases == ["session-1"]
     assert calls.deleted == ["/v1/contexts/context-1"]
@@ -1362,13 +1837,13 @@ async def test_kept_direct_attempt_reports_ordered_startup_and_later_tab_events(
 
     async def record(event: dict[str, Any]) -> None:
         events.append(event)
-        if event == {"type": "click", "target": "direct"}:
+        if event == {"type": "click", "target": "direct", "tabId": "tab-1"}:
             page.click("during-drain")
             await asyncio.sleep(0)
 
     session = await BrowserbaseProvider(project_id="project-1").create("https://example.com/", record)
     assert session.network == "direct"
-    assert events == [
+    assert _without_tab_ids(events) == [
         {"type": "click", "target": "direct"},
         {"type": "click", "target": "during-drain"},
     ]
@@ -1380,12 +1855,14 @@ async def test_kept_direct_attempt_reports_ordered_startup_and_later_tab_events(
     tab.click("new-tab")
     page.click("later")
     await asyncio.sleep(0)
-    assert events == [
+    assert _without_tab_ids(events) == [
         {"type": "click", "target": "direct"},
         {"type": "click", "target": "during-drain"},
+        {"type": "navigation", "url": "https://example.com/", "openedNewTab": True},
         {"type": "click", "target": "new-tab"},
         {"type": "click", "target": "later"},
     ]
+    assert [event.get("tabId") for event in events] == ["tab-1", "tab-1", "tab-2", "tab-2", "tab-1"]
     await session.close()
 
 
@@ -1409,7 +1886,7 @@ async def test_blocked_main_response_before_timeout_retries_proxy(monkeypatch: p
     assert session.network == "proxy"
     assert calls.sessions[1]["proxies"] == EE_PROXY
     assert runtimes[0]._browser.closed and runtimes[0].stopped
-    assert events == [{"type": "click", "target": "proxy"}]
+    assert _without_tab_ids(events) == [{"type": "click", "target": "proxy"}]
     await session.close()
 
 
@@ -1459,7 +1936,7 @@ async def test_start_timeout_stays_fatal_without_retryable_direct_block(
         )
 
     assert len(calls.sessions) == len(statuses)
-    assert events == expected_events
+    assert _without_tab_ids(events) == expected_events
 
 
 @pytest.mark.asyncio
@@ -1522,7 +1999,12 @@ async def test_generic_start_error_retries_only_recorded_owned_direct_blocks(
             "https://example.com/", record, context_id="saved-context" if borrowed else None
         )
 
-    assert (session.network, session.start_page_failed, session.start_page_blocked, events) == expected
+    assert (
+        session.network,
+        session.start_page_failed,
+        session.start_page_blocked,
+        _without_tab_ids(events),
+    ) == expected
     assert len(calls.sessions) == len(statuses)
     if len(statuses) == 2:
         assert f"recording_start_page_blocked status={statuses[0]} network=direct" in caplog.text
@@ -1732,7 +2214,7 @@ async def test_a_blocked_page_load_does_not_clear_the_block_but_a_later_page_doe
     # The block page itself loads fine as far as the browser is concerned; a 403 document is not a loaded page.
     page.respond(403)
     page.handlers["domcontentloaded"]()
-    assert await asyncio.wait_for(events.get(), 1) == {"type": "page_blocked", "status": 403}
+    assert await asyncio.wait_for(events.get(), 1) == {"type": "page_blocked", "status": 403, "tabId": "tab-1"}
     assert session.start_page_blocked is True
 
     # A subresource or frame answering 200 does not stand in for the main document.
@@ -1742,11 +2224,15 @@ async def test_a_blocked_page_load_does_not_clear_the_block_but_a_later_page_doe
 
     page.respond(200)
     page.handlers["domcontentloaded"]()
-    assert await asyncio.wait_for(events.get(), 1) == {"type": "page_loaded", "url": "https://example.com/"}
+    assert await asyncio.wait_for(events.get(), 1) == {
+        "type": "page_loaded",
+        "url": "https://example.com/",
+        "tabId": "tab-1",
+    }
     assert session.start_page_blocked is False
 
     # Akamai lets the first document through, then its challenge script re-requests the page and gets 403.
     page.respond(403)
-    assert await asyncio.wait_for(events.get(), 1) == {"type": "page_blocked", "status": 403}
+    assert await asyncio.wait_for(events.get(), 1) == {"type": "page_blocked", "status": 403, "tabId": "tab-1"}
     assert session.start_page_blocked is True
     await session.close()

@@ -30,6 +30,23 @@ class FakeSession:
         self.proxy_country: str | None = None
         self.navigate_error: Exception | None = None
         self.navigated: list[str] = []
+        self.tabs = [{"id": "tab-1", "title": "Example", "url": "https://example.com", "active": True}]
+        self.active_tab_id = "tab-1"
+
+    async def select_tab(self, tab_id: str) -> None:
+        for tab in self.tabs:
+            tab["active"] = tab["id"] == tab_id
+            if tab["active"]:
+                self.active_tab_id = tab_id
+                self.live_view_url = f"https://browserbase.example/{tab_id}"
+
+    async def close_tab(self, tab_id: str) -> None:
+        index = next(index for index, tab in enumerate(self.tabs) if tab["id"] == tab_id)
+        active = self.tabs[index]["active"]
+        self.tabs.pop(index)
+        if active:
+            selected = self.tabs[max(index - 1, 0)]
+            await self.select_tab(selected["id"])
 
     async def navigate(self, url: str) -> None:
         if self.navigate_error is not None:
@@ -37,7 +54,7 @@ class FakeSession:
         self.navigated.append(url)
         self.start_page_failed = False
         self.start_page_blocked = False
-        await self.emit({"type": "navigation", "url": url})
+        await self.emit({"type": "navigation", "url": url, "tabId": self.active_tab_id})
 
     async def close(self) -> None:
         self.closed = True
@@ -133,12 +150,15 @@ def test_create_returns_only_safe_live_view_response() -> None:
         "status": "recording",
         "liveViewUrl": "https://browserbase.example/debug?token=secret",
         "liveViewSwitching": False,
+        "tabs": [{"id": "tab-1", "title": "Example", "url": "https://example.com", "active": True}],
+        "activeTabId": "tab-1",
         "steps": [
             {
                 "id": response.json()["steps"][0]["id"],
                 "type": "navigation",
                 "description": "Open example.com",
                 "url": "https://example.com",
+                "tabId": "tab-1",
             }
         ],
         "expiresAt": response.json()["expiresAt"],
@@ -204,6 +224,51 @@ async def test_a_loaded_page_or_a_navigate_clears_the_start_page_block_like_a_fa
     assert stopped["startPageBlocked"] is False
     # Clearing the block does not forget which network the browser is on.
     assert (after_load["network"], stopped["network"]) == ("proxy", "proxy")
+
+
+def test_select_and_close_tab_switch_the_live_view_and_record_steps() -> None:
+    provider = FakeProvider()
+    with client(provider) as http:
+        created = create_recording(http)
+        provider.sessions[0].tabs.append(
+            {"id": "tab-2", "title": "Reports", "url": "https://reports.example.com/", "active": False}
+        )
+        selected = http.post(f"/recordings/{created['id']}/tabs/tab-2/select", headers=headers())
+        closed = http.post(f"/recordings/{created['id']}/tabs/tab-2/close", headers=headers())
+
+    assert selected.status_code == 200
+    body = selected.json()
+    assert body["activeTabId"] == "tab-2" and body["liveViewUrl"] == "https://browserbase.example/tab-2"
+    assert [tab["active"] for tab in body["tabs"]] == [False, True]
+    assert body["steps"][-1]["type"] == "switch_tab" and body["steps"][-1]["tabId"] == "tab-2"
+    assert body["steps"][-1]["description"] == 'Switch to the tab "Reports"'
+    assert closed.status_code == 200
+    body = closed.json()
+    assert [tab["id"] for tab in body["tabs"]] == ["tab-1"] and body["activeTabId"] == "tab-1"
+    assert body["steps"][-1] == {
+        "id": body["steps"][-1]["id"],
+        "type": "close_tab",
+        "description": 'Close the tab "Reports"',
+        "tabId": "tab-2",
+    }
+
+
+def test_tab_endpoints_reject_unknown_tab_last_tab_and_inactive_recording() -> None:
+    provider = FakeProvider()
+    with client(provider) as http:
+        created = create_recording(http)
+        base = f"/recordings/{created['id']}"
+        unknown_select = http.post(f"{base}/tabs/tab-9/select", headers=headers())
+        unknown_close = http.post(f"{base}/tabs/tab-9/close", headers=headers())
+        last = http.post(f"{base}/tabs/tab-1/close", headers=headers())
+        missing = http.post("/recordings/nope/tabs/tab-1/select", headers=headers())
+        http.post(f"{base}/stop", headers=headers())
+        stopped = http.post(f"{base}/tabs/tab-1/select", headers=headers())
+
+    assert (unknown_select.status_code, unknown_close.status_code) == (404, 404)
+    assert last.status_code == 409
+    assert missing.status_code == 404
+    assert stopped.status_code == 409
 
 
 @pytest.mark.asyncio

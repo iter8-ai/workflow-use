@@ -269,6 +269,29 @@ async def test_provider_returns_only_site_state_with_trusted_unique_identity(
     assert page.closed is True
 
 
+@pytest.mark.asyncio
+async def test_capture_page_is_flagged_while_opening_so_it_never_becomes_a_user_tab() -> None:
+    from types import SimpleNamespace
+
+    from workflow_use_recording.provider import PlaywrightRecordingSession
+
+    page = IdentityPage(["Google Account: Person (Person@example.com)"], "https://myaccount.google.com/")
+    context = StorageContext(page)
+    session = PlaywrightRecordingSession(browser=SimpleNamespace(contexts=[context]), runtime=None, live_view_url=None)
+    seen: list[bool] = []
+    original = context.new_page
+
+    async def new_page() -> Any:
+        seen.append(session._capture_page_pending)
+        return await original()
+
+    context.new_page = new_page  # type: ignore[method-assign]
+    await session.capture_website_session(WEBSITE["origin"])
+    assert seen == [True]
+    assert session._capture_page_pending is False
+    assert session.tabs == []
+
+
 @pytest.mark.parametrize(
     "host",
     ["google.com", "www.google.fi", "google.co.uk", "mail.google.co.uk", "youtube.com", "www.youtube.com"],
