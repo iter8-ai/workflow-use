@@ -257,6 +257,64 @@ async def test_navigation_preserves_deep_link_and_rejects_unsafe_urls() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tab_actions_and_step_compaction_use_stable_tab_ids() -> None:
+    class TabsSession(DeferredSession):
+        def __init__(self) -> None:
+            super().__init__()
+            self.tabs = [
+                {"id": "tab-1", "title": "First", "url": "https://example.com/", "active": True},
+                {"id": "tab-2", "title": "", "url": "https://reports.example.com/", "active": False},
+            ]
+            self.active_tab_id = "tab-1"
+
+        async def select_tab(self, tab_id: str) -> None:
+            self.active_tab_id = tab_id
+            for tab in self.tabs:
+                tab["active"] = tab["id"] == tab_id
+
+        async def close_tab(self, tab_id: str) -> None:
+            self.tabs = [tab for tab in self.tabs if tab["id"] != tab_id]
+            self.active_tab_id = "tab-1"
+            self.tabs[0]["active"] = True
+
+    class TabsProvider:
+        def __init__(self) -> None:
+            self.session = TabsSession()
+
+        async def create(self, *_args: Any, **_kwargs: Any) -> BrowserSession:
+            return self.session
+
+    provider = TabsProvider()
+    service = RecordingService(provider)
+    owner = RecordingOwner("iter7", "owner@iter7.example")
+    recording = await service.create(owner, "https://example.com/")
+    assert recording.steps[0].tab_id == "tab-1"
+    await service.record_event(
+        recording.id, {"type": "navigation", "url": "https://example.com/", "tabId": "tab-2", "openedNewTab": True}
+    )
+    await service.record_event(recording.id, {"type": "input", "target": "Search", "value": "first", "tabId": "tab-1"})
+    await service.record_event(recording.id, {"type": "input", "target": "Search", "value": "second", "tabId": "tab-2"})
+    assert [(step.tab_id, step.opened_new_tab) for step in recording.steps[:2]] == [
+        ("tab-1", None),
+        ("tab-2", True),
+    ]
+    assert [step.value for step in recording.steps[2:]] == ["first", "second"]
+    await service.select_tab(recording.id, owner, "tab-2")
+    assert recording.steps[-1].description == 'Switch to the tab "reports.example.com"'
+    assert service.response(recording).active_tab_id == "tab-2"
+    await service.close_tab(recording.id, owner, "tab-2")
+    assert recording.steps[-1].description == 'Close the tab "reports.example.com"'
+    assert service.response(recording).active_tab_id == "tab-1"
+    from workflow_use_recording.service import LastTab, UnknownTab
+
+    with pytest.raises(UnknownTab):
+        await service.select_tab(recording.id, owner, "tab-2")
+    with pytest.raises(LastTab):
+        await service.close_tab(recording.id, owner, "tab-1")
+    await service.close()
+
+
+@pytest.mark.asyncio
 async def test_sweep_deletes_unclaimed_google_context_after_one_hour() -> None:
     provider = ContextProvider()
     service = RecordingService(provider)
