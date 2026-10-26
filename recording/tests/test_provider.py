@@ -129,9 +129,7 @@ async def test_browserbase_session_disables_recording_and_preserves_tab_live_vie
                 if lookup == "stale" and initial_lookups > 1:
                     retry_started.set()
                     await retry_finished.wait()
-                if lookup in {"error", "select_error"} or (
-                    lookup in {"retry", "stale"} and initial_lookups == 1
-                ):
+                if lookup in {"error", "select_error"} or (lookup in {"retry", "stale"} and initial_lookups == 1):
                     finished.set()
                     raise RuntimeError("Live view unavailable")
 
