@@ -14,12 +14,24 @@ from workflow_use_recording.provider import BrowserbaseProvider, RecordingStartT
 class FakePage:
     def __init__(self) -> None:
         self.goto_urls: list[str] = []
+        self.events: dict[str, Any] = {}
+        self.closed = False
 
-    def on(self, _event: str, _callback: Any) -> None:
-        pass
+    def on(self, event: str, callback: Any) -> None:
+        self.events[event] = callback
 
     def is_closed(self) -> bool:
-        return False
+        return self.closed
+
+    async def close(self) -> None:
+        self.closed = True
+        self.events["close"](self)
+
+    async def bring_to_front(self) -> None:
+        pass
+
+    async def evaluate(self, _script: str) -> bool:
+        return True
 
     async def goto(self, url: str, **_kwargs: Any) -> None:
         self.goto_urls.append(url)
@@ -32,6 +44,7 @@ class FakeContext:
     def __init__(self, page: FakePage) -> None:
         self.pages: list[FakePage] = []
         self._page = page
+        self.events: dict[str, Any] = {}
 
     async def route(self, _pattern: str, _handler: Any) -> None:
         pass
@@ -39,8 +52,8 @@ class FakeContext:
     async def add_init_script(self, _script: str) -> None:
         pass
 
-    def on(self, _event: str, _callback: Any) -> None:
-        pass
+    def on(self, event: str, callback: Any) -> None:
+        self.events[event] = callback
 
     async def new_page(self) -> FakePage:
         return self._page
@@ -72,16 +85,61 @@ class FakeRuntime:
 
 
 @pytest.mark.asyncio
-async def test_browserbase_session_disables_provider_recording_and_logs(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("lookup", "close_via_api"),
+    [
+        ("resolved", True),
+        ("error", True),
+        ("error", False),
+        ("missing", False),
+        ("retry", True),
+        ("retry", False),
+        ("stale", False),
+        ("select_error", True),
+        ("select_missing", True),
+    ],
+    ids=[
+        "resolved-api-close",
+        "lookup-error-api-close",
+        "lookup-error-browser-close",
+        "lookup-missing-browser-close",
+        "retry-success-api-close",
+        "retry-success-browser-close",
+        "stale-retry-keeps-selection",
+        "selection-error-keeps-fallback",
+        "selection-missing-keeps-fallback",
+    ],
+)
+async def test_browserbase_session_disables_recording_and_preserves_tab_live_views(
+    monkeypatch: pytest.MonkeyPatch, lookup: str, close_via_api: bool
+) -> None:
     page = FakePage()
+    page.target_id = "target-1"
+    initial_lookups = 0
+    retry_started = asyncio.Event()
+    retry_finished = asyncio.Event()
+    lookup_finished: dict[Any, asyncio.Event] = {page: asyncio.Event()}
 
     class TargetContext(FakeContext):
-        async def new_cdp_session(self, _page: Any) -> Any:
+        async def new_cdp_session(self, target_page: Any) -> Any:
+            nonlocal initial_lookups
+            finished = lookup_finished.setdefault(target_page, asyncio.Event())
+            if target_page is page:
+                initial_lookups += 1
+                if lookup == "stale" and initial_lookups > 1:
+                    retry_started.set()
+                    await retry_finished.wait()
+                if lookup in {"error", "select_error"} or (
+                    lookup in {"retry", "stale"} and initial_lookups == 1
+                ):
+                    finished.set()
+                    raise RuntimeError("Live view unavailable")
+
             async def send(_command: str) -> dict[str, Any]:
-                return {"targetInfo": {"targetId": "target-1"}}
+                return {"targetInfo": {"targetId": target_page.target_id}}
 
             async def detach() -> None:
-                pass
+                finished.set()
 
             return SimpleNamespace(send=send, detach=detach)
 
@@ -102,7 +160,15 @@ async def test_browserbase_session_disables_provider_recording_and_logs(monkeypa
         async def debug(self, _session_id: str) -> Any:
             return SimpleNamespace(
                 debugger_fullscreen_url="https://live.browserbase.com/session-1",
-                pages=[SimpleNamespace(id="target-1", debugger_fullscreen_url="https://live.browserbase.com/target-1")],
+                pages=[
+                    SimpleNamespace(
+                        id="target-1",
+                        debugger_fullscreen_url=(
+                            None if lookup in {"missing", "select_missing"} else "https://live.browserbase.com/target-1"
+                        ),
+                    ),
+                    SimpleNamespace(id="popup", debugger_fullscreen_url="https://live.browserbase.com/popup"),
+                ],
             )
 
         async def update(self, session_id: str, **kwargs: str) -> None:
@@ -126,10 +192,15 @@ async def test_browserbase_session_disables_provider_recording_and_logs(monkeypa
     monkeypatch.setitem(sys.modules, "browserbase", browserbase)
     monkeypatch.setattr("workflow_use_recording.provider._start_playwright_runtime", lambda: _start(runtime))
 
+    async def no_capture(*_args: Any) -> None:
+        pass
+
+    monkeypatch.setattr("workflow_use_recording.provider.install_sign_in_capture", no_capture)
     provider = BrowserbaseProvider(project_id="project-1")
     session = await provider.create("https://example.com/reports", _ignore_event)
 
-    assert session.live_view_url == "https://live.browserbase.com/target-1"
+    fallback = "https://live.browserbase.com/session-1"
+    assert session.live_view_url == ("https://live.browserbase.com/target-1" if lookup == "resolved" else fallback)
     assert session.active_tab_id == "tab-1"
     assert clients[0].sessions.create_calls == [
         {
@@ -149,6 +220,47 @@ async def test_browserbase_session_disables_provider_recording_and_logs(monkeypa
     assert page.goto_urls == ["https://example.com/reports"]
     assert (session.network, session.proxy_country, session.start_page_blocked) == ("direct", None, False)
 
+    popup = FakePage()
+    popup.target_id = "popup"
+    popup.context = context
+    context.events["page"](popup)
+    await asyncio.wait_for(lookup_finished.setdefault(popup, asyncio.Event()).wait(), 1)
+    assert session.active_tab_id == "tab-2"
+    assert session.live_view_url == "https://live.browserbase.com/popup"
+
+    if lookup.startswith("select_"):
+        await session.select_tab("tab-1")
+        assert session.active_tab_id == "tab-1"
+        assert session.live_view_url == fallback
+        await session.select_tab("tab-2")
+
+    lookup_finished[page].clear()
+    if close_via_api:
+        await session.close_tab("tab-2")
+    else:
+        await popup.close()
+    assert session.active_tab_id == "tab-1"
+    assert session.live_view_url == ("https://live.browserbase.com/target-1" if lookup == "resolved" else fallback)
+
+    if lookup == "stale":
+        await asyncio.wait_for(retry_started.wait(), 1)
+        other = FakePage()
+        other.target_id = "popup"
+        other.context = context
+        context.events["page"](other)
+        await session.select_tab("tab-3")
+        retry_finished.set()
+    if lookup != "resolved":
+        await asyncio.wait_for(lookup_finished[page].wait(), 1)
+    if lookup == "stale":
+        assert session.active_tab_id == "tab-3"
+        assert session.live_view_url == "https://live.browserbase.com/popup"
+        await session.select_tab("tab-1")
+        assert session.live_view_url == "https://live.browserbase.com/target-1"
+    else:
+        assert session.live_view_url == (
+            "https://live.browserbase.com/target-1" if lookup in {"resolved", "retry"} else fallback
+        )
     await session.close()
 
 

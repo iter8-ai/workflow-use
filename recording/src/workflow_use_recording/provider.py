@@ -148,6 +148,7 @@ class PlaywrightRecordingSession:
         self.browser = browser
         self.runtime = runtime
         self.live_view_url = live_view_url
+        self._fallback_live_view_url = live_view_url
         self.start_page_failed = False
         self.start_page_blocked = False
         self.network = network
@@ -200,12 +201,12 @@ class PlaywrightRecordingSession:
         known = self.tab_for(page)
         if known is not None:
             return known
-        tab = _Tab(f"tab-{self._next_tab_number}", page, live_view_url)
+        tab = _Tab(f"tab-{self._next_tab_number}", page, live_view_url or self._fallback_live_view_url)
         self._next_tab_number += 1
         self._tabs.append(tab)
         if self._active_tab_id is None:
             self._active_tab_id = tab.id
-            self.live_view_url = live_view_url
+            self.live_view_url = tab.live_view_url
         page.on("close", lambda _page: self.forget_tab(page))
         return tab
 
@@ -215,12 +216,20 @@ class PlaywrightRecordingSession:
             with suppress(Exception):
                 tab.title = await page.title()
 
+    async def resolve_tab_live_view(self, tab: _Tab) -> None:
+        if tab.live_view_url == self._fallback_live_view_url and self._resolve_live_view is not None:
+            with suppress(Exception):
+                live_view_url = await self._resolve_live_view(tab.page)
+                if live_view_url is not None and self.tab_for(tab.page) is tab and not tab.page.is_closed():
+                    tab.live_view_url = live_view_url
+                    if self._active_tab_id == tab.id:
+                        self.live_view_url = live_view_url
+
     async def select_tab(self, tab_id: str) -> None:
         tab = next((tab for tab in self._tabs if tab.id == tab_id), None)
         if tab is None or tab.page.is_closed():
             raise KeyError(tab_id)
-        if tab.live_view_url is None and self._resolve_live_view is not None:
-            tab.live_view_url = await self._resolve_live_view(tab.page)
+        await self.resolve_tab_live_view(tab)
         await tab.page.bring_to_front()
         self._selection_generation += 1
         self._active_tab_id = tab.id
@@ -266,6 +275,8 @@ class PlaywrightRecordingSession:
             previous = self._tabs[max(0, index - 1)] if self._tabs else None
             self._active_tab_id = previous.id if previous else None
             self.live_view_url = previous.live_view_url if previous else None
+            if previous is not None and self._resolve_live_view is not None:
+                self.watch(self.resolve_tab_live_view(previous))
 
     def track(self, coroutine: Awaitable[None]) -> None:
         task = asyncio.create_task(coroutine)
@@ -751,9 +762,7 @@ class BrowserbaseProvider:
             context = contexts[0]
             await _configure_context(context, attempt_event)
             page = context.pages[0] if context.pages else await context.new_page()
-            fallback_live_view = session.live_view_url
             session.register_tab(page)
-            session.live_view_url = fallback_live_view
             if getattr(debug, "pages", None):
                 await _resolve_initial_live_view(session, client, created.id, page)
             elif getattr(debug, "pages", None) is not None:
