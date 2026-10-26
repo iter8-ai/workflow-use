@@ -263,6 +263,68 @@ async def test_browserbase_session_disables_recording_and_preserves_tab_live_vie
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("redirect", [False, True], ids=["current-document", "redirect-destroys-context"])
+async def test_browserbase_captures_sign_in_after_current_document_evaluation(
+    monkeypatch: pytest.MonkeyPatch, redirect: bool
+) -> None:
+    events: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+    class Page(FakePage):
+        url = "https://example.com/login"
+
+        async def evaluate(self, _script: str) -> bool:
+            if redirect:
+                raise RuntimeError("Execution context was destroyed, most likely because of a navigation")
+            return True
+
+    class CDP:
+        def __init__(self) -> None:
+            self.events: dict[str, Any] = {}
+            self.binding = ""
+
+        def on(self, event: str, callback: Any) -> None:
+            self.events[event] = callback
+
+        async def send(self, command: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+            if command == "Runtime.addBinding":
+                assert params is not None
+                self.binding = params["name"]
+            if command == "Page.getFrameTree":
+                return {"frameTree": {"frame": {"id": "frame-1"}}}
+            if command == "Page.createIsolatedWorld":
+                return {"executionContextId": 1}
+            if command == "Runtime.evaluate":
+                self.events["Runtime.bindingCalled"](
+                    {"name": self.binding, "payload": json.dumps({"kind": "username", "value": "demo@example.com"})}
+                )
+            return {}
+
+    class Context(FakeContext):
+        async def new_cdp_session(self, _page: Any) -> CDP:
+            return CDP()
+
+    page = Page()
+    context = Context(page)
+    context.pages = [page]
+    page.context = context
+    runtime = FakeRuntime(FakeBrowser(context))
+
+    _browserbase_with(monkeypatch, runtime)
+    session = await BrowserbaseProvider(project_id="project-1").create(
+        page.url, events.put, context_id="saved-context"
+    )
+    try:
+        assert await asyncio.wait_for(events.get(), 1) == {
+            "type": "sign_in_value",
+            "value": "username",
+            "secret": "demo@example.com",
+            "tabId": "tab-1",
+        }
+    finally:
+        await session.close()
+
+
+@pytest.mark.asyncio
 async def test_browserbase_session_failure_deletes_the_new_context(monkeypatch: pytest.MonkeyPatch) -> None:
     deleted: list[tuple[str, dict[str, Any]]] = []
 
