@@ -1752,6 +1752,69 @@ def _event_attempts(
     return runtimes, calls
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "initial_url",
+    ["https://example.com/opened", "about:blank", "https://accounts.google.com/", "chrome://newtab/"],
+    ids=["preloaded-public", "blank-then-public", "google-then-public", "internal-then-public"],
+)
+async def test_popup_destination_precedes_events_during_capture_setup(
+    monkeypatch: pytest.MonkeyPatch, initial_url: str
+) -> None:
+    runtimes, _ = _event_attempts(monkeypatch, [200])
+    context = runtimes[0]._browser.contexts[0]
+    capture_started = asyncio.Event()
+    capture_release = asyncio.Event()
+    popup = EventPage(None, "popup")
+    popup.url = initial_url
+    popup.main_frame.url = initial_url
+    popup.context = context
+
+    async def new_cdp_session(page: Any) -> Any:
+        class CDP:
+            def on(self, _event: str, _callback: Any) -> None:
+                pass
+
+            async def send(self, command: str, _params: Any = None) -> dict[str, Any]:
+                if command == "Page.getFrameTree":
+                    return {"frameTree": {"frame": {"id": "frame"}}}
+                if command == "Page.createIsolatedWorld":
+                    return {"executionContextId": 1}
+                if command == "Runtime.evaluate" and page is popup:
+                    capture_started.set()
+                    await capture_release.wait()
+                return {}
+
+            async def detach(self) -> None:
+                pass
+
+        return CDP()
+
+    context.new_cdp_session = new_cdp_session
+    events: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    session = await BrowserbaseProvider(project_id="project-1").create("https://example.com/", events.put)
+    try:
+        assert await asyncio.wait_for(events.get(), 1) == {"type": "click", "target": "direct", "tabId": "tab-1"}
+        context.handlers["page"](popup)
+        if initial_url != "https://example.com/opened":
+            popup.url = popup.main_frame.url = "https://example.com/opened"
+            popup.handlers["framenavigated"](popup.main_frame)
+        popup.click("immediate")
+        popup.url = popup.main_frame.url = "https://example.com/next"
+        popup.handlers["framenavigated"](popup.main_frame)
+        await asyncio.wait_for(capture_started.wait(), 1)
+        popup.click("during-capture")
+        assert [await asyncio.wait_for(events.get(), 1) for _ in range(4)] == [
+            {"type": "navigation", "url": "https://example.com/opened", "openedNewTab": True, "tabId": "tab-2"},
+            {"type": "click", "target": "immediate", "tabId": "tab-2"},
+            {"type": "navigation", "url": "https://example.com/next", "tabId": "tab-2"},
+            {"type": "click", "target": "during-capture", "tabId": "tab-2"},
+        ]
+    finally:
+        capture_release.set()
+        await session.close()
+
+
 EE_PROXY = [{"type": "browserbase", "geolocation": {"country": "EE"}}]
 
 
