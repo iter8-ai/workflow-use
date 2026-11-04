@@ -32,6 +32,7 @@ class _Tab:
     live_view_url: str | None = None
     title: str = ""
     first_navigation: bool = False
+    focus_task: asyncio.Task[None] | None = None
 
 
 EventSink = Callable[[dict[str, Any]], Awaitable[None]]
@@ -243,6 +244,8 @@ class PlaywrightRecordingSession:
             raise ValueError("Cannot close the last tab.")
         await tab.page.close()
         self.forget_tab(tab.page)
+        if tab.focus_task is not None:
+            await tab.focus_task
 
     def open_tab(self, page: Any) -> None:
         self._pending_tabs[page] = asyncio.get_running_loop().call_later(
@@ -270,18 +273,27 @@ class PlaywrightRecordingSession:
         if index is None:
             return
         was_active = self._tabs[index].id == self._active_tab_id
-        self._tabs.pop(index)
+        closed = self._tabs.pop(index)
         if was_active:
             previous = self._tabs[max(0, index - 1)] if self._tabs else None
             self._active_tab_id = previous.id if previous else None
             self.live_view_url = previous.live_view_url if previous else None
-            if previous is not None and self._resolve_live_view is not None:
-                self.watch(self.resolve_tab_live_view(previous))
+            if previous is not None:
 
-    def track(self, coroutine: Awaitable[None]) -> None:
+                async def focus_previous() -> None:
+                    if self._active_tab_id == previous.id and not previous.page.is_closed():
+                        with suppress(Exception):
+                            await previous.page.bring_to_front()
+
+                closed.focus_task = self.track(focus_previous())
+                if self._resolve_live_view is not None:
+                    self.watch(self.resolve_tab_live_view(previous))
+
+    def track(self, coroutine: Awaitable[None]) -> asyncio.Task[None]:
         task = asyncio.create_task(coroutine)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+        return task
 
     def note_main_response(self, page: Any, status: int) -> None:
         self._main_status[page] = status
@@ -520,7 +532,7 @@ async def _report_download(download: Any, on_event: EventSink) -> None:
 async def _show_opened_tab(
     session: PlaywrightRecordingSession, client: Any, session_id: str, page: Any, generation: int
 ) -> None:
-    """Resolve an opened tab's Live View; show it if foreground and not superseded.
+    """Resolve an opened tab's Live View; show it unless superseded.
 
     Browserbase's live view shows one tab. Without this, a sign-in window opened by "Continue with Google"
     stays invisible and the page looks like it ignored the click.
@@ -534,15 +546,7 @@ async def _show_opened_tab(
         if tab is None or page.is_closed():
             return
         tab.live_view_url = live_view_url
-        if session.active_tab_id == tab.id:
-            session.live_view_url = live_view_url
-        # A background target=_blank must leave the current live view alone. Some sites/browsers do not
-        # expose focus reliably during popup creation; those keep the previous foreground-popup behavior.
-        try:
-            foreground = await page.evaluate("document.hasFocus()")
-        except Exception:
-            foreground = True
-        if foreground and generation == session._selection_generation:
+        if generation == session._selection_generation:
             session.show_tab(page, live_view_url)
     except Exception:
         # The demonstration continues in the tab already shown.
@@ -580,17 +584,6 @@ async def _resolve_initial_live_view(
         tab.live_view_url = live_view_url
         if session.active_tab_id == tab.id:
             session.live_view_url = live_view_url
-
-
-async def _show_local_opened_tab(session: PlaywrightRecordingSession, page: Any, generation: int) -> None:
-    try:
-        foreground = await page.evaluate("document.hasFocus()")
-    except Exception:
-        foreground = True
-    if foreground and not page.is_closed() and generation == session._selection_generation:
-        tab = session.tab_for(page)
-        if tab is not None:
-            session._active_tab_id = tab.id
 
 
 async def _start_playwright_runtime() -> Any:
@@ -913,9 +906,10 @@ class LocalPlaywrightProvider:
         def on_new_page(new_page: Any) -> None:
             if session._capture_page_pending:
                 return
-            session.register_tab(new_page).first_navigation = True
+            tab = session.register_tab(new_page)
+            tab.first_navigation = True
+            session._active_tab_id = tab.id
             session.track(_install_page_events(session, new_page, on_event))
-            session.track(_show_local_opened_tab(session, new_page, session._selection_generation))
 
         context.on("page", on_new_page)
         from playwright.async_api import Error as PlaywrightError

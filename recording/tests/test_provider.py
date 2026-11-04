@@ -823,34 +823,51 @@ async def test_tab_registry_keeps_open_order_and_returns_to_previous_on_close() 
 
 
 @pytest.mark.asyncio
-async def test_background_popup_and_stale_resolution_do_not_take_the_live_view(monkeypatch: pytest.MonkeyPatch) -> None:
-    from workflow_use_recording import provider
+@pytest.mark.parametrize("close_via_api", [True, False])
+async def test_closing_active_middle_tab_focuses_reported_survivor(close_via_api: bool) -> None:
+    from workflow_use_recording.provider import PlaywrightRecordingSession
 
     class Page(FakePage):
-        def __init__(self, focused: bool) -> None:
+        def __init__(self) -> None:
             super().__init__()
-            self.focused = focused
-
-        async def evaluate(self, _script: str) -> bool:
-            return self.focused
+            self.focused = 0
 
         async def bring_to_front(self) -> None:
-            pass
+            self.focused += 1
+
+    session = PlaywrightRecordingSession(browser=object(), runtime=object(), live_view_url=None)
+    pages = [Page() for _ in range(3)]
+    for index, page in enumerate(pages, 1):
+        session.register_tab(page, f"https://live.example/tab-{index}")
+    await session.select_tab("tab-2")
+    if close_via_api:
+        await session.close_tab("tab-2")
+    else:
+        await pages[1].close()
+        await asyncio.gather(*session._tasks)
+    assert session.active_tab_id == "tab-1"
+    assert session.live_view_url == "https://live.example/tab-1"
+    assert pages[0].focused == 1
+    assert pages[2].focused == 0
+
+
+@pytest.mark.asyncio
+async def test_popup_resolution_activates_tab_unless_selection_supersedes_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    from workflow_use_recording import provider
 
     async def live_url(*_args: Any) -> str:
         return "https://live.example/popup"
 
     monkeypatch.setattr(provider, "_tab_live_view", live_url)
     session = provider.PlaywrightRecordingSession(browser=object(), runtime=object(), live_view_url="first")
-    first = Page(True)
-    background = Page(False)
+    first = FakePage()
+    background = FakePage()
     session.register_tab(first, "first")
     session.register_tab(background)
     await provider._show_opened_tab(session, object(), "session", background, 0)
-    assert session.active_tab_id == "tab-1" and session.live_view_url == "first"
-    assert session.tabs[1]["active"] is False
+    assert session.active_tab_id == "tab-2" and session.live_view_url == "https://live.example/popup"
 
-    pending = Page(True)
+    pending = FakePage()
     session.register_tab(pending)
     await session.select_tab("tab-1")
     await provider._show_opened_tab(session, object(), "session", pending, 0)
@@ -897,8 +914,10 @@ async def test_delayed_popup_lookup_updates_only_the_active_tab(
     assert popup_tab.live_view_url == "https://live.example/popup"
     assert session.active_tab_id == selected_tab_id
     assert session.live_view_url == (
-        "https://live.example/first" if selected_tab_id == "tab-1" else "https://live.example/popup"
+        "https://live.example/first" if selected_tab_id == "tab-1" else "https://live.example/session"
     )
+    await session.select_tab("tab-2")
+    assert session.live_view_url == "https://live.example/popup"
 
 
 @pytest.mark.asyncio
@@ -964,7 +983,7 @@ async def test_popup_capture_is_ready_while_title_lookup_waits(monkeypatch: pyte
             SimpleNamespace(
                 type="debug",
                 args=[object(), object()],
-                text=f'{CONSOLE_PREFIX} {json.dumps({"type": "click", "target": "Immediate"})}',
+                text=f"{CONSOLE_PREFIX} {json.dumps({'type': 'click', 'target': 'Immediate'})}",
             )
         )
         await asyncio.gather(*session._tasks)
@@ -1054,6 +1073,7 @@ async def test_same_origin_popup_records_first_document_input_and_click(monkeypa
         popup = await opened.value
         popup_tab = session.tab_for(popup)
         assert popup_tab is not None
+        assert session.active_tab_id == popup_tab.id
         await popup.wait_for_load_state()
         await popup.get_by_label("Note").fill("First document")
         await popup.get_by_role("button", name="Save report").click()
