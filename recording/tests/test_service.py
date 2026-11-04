@@ -316,24 +316,41 @@ async def test_tab_actions_and_step_compaction_use_stable_tab_ids() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("action", ["select_tab", "close_tab"])
-async def test_tab_action_browser_wait_does_not_reorder_page_events(action: str) -> None:
+@pytest.mark.parametrize("new_event_type", ["click", "input"])
+async def test_tab_action_browser_wait_does_not_reorder_page_events(action: str, new_event_type: str) -> None:
     started = asyncio.Event()
-    release = asyncio.Event()
+    transition = asyncio.Event()
+    transitioned = asyncio.Event()
+    finish = asyncio.Event()
 
     class WaitingSession(DeferredSession):
-        tabs = [
-            {"id": "tab-1", "title": "First", "url": "https://example.com/", "active": True},
-            {"id": "tab-2", "title": "Second", "url": "https://example.com/second", "active": False},
-        ]
-        active_tab_id = "tab-1"
+        def __init__(self) -> None:
+            super().__init__()
+            self.active_tab_id = "tab-2" if action == "close_tab" else "tab-1"
+            self.tabs = [
+                {"id": "tab-1", "title": "First", "url": "https://example.com/", "active": self.active_tab_id == "tab-1"},
+                {
+                    "id": "tab-2",
+                    "title": "Second",
+                    "url": "https://example.com/second",
+                    "active": self.active_tab_id == "tab-2",
+                },
+            ]
 
-        async def select_tab(self, _tab_id: str) -> None:
+        async def select_tab(self, tab_id: str) -> None:
             started.set()
-            await release.wait()
+            await transition.wait()
+            self.active_tab_id = tab_id
+            transitioned.set()
+            await finish.wait()
 
-        async def close_tab(self, _tab_id: str) -> None:
+        async def close_tab(self, tab_id: str) -> None:
             started.set()
-            await release.wait()
+            await transition.wait()
+            self.tabs = [tab for tab in self.tabs if tab["id"] != tab_id]
+            self.active_tab_id = "tab-1"
+            transitioned.set()
+            await finish.wait()
 
     class WaitingProvider:
         async def create(self, *_args: Any, **_kwargs: Any) -> BrowserSession:
@@ -343,17 +360,33 @@ async def test_tab_action_browser_wait_does_not_reorder_page_events(action: str)
     owner = RecordingOwner("iter7", "owner@iter7.example")
     recording = await service.create(owner, "https://example.com/")
     action_task = asyncio.create_task(getattr(service, action)(recording.id, owner, "tab-2"))
+    old_tab_id = "tab-2" if action == "close_tab" else "tab-1"
+    new_tab_id = "tab-1" if action == "close_tab" else "tab-2"
     try:
         await asyncio.wait_for(started.wait(), 1)
         await asyncio.wait_for(
-            service.record_event(recording.id, {"type": "click", "target": "Still visible", "tabId": "tab-1"}), 1
+            service.record_event(recording.id, {"type": "click", "target": "Still visible", "tabId": old_tab_id}), 1
+        )
+        transition.set()
+        await asyncio.wait_for(transitioned.wait(), 1)
+        new_event = {"type": new_event_type, "target": "Newly visible", "tabId": new_tab_id}
+        if new_event_type == "input":
+            new_event["value"] = "first"
+        await asyncio.wait_for(
+            service.record_event(recording.id, new_event), 1
         )
     finally:
-        release.set()
+        finish.set()
     await action_task
-    assert [(step.type, step.tab_id) for step in recording.steps[-2:]] == [
-        ("click", "tab-1"),
+    if new_event_type == "input":
+        await service.record_event(
+            recording.id, {"type": "input", "target": "Newly visible", "value": "second", "tabId": new_tab_id}
+        )
+        assert recording.steps[-1].value == "second"
+    assert [(step.type, step.tab_id) for step in recording.steps[-3:]] == [
+        ("click", old_tab_id),
         ("switch_tab" if action == "select_tab" else "close_tab", "tab-2"),
+        (new_event_type, new_tab_id),
     ]
     await service.close()
 
