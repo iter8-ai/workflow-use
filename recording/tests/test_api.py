@@ -253,6 +253,26 @@ def test_select_and_close_tab_switch_the_live_view_and_record_steps() -> None:
     }
 
 
+@pytest.mark.parametrize("action", ["select", "close"])
+def test_failed_tab_action_returns_503_without_a_step(action: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = FakeProvider()
+
+    async def fail_action(_tab_id: str) -> None:
+        raise RuntimeError("browser operation failed")
+
+    with client(provider) as http:
+        created = create_recording(http)
+        provider.sessions[0].tabs.append(
+            {"id": "tab-2", "title": "Reports", "url": "https://reports.example.com/", "active": False}
+        )
+        monkeypatch.setattr(provider.sessions[0], f"{action}_tab", fail_action)
+        failed = http.post(f"/recordings/{created['id']}/tabs/tab-2/{action}", headers=headers())
+        after = http.get(f"/recordings/{created['id']}", headers=headers()).json()
+
+    assert failed.status_code == 503
+    assert after["steps"] == created["steps"]
+
+
 def test_tab_endpoints_reject_unknown_tab_last_tab_and_inactive_recording() -> None:
     provider = FakeProvider()
     with client(provider) as http:

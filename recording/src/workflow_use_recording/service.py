@@ -278,8 +278,14 @@ class RecordingService:
                     raise UnknownTab(tab_id)
                 label = tab["title"] or urlsplit(tab["url"]).hostname or "page"
                 browser = recording.browser
-                self._append_tab_step(recording, "switch_tab", tab_id, f'Switch to the tab "{label}"')
-            await browser.select_tab(tab_id)
+                step = self._append_tab_step(recording, "switch_tab", tab_id, f'Switch to the tab "{label}"')
+            try:
+                await browser.select_tab(tab_id)
+            except BaseException:
+                async with recording.lock:
+                    if step is not None:
+                        recording.steps = [recorded for recorded in recording.steps if recorded.id != step.id]
+                raise
         return recording
 
     async def close_tab(self, recording_id: str, owner: RecordingOwner, tab_id: str) -> Recording | None:
@@ -297,21 +303,28 @@ class RecordingService:
                     raise LastTab("Cannot close the last tab.")
                 label = tab["title"] or urlsplit(tab["url"]).hostname or "page"
                 browser = recording.browser
-                self._append_tab_step(recording, "close_tab", tab_id, f'Close the tab "{label}"')
-            await browser.close_tab(tab_id)
+                step = self._append_tab_step(recording, "close_tab", tab_id, f'Close the tab "{label}"')
+            try:
+                await browser.close_tab(tab_id)
+            except BaseException:
+                async with recording.lock:
+                    if step is not None:
+                        recording.steps = [recorded for recorded in recording.steps if recorded.id != step.id]
+                raise
         return recording
 
     @staticmethod
     def _append_tab_step(
         recording: Recording, step_type: Literal["switch_tab", "close_tab"], tab_id: str, description: str
-    ) -> None:
+    ) -> SetupStep | None:
         if recording.blocked_reason is not None:
-            return
+            return None
         if len(recording.steps) >= MAX_STEPS:
             recording.blocked_reason = CAPTURE_LIMIT_REASON
-            return
-        recording.steps.append(SetupStep(id=str(uuid4()), type=step_type, tab_id=tab_id, description=description))
-        recording.last_input_key = None
+            return None
+        step = SetupStep(id=str(uuid4()), type=step_type, tab_id=tab_id, description=description)
+        recording.steps.append(step)
+        return step
 
     async def stop(self, recording_id: str, owner: RecordingOwner) -> Recording | None:
         recording = await self.get(recording_id, owner)
