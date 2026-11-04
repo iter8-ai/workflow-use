@@ -546,6 +546,8 @@ async def _show_opened_tab(
         if tab is None or page.is_closed():
             return
         tab.live_view_url = live_view_url
+        if session.active_tab_id == tab.id:
+            session.live_view_url = live_view_url
         if generation == session._selection_generation:
             session.show_tab(page, live_view_url)
     except Exception:

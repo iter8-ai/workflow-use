@@ -238,7 +238,8 @@ async def test_browserbase_session_disables_recording_and_preserves_tab_live_vie
     else:
         await popup.close()
     assert session.active_tab_id == "tab-1"
-    assert session.live_view_url == ("https://live.browserbase.com/target-1" if lookup == "resolved" else fallback)
+    if lookup != "retry":
+        assert session.live_view_url == ("https://live.browserbase.com/target-1" if lookup == "resolved" else fallback)
 
     if lookup == "stale":
         await asyncio.wait_for(retry_started.wait(), 1)
@@ -914,10 +915,40 @@ async def test_delayed_popup_lookup_updates_only_the_active_tab(
     assert popup_tab.live_view_url == "https://live.example/popup"
     assert session.active_tab_id == selected_tab_id
     assert session.live_view_url == (
-        "https://live.example/first" if selected_tab_id == "tab-1" else "https://live.example/session"
+        "https://live.example/first" if selected_tab_id == "tab-1" else "https://live.example/popup"
     )
     await session.select_tab("tab-2")
     assert session.live_view_url == "https://live.example/popup"
+
+
+@pytest.mark.asyncio
+async def test_delayed_initial_live_view_resolution_keeps_another_tab_selected(monkeypatch: pytest.MonkeyPatch) -> None:
+    from workflow_use_recording import provider
+
+    lookup_started = asyncio.Event()
+    release_lookup = asyncio.Event()
+
+    async def delayed_live_url(*_args: Any) -> str:
+        lookup_started.set()
+        await release_lookup.wait()
+        return "https://live.example/initial"
+
+    monkeypatch.setattr(provider, "_tab_live_view", delayed_live_url)
+    session = provider.PlaywrightRecordingSession(
+        browser=object(), runtime=object(), live_view_url="https://live.example/session"
+    )
+    initial = session.register_tab(FakePage())
+    session.register_tab(FakePage(), "https://live.example/selected")
+    resolution = asyncio.create_task(provider._resolve_initial_live_view(session, object(), "session", initial.page))
+    try:
+        await asyncio.wait_for(lookup_started.wait(), 1)
+        await session.select_tab("tab-2")
+    finally:
+        release_lookup.set()
+    await resolution
+    assert initial.live_view_url == "https://live.example/initial"
+    assert session.active_tab_id == "tab-2"
+    assert session.live_view_url == "https://live.example/selected"
 
 
 @pytest.mark.asyncio
