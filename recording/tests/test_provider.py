@@ -878,6 +878,63 @@ async def test_page_title_is_read_when_event_listener_attaches_after_load(monkey
 
 
 @pytest.mark.asyncio
+async def test_popup_capture_is_ready_while_title_lookup_waits(monkeypatch: pytest.MonkeyPatch) -> None:
+    from workflow_use_recording import provider
+    from workflow_use_recording.capture import CONSOLE_PREFIX
+
+    title_started = asyncio.Event()
+    release_title = asyncio.Event()
+    installed: list[str] = []
+    events: list[dict[str, Any]] = []
+
+    async def sign_in_capture(*_args: Any) -> None:
+        installed.append("sign-in")
+
+    monkeypatch.setattr(provider, "install_sign_in_capture", sign_in_capture)
+
+    class Page(FakePage):
+        def __init__(self) -> None:
+            super().__init__()
+            self.url = "https://example.com/popup"
+            self.context = object()
+
+        async def evaluate(self, _script: str) -> None:
+            installed.append("ordinary")
+
+        async def title(self) -> str:
+            title_started.set()
+            await release_title.wait()
+            return "Popup"
+
+    async def record(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    page = Page()
+    session = provider.PlaywrightRecordingSession(browser=object(), runtime=object(), live_view_url=None)
+    session.register_tab(page).first_navigation = True
+    setup = asyncio.create_task(provider._install_page_events(session, page, record))
+    try:
+        await asyncio.wait_for(title_started.wait(), 1)
+        assert installed == ["ordinary", "sign-in"]
+        page.events["console"](
+            SimpleNamespace(
+                type="debug",
+                args=[object(), object()],
+                text=f'{CONSOLE_PREFIX} {json.dumps({"type": "click", "target": "Immediate"})}',
+            )
+        )
+        await asyncio.gather(*session._tasks)
+        assert events == [
+            {"type": "navigation", "url": page.url, "openedNewTab": True, "tabId": "tab-1"},
+            {"type": "click", "target": "Immediate", "tabId": "tab-1"},
+        ]
+    finally:
+        release_title.set()
+        await setup
+    assert session.tabs[0]["title"] == "Popup"
+
+
+@pytest.mark.asyncio
 async def test_preloaded_popup_records_first_public_navigation_once(monkeypatch: pytest.MonkeyPatch) -> None:
     from workflow_use_recording import provider
 

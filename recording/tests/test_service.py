@@ -315,6 +315,50 @@ async def test_tab_actions_and_step_compaction_use_stable_tab_ids() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["select_tab", "close_tab"])
+async def test_tab_action_browser_wait_does_not_reorder_page_events(action: str) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class WaitingSession(DeferredSession):
+        tabs = [
+            {"id": "tab-1", "title": "First", "url": "https://example.com/", "active": True},
+            {"id": "tab-2", "title": "Second", "url": "https://example.com/second", "active": False},
+        ]
+        active_tab_id = "tab-1"
+
+        async def select_tab(self, _tab_id: str) -> None:
+            started.set()
+            await release.wait()
+
+        async def close_tab(self, _tab_id: str) -> None:
+            started.set()
+            await release.wait()
+
+    class WaitingProvider:
+        async def create(self, *_args: Any, **_kwargs: Any) -> BrowserSession:
+            return WaitingSession()
+
+    service = RecordingService(WaitingProvider())
+    owner = RecordingOwner("iter7", "owner@iter7.example")
+    recording = await service.create(owner, "https://example.com/")
+    action_task = asyncio.create_task(getattr(service, action)(recording.id, owner, "tab-2"))
+    try:
+        await asyncio.wait_for(started.wait(), 1)
+        await asyncio.wait_for(
+            service.record_event(recording.id, {"type": "click", "target": "Still visible", "tabId": "tab-1"}), 1
+        )
+    finally:
+        release.set()
+    await action_task
+    assert [(step.type, step.tab_id) for step in recording.steps[-2:]] == [
+        ("click", "tab-1"),
+        ("switch_tab" if action == "select_tab" else "close_tab", "tab-2"),
+    ]
+    await service.close()
+
+
+@pytest.mark.asyncio
 async def test_sweep_deletes_unclaimed_google_context_after_one_hour() -> None:
     provider = ContextProvider()
     service = RecordingService(provider)

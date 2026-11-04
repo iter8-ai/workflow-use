@@ -274,9 +274,12 @@ class RecordingService:
             tab = next((tab for tab in recording.browser.tabs if tab["id"] == tab_id), None)
             if tab is None:
                 raise UnknownTab(tab_id)
-            await recording.browser.select_tab(tab_id)
             label = tab["title"] or urlsplit(tab["url"]).hostname or "page"
-            self._append_tab_step(recording, "switch_tab", tab_id, f'Switch to the tab "{label}"')
+            browser = recording.browser
+        await browser.select_tab(tab_id)
+        async with recording.lock:
+            if recording.status == "recording" and not recording.closing:
+                self._append_tab_step(recording, "switch_tab", tab_id, f'Switch to the tab "{label}"')
         return recording
 
     async def close_tab(self, recording_id: str, owner: RecordingOwner, tab_id: str) -> Recording | None:
@@ -292,8 +295,11 @@ class RecordingService:
             if len(recording.browser.tabs) == 1:
                 raise LastTab("Cannot close the last tab.")
             label = tab["title"] or urlsplit(tab["url"]).hostname or "page"
-            await recording.browser.close_tab(tab_id)
-            self._append_tab_step(recording, "close_tab", tab_id, f'Close the tab "{label}"')
+            browser = recording.browser
+        await browser.close_tab(tab_id)
+        async with recording.lock:
+            if recording.status == "recording" and not recording.closing:
+                self._append_tab_step(recording, "close_tab", tab_id, f'Close the tab "{label}"')
         return recording
 
     @staticmethod

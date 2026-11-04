@@ -430,7 +430,6 @@ def _install_page_events(session: PlaywrightRecordingSession, page: Any, on_even
     async def install_capture() -> None:
         if page.is_closed():
             return
-        await session.update_title(page)
         with suppress(Exception):
             await page.evaluate(CAPTURE_SCRIPT)
         try:
@@ -440,6 +439,7 @@ def _install_page_events(session: PlaywrightRecordingSession, page: Any, on_even
                 raise
         if session.login is not None:
             install_sign_in_fill(page, lambda: session.login, session.track)
+        await session.update_title(page)
 
     if page.is_closed():
         return install_capture()
