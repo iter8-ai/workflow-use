@@ -343,7 +343,9 @@ class RecordingService:
                 (
                     index
                     for index, step in enumerate(recording.steps)
-                    if step.tab_id == destination_tab_id and initial_steps.get(step.id) is not step
+                    if step.tab_id == destination_tab_id
+                    and not step.opened_new_tab
+                    and initial_steps.get(step.id) is not step
                 ),
                 index,
             )

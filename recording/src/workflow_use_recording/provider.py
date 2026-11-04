@@ -534,6 +534,8 @@ async def _show_opened_tab(
         if tab is None or page.is_closed():
             return
         tab.live_view_url = live_view_url
+        if session.active_tab_id == tab.id:
+            session.live_view_url = live_view_url
         # A background target=_blank must leave the current live view alone. Some sites/browsers do not
         # expose focus reliably during popup creation; those keep the previous foreground-popup behavior.
         try:

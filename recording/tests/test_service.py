@@ -317,7 +317,10 @@ async def test_tab_actions_and_step_compaction_use_stable_tab_ids() -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("action", ["select_tab", "close_tab"])
 @pytest.mark.parametrize("new_event_type", ["click", "input"])
-async def test_tab_action_browser_wait_does_not_reorder_page_events(action: str, new_event_type: str) -> None:
+@pytest.mark.parametrize("opening_during_wait", [False, True])
+async def test_tab_action_browser_wait_does_not_reorder_page_events(
+    action: str, new_event_type: str, opening_during_wait: bool
+) -> None:
     started = asyncio.Event()
     transition = asyncio.Event()
     transitioned = asyncio.Event()
@@ -328,11 +331,16 @@ async def test_tab_action_browser_wait_does_not_reorder_page_events(action: str,
             super().__init__()
             self.active_tab_id = "tab-2" if action == "close_tab" else "tab-1"
             self.tabs = [
-                {"id": "tab-1", "title": "First", "url": "https://example.com/", "active": self.active_tab_id == "tab-1"},
+                {
+                    "id": "tab-1",
+                    "title": "First",
+                    "url": "about:blank" if opening_during_wait and action == "close_tab" else "https://example.com/",
+                    "active": self.active_tab_id == "tab-1",
+                },
                 {
                     "id": "tab-2",
                     "title": "Second",
-                    "url": "https://example.com/second",
+                    "url": "about:blank" if opening_during_wait and action == "select_tab" else "https://example.com/second",
                     "active": self.active_tab_id == "tab-2",
                 },
             ]
@@ -367,6 +375,16 @@ async def test_tab_action_browser_wait_does_not_reorder_page_events(action: str,
         await asyncio.wait_for(
             service.record_event(recording.id, {"type": "click", "target": "Still visible", "tabId": old_tab_id}), 1
         )
+        if opening_during_wait:
+            await service.record_event(
+                recording.id,
+                {
+                    "type": "navigation",
+                    "url": "https://example.com/opened",
+                    "openedNewTab": True,
+                    "tabId": new_tab_id,
+                },
+            )
         transition.set()
         await asyncio.wait_for(transitioned.wait(), 1)
         new_event = {"type": new_event_type, "target": "Newly visible", "tabId": new_tab_id}
@@ -383,11 +401,16 @@ async def test_tab_action_browser_wait_does_not_reorder_page_events(action: str,
             recording.id, {"type": "input", "target": "Newly visible", "value": "second", "tabId": new_tab_id}
         )
         assert recording.steps[-1].value == "second"
-    assert [(step.type, step.tab_id) for step in recording.steps[-3:]] == [
+    expected = [
         ("click", old_tab_id),
         ("switch_tab" if action == "select_tab" else "close_tab", "tab-2"),
         (new_event_type, new_tab_id),
     ]
+    if opening_during_wait:
+        expected.insert(1, ("navigation", new_tab_id))
+    assert [(step.type, step.tab_id) for step in recording.steps[-len(expected) :]] == expected
+    if opening_during_wait:
+        assert recording.steps[-3].opened_new_tab is True
     await service.close()
 
 

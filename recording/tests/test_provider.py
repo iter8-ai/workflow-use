@@ -858,6 +858,50 @@ async def test_background_popup_and_stale_resolution_do_not_take_the_live_view(m
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("selected_tab_id", ["tab-1", "tab-2"])
+async def test_delayed_popup_lookup_updates_only_the_active_tab(
+    monkeypatch: pytest.MonkeyPatch, selected_tab_id: str
+) -> None:
+    from workflow_use_recording import provider
+
+    lookup_started = asyncio.Event()
+    release_lookup = asyncio.Event()
+
+    async def delayed_live_url(*_args: Any) -> str:
+        lookup_started.set()
+        await release_lookup.wait()
+        return "https://live.example/popup"
+
+    async def unresolved(_page: Any) -> None:
+        return None
+
+    monkeypatch.setattr(provider, "_tab_live_view", delayed_live_url)
+    session = provider.PlaywrightRecordingSession(
+        browser=object(), runtime=object(), live_view_url="https://live.example/session"
+    )
+    first = FakePage()
+    popup = FakePage()
+    session.register_tab(first, "https://live.example/first")
+    popup_tab = session.register_tab(popup)
+    session._resolve_live_view = unresolved
+    show = asyncio.create_task(provider._show_opened_tab(session, object(), "session", popup, 0))
+    try:
+        await asyncio.wait_for(lookup_started.wait(), 1)
+        await session.select_tab(selected_tab_id)
+        assert session.live_view_url == (
+            "https://live.example/first" if selected_tab_id == "tab-1" else "https://live.example/session"
+        )
+    finally:
+        release_lookup.set()
+    await show
+    assert popup_tab.live_view_url == "https://live.example/popup"
+    assert session.active_tab_id == selected_tab_id
+    assert session.live_view_url == (
+        "https://live.example/first" if selected_tab_id == "tab-1" else "https://live.example/popup"
+    )
+
+
+@pytest.mark.asyncio
 async def test_page_title_is_read_when_event_listener_attaches_after_load(monkeypatch: pytest.MonkeyPatch) -> None:
     from workflow_use_recording import provider
 
