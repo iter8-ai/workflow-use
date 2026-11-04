@@ -16,6 +16,7 @@ from .models import (
     RecordingGoogle,
     RecordingLogin,
     RecordingResponse,
+    RecordingTab,
     RecordingWebsiteSession,
     SetupStep,
     StepDate,
@@ -66,6 +67,14 @@ class PageNotOpened(RuntimeError):
     """Raised when the browser could not open the requested page. Carries no provider text."""
 
 
+class UnknownTab(KeyError):
+    """The requested tab is not open in this recording."""
+
+
+class LastTab(RuntimeError):
+    """The final tab must stay open while recording."""
+
+
 @dataclass(frozen=True)
 class RecordingOwner:
     organization: str
@@ -109,6 +118,7 @@ class Recording:
     handoff_resolved_at: datetime | None = None
     deleted: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    tab_action_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 def _clear_website_handoff(recording: Recording) -> None:
@@ -200,7 +210,10 @@ class RecordingService:
             if getattr(browser, "start_page_failed", False):
                 recording.start_page_failed = True
             elif not recording.steps:
-                await self.record_event(recording.id, {"type": "navigation", "url": start_url})
+                await self.record_event(
+                    recording.id,
+                    {"type": "navigation", "url": start_url, "tabId": getattr(browser, "active_tab_id", None)},
+                )
             return recording
         except _PendingContextCleanup as error:
             async with recording.lock:
@@ -251,6 +264,67 @@ class RecordingService:
         # The opened page can itself be a block page; the session knows from its response status.
         recording.start_page_blocked = bool(getattr(recording.browser, "start_page_blocked", False))
         return recording
+
+    async def select_tab(self, recording_id: str, owner: RecordingOwner, tab_id: str) -> Recording | None:
+        recording = await self.get(recording_id, owner)
+        if recording is None:
+            return None
+        async with recording.tab_action_lock:
+            async with recording.lock:
+                if recording.status != "recording" or recording.browser is None or recording.closing:
+                    raise RecordingNotActive("The recording is not active.")
+                tab = next((tab for tab in recording.browser.tabs if tab["id"] == tab_id), None)
+                if tab is None:
+                    raise UnknownTab(tab_id)
+                label = tab["title"] or urlsplit(tab["url"]).hostname or "page"
+                browser = recording.browser
+                step = self._append_tab_step(recording, "switch_tab", tab_id, f'Switch to the tab "{label}"')
+            try:
+                await browser.select_tab(tab_id)
+            except BaseException:
+                async with recording.lock:
+                    if step is not None:
+                        recording.steps = [recorded for recorded in recording.steps if recorded.id != step.id]
+                raise
+        return recording
+
+    async def close_tab(self, recording_id: str, owner: RecordingOwner, tab_id: str) -> Recording | None:
+        recording = await self.get(recording_id, owner)
+        if recording is None:
+            return None
+        async with recording.tab_action_lock:
+            async with recording.lock:
+                if recording.status != "recording" or recording.browser is None or recording.closing:
+                    raise RecordingNotActive("The recording is not active.")
+                tab = next((tab for tab in recording.browser.tabs if tab["id"] == tab_id), None)
+                if tab is None:
+                    raise UnknownTab(tab_id)
+                if len(recording.browser.tabs) == 1:
+                    raise LastTab("Cannot close the last tab.")
+                label = tab["title"] or urlsplit(tab["url"]).hostname or "page"
+                browser = recording.browser
+                step = self._append_tab_step(recording, "close_tab", tab_id, f'Close the tab "{label}"')
+            try:
+                await browser.close_tab(tab_id)
+            except BaseException:
+                async with recording.lock:
+                    if step is not None:
+                        recording.steps = [recorded for recorded in recording.steps if recorded.id != step.id]
+                raise
+        return recording
+
+    @staticmethod
+    def _append_tab_step(
+        recording: Recording, step_type: Literal["switch_tab", "close_tab"], tab_id: str, description: str
+    ) -> SetupStep | None:
+        if recording.blocked_reason is not None:
+            return None
+        if len(recording.steps) >= MAX_STEPS:
+            recording.blocked_reason = CAPTURE_LIMIT_REASON
+            return None
+        step = SetupStep(id=str(uuid4()), type=step_type, tab_id=tab_id, description=description)
+        recording.steps.append(step)
+        return step
 
     async def stop(self, recording_id: str, owner: RecordingOwner) -> Recording | None:
         recording = await self.get(recording_id, owner)
@@ -322,16 +396,25 @@ class RecordingService:
             input_key = _text(event.get("targetKey"), maximum=512) or step.target
             if step.type in {"input", "credential"} and recording.steps:
                 previous = recording.steps[-1]
-                if previous.type == step.type and recording.last_input_key == input_key:
+                if (
+                    previous.type == step.type
+                    and previous.tab_id == step.tab_id
+                    and recording.last_input_key == input_key
+                ):
                     recording.steps[-1] = step.model_copy(update={"id": previous.id})
                     return
-            if step.type == "navigation" and recording.steps and recording.steps[-1].url == step.url:
+            if (
+                step.type == "navigation"
+                and recording.steps
+                and recording.steps[-1].url == step.url
+                and recording.steps[-1].tab_id == step.tab_id
+            ):
                 return
             # Clicks in quick succession on one control are one step with a count, e.g. paging a calendar back
             # three months. The count is kept, so the agent repeats it; a stray double click shows up in review.
             if step.type == "click" and event.get("repeat") is True and recording.steps:
                 previous = recording.steps[-1]
-                if previous.type == "click" and previous.target == step.target:
+                if previous.type == "click" and previous.target == step.target and previous.tab_id == step.tab_id:
                     count = int(previous.value or "1") + 1 if (previous.value or "1").isdigit() else 2
                     recording.steps[-1] = previous.model_copy(
                         update={"value": str(count), "description": f"Click {step.target or 'element'} ({count} times)"}
@@ -365,7 +448,15 @@ class RecordingService:
         if len(recording.steps) >= MAX_STEPS:
             recording.blocked_reason = CAPTURE_LIMIT_REASON
             return
-        recording.steps.append(SetupStep(id=download_id, type="download", description=f"Download {name}", value=name))
+        recording.steps.append(
+            SetupStep(
+                id=download_id,
+                type="download",
+                description=f"Download {name}",
+                value=name,
+                tab_id=_text(event.get("tabId"), maximum=128),
+            )
+        )
         recording.last_input_key = None
 
     def _start_organizing(self, recording: Recording) -> None:
@@ -691,6 +782,11 @@ class RecordingService:
         live_view_url = None
         if recording.status == "recording" and recording.browser:
             live_view_url = recording.browser.live_view_url
+        tabs = (
+            [RecordingTab.model_validate(tab) for tab in getattr(recording.browser, "tabs", [])]
+            if recording.browser
+            else []
+        )
         return RecordingResponse(
             id=recording.id,
             status=recording.status,
@@ -698,6 +794,8 @@ class RecordingService:
             live_view_switching=bool(
                 recording.status == "recording" and getattr(recording.browser, "live_view_switching", False)
             ),
+            tabs=tabs,
+            active_tab_id=getattr(recording.browser, "active_tab_id", None),
             steps=recording.steps,
             expires_at=recording.expires_at,
             blocked_reason=recording.blocked_reason,
@@ -754,6 +852,7 @@ def _apply_organized(steps: list[SetupStep], organized: list[OrganizedStep]) -> 
                     SetupStep(
                         id=parts[0].id,
                         type="date",
+                        tab_id=parts[0].tab_id,
                         description=item.description,
                         target=_date_target(parts),
                         stage=item.stage,
@@ -798,6 +897,8 @@ def _to_step(event: dict[str, Any]) -> SetupStep | None:
         id=str(uuid4()),
         type=event_type,
         description=description,
+        tab_id=_text(event.get("tabId"), maximum=128),
+        opened_new_tab=True if event_type == "navigation" and event.get("openedNewTab") is True else None,
         target=target,
         value=value,
         url=url,

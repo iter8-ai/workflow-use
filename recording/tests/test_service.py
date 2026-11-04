@@ -257,6 +257,231 @@ async def test_navigation_preserves_deep_link_and_rejects_unsafe_urls() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tab_actions_and_step_compaction_use_stable_tab_ids() -> None:
+    class TabsSession(DeferredSession):
+        def __init__(self) -> None:
+            super().__init__()
+            self.tabs = [
+                {"id": "tab-1", "title": "First", "url": "https://example.com/", "active": True},
+                {"id": "tab-2", "title": "", "url": "https://reports.example.com/", "active": False},
+            ]
+            self.active_tab_id = "tab-1"
+
+        async def select_tab(self, tab_id: str) -> None:
+            self.active_tab_id = tab_id
+            for tab in self.tabs:
+                tab["active"] = tab["id"] == tab_id
+
+        async def close_tab(self, tab_id: str) -> None:
+            self.tabs = [tab for tab in self.tabs if tab["id"] != tab_id]
+            self.active_tab_id = "tab-1"
+            self.tabs[0]["active"] = True
+
+    class TabsProvider:
+        def __init__(self) -> None:
+            self.session = TabsSession()
+
+        async def create(self, *_args: Any, **_kwargs: Any) -> BrowserSession:
+            return self.session
+
+    provider = TabsProvider()
+    service = RecordingService(provider)
+    owner = RecordingOwner("iter7", "owner@iter7.example")
+    recording = await service.create(owner, "https://example.com/")
+    assert recording.steps[0].tab_id == "tab-1"
+    await service.record_event(
+        recording.id, {"type": "navigation", "url": "https://example.com/", "tabId": "tab-2", "openedNewTab": True}
+    )
+    await service.record_event(recording.id, {"type": "input", "target": "Search", "value": "first", "tabId": "tab-1"})
+    await service.record_event(recording.id, {"type": "input", "target": "Search", "value": "second", "tabId": "tab-2"})
+    assert [(step.tab_id, step.opened_new_tab) for step in recording.steps[:2]] == [
+        ("tab-1", None),
+        ("tab-2", True),
+    ]
+    assert [step.value for step in recording.steps[2:]] == ["first", "second"]
+    await service.select_tab(recording.id, owner, "tab-2")
+    assert recording.steps[-1].description == 'Switch to the tab "reports.example.com"'
+    assert service.response(recording).active_tab_id == "tab-2"
+    await service.close_tab(recording.id, owner, "tab-2")
+    assert recording.steps[-1].description == 'Close the tab "reports.example.com"'
+    assert service.response(recording).active_tab_id == "tab-1"
+    from workflow_use_recording.service import LastTab, UnknownTab
+
+    with pytest.raises(UnknownTab):
+        await service.select_tab(recording.id, owner, "tab-2")
+    with pytest.raises(LastTab):
+        await service.close_tab(recording.id, owner, "tab-1")
+    await service.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("action", "navigation_during_wait"),
+    [
+        ("select_tab", None),
+        ("select_tab", "opened"),
+        ("select_tab", "redirect"),
+        ("close_tab", None),
+        ("close_tab", "opened"),
+        ("close_background", None),
+    ],
+)
+@pytest.mark.parametrize("new_event_type", ["click", "input"])
+async def test_tab_action_records_before_browser_wait_events(
+    action: str, new_event_type: str, navigation_during_wait: str | None
+) -> None:
+    started = asyncio.Event()
+    transition = asyncio.Event()
+    transitioned = asyncio.Event()
+    finish = asyncio.Event()
+
+    class WaitingSession(DeferredSession):
+        def __init__(self) -> None:
+            super().__init__()
+            self.active_tab_id = "tab-2" if action == "close_tab" else "tab-1"
+            self.tabs = [
+                {
+                    "id": "tab-1",
+                    "title": "First",
+                    "url": "about:blank"
+                    if navigation_during_wait == "opened" and action == "close_tab"
+                    else "https://example.com/",
+                    "active": self.active_tab_id == "tab-1",
+                },
+                {
+                    "id": "tab-2",
+                    "title": "Second",
+                    "url": "about:blank"
+                    if navigation_during_wait == "opened" and action == "select_tab"
+                    else "https://example.com/second",
+                    "active": self.active_tab_id == "tab-2",
+                },
+            ]
+
+        async def select_tab(self, tab_id: str) -> None:
+            started.set()
+            await transition.wait()
+            self.active_tab_id = tab_id
+            transitioned.set()
+            await finish.wait()
+
+        async def close_tab(self, tab_id: str) -> None:
+            started.set()
+            await transition.wait()
+            self.tabs = [tab for tab in self.tabs if tab["id"] != tab_id]
+            self.active_tab_id = "tab-1"
+            transitioned.set()
+            await finish.wait()
+
+    class WaitingProvider:
+        async def create(self, *_args: Any, **_kwargs: Any) -> BrowserSession:
+            return WaitingSession()
+
+    service = RecordingService(WaitingProvider())
+    owner = RecordingOwner("iter7", "owner@iter7.example")
+    recording = await service.create(owner, "https://example.com/")
+    action_method = "close_tab" if action.startswith("close") else "select_tab"
+    action_task = asyncio.create_task(getattr(service, action_method)(recording.id, owner, "tab-2"))
+    old_tab_id = "tab-2" if action == "close_tab" else "tab-1"
+    new_tab_id = "tab-2" if action == "select_tab" else "tab-1"
+    try:
+        await asyncio.wait_for(started.wait(), 1)
+        assert recording.steps[-1].type == ("switch_tab" if action == "select_tab" else "close_tab")
+        if navigation_during_wait == "redirect":
+            await service.record_event(
+                recording.id, {"type": "navigation", "url": "https://example.com/redirect", "tabId": new_tab_id}
+            )
+        await asyncio.wait_for(
+            service.record_event(recording.id, {"type": "click", "target": "Still visible", "tabId": old_tab_id}), 1
+        )
+        if navigation_during_wait == "opened":
+            await service.record_event(
+                recording.id,
+                {
+                    "type": "navigation",
+                    "url": "https://example.com/opened",
+                    "openedNewTab": True,
+                    "tabId": new_tab_id,
+                },
+            )
+        transition.set()
+        await asyncio.wait_for(transitioned.wait(), 1)
+        new_event = {"type": new_event_type, "target": "Newly visible", "tabId": new_tab_id}
+        if new_event_type == "input":
+            new_event["value"] = "first"
+        await asyncio.wait_for(service.record_event(recording.id, new_event), 1)
+    finally:
+        finish.set()
+    await action_task
+    if new_event_type == "input":
+        await service.record_event(
+            recording.id, {"type": "input", "target": "Newly visible", "value": "second", "tabId": new_tab_id}
+        )
+        assert recording.steps[-1].value == "second"
+    expected = [
+        ("switch_tab" if action == "select_tab" else "close_tab", "tab-2"),
+        ("click", old_tab_id),
+        (new_event_type, new_tab_id),
+    ]
+    if navigation_during_wait == "opened":
+        expected.insert(2, ("navigation", new_tab_id))
+    elif navigation_during_wait == "redirect":
+        expected.insert(1, ("navigation", new_tab_id))
+    assert [(step.type, step.tab_id) for step in recording.steps[-len(expected) :]] == expected
+    if navigation_during_wait == "opened":
+        assert recording.steps[-2].opened_new_tab is True
+    elif navigation_during_wait == "redirect":
+        assert recording.steps[-3].opened_new_tab is None
+    await service.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["select_tab", "close_tab"])
+async def test_failed_tab_action_removes_only_its_accepted_step(action: str) -> None:
+    started = asyncio.Event()
+    finish = asyncio.Event()
+
+    class FailingSession(DeferredSession):
+        tabs = [
+            {"id": "tab-1", "title": "First", "url": "https://example.com/", "active": True},
+            {"id": "tab-2", "title": "Second", "url": "https://example.com/second", "active": False},
+        ]
+
+        async def select_tab(self, _tab_id: str) -> None:
+            started.set()
+            await finish.wait()
+            raise RuntimeError("browser operation failed")
+
+        async def close_tab(self, _tab_id: str) -> None:
+            started.set()
+            await finish.wait()
+            raise RuntimeError("browser operation failed")
+
+    class FailingProvider:
+        async def create(self, *_args: Any, **_kwargs: Any) -> BrowserSession:
+            return FailingSession()
+
+    service = RecordingService(FailingProvider())
+    owner = RecordingOwner("iter7", "owner@iter7.example")
+    recording = await service.create(owner, "https://example.com/")
+    first_step = recording.steps[0]
+    action_task = asyncio.create_task(getattr(service, action)(recording.id, owner, "tab-2"))
+    try:
+        await asyncio.wait_for(started.wait(), 1)
+        accepted_step = recording.steps[-1]
+        assert accepted_step.type == ("switch_tab" if action == "select_tab" else "close_tab")
+        await service.record_event(recording.id, {"type": "click", "target": "Still visible", "tabId": "tab-1"})
+    finally:
+        finish.set()
+    with pytest.raises(RuntimeError, match="browser operation failed"):
+        await action_task
+    assert [step.type for step in recording.steps] == ["navigation", "click"]
+    assert recording.steps[0] is first_step
+    assert accepted_step not in recording.steps
+    await service.close()
+
+
+@pytest.mark.asyncio
 async def test_sweep_deletes_unclaimed_google_context_after_one_hour() -> None:
     provider = ContextProvider()
     service = RecordingService(provider)

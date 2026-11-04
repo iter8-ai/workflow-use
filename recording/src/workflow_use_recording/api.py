@@ -15,7 +15,15 @@ from fastapi.responses import JSONResponse
 from .models import CreateRecordingRequest, NavigateRecordingRequest, RecordingResponse, StoppedRecordingResponse
 from .organize import OpenAIStepOrganizer, StepOrganizer
 from .provider import BrowserbaseProvider, BrowserProvider, RecordingStartTimeout
-from .service import InvalidRecordingUrl, PageNotOpened, RecordingNotActive, RecordingOwner, RecordingService
+from .service import (
+    InvalidRecordingUrl,
+    LastTab,
+    PageNotOpened,
+    RecordingNotActive,
+    RecordingOwner,
+    RecordingService,
+    UnknownTab,
+)
 
 SERVICE_UNAVAILABLE = "Recording service is temporarily unavailable."
 logger = logging.getLogger(__name__)
@@ -141,6 +149,34 @@ def create_app(provider: BrowserProvider, config: RecordingConfig, organizer: St
         if recording is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording not found.")
         return _response(service.response(recording))
+
+    async def _tab_action(action: Any, recording_id: str, recording_owner: RecordingOwner, tab_id: str) -> JSONResponse:
+        try:
+            recording = await action(recording_id, recording_owner, tab_id)
+        except RecordingNotActive:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Recording is not active.") from None
+        except UnknownTab:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tab not found.") from None
+        except LastTab:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="The last tab cannot be closed.") from None
+        except Exception as error:
+            logger.warning("recording_tab_error error_type=%s", type(error).__name__)
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=SERVICE_UNAVAILABLE) from None
+        if recording is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording not found.")
+        return _response(service.response(recording))
+
+    @app.post("/recordings/{recording_id}/tabs/{tab_id}/select", response_model=RecordingResponse)
+    async def select_recording_tab(
+        recording_id: str, tab_id: str, recording_owner: RecordingOwner = Depends(owner)
+    ) -> JSONResponse:
+        return await _tab_action(service.select_tab, recording_id, recording_owner, tab_id)
+
+    @app.post("/recordings/{recording_id}/tabs/{tab_id}/close", response_model=RecordingResponse)
+    async def close_recording_tab(
+        recording_id: str, tab_id: str, recording_owner: RecordingOwner = Depends(owner)
+    ) -> JSONResponse:
+        return await _tab_action(service.close_tab, recording_id, recording_owner, tab_id)
 
     @app.post("/recordings/{recording_id}/stop", response_model=StoppedRecordingResponse)
     async def stop_recording(recording_id: str, recording_owner: RecordingOwner = Depends(owner)) -> JSONResponse:
